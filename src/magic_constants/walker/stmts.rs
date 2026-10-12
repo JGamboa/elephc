@@ -32,9 +32,16 @@ fn walk_class_heritage<P: Pass>(
     pass: &P,
     span: Span,
 ) -> (Option<Box<GenericDecl>>, Option<Name>, Vec<Name>) {
-    let Some(generics) = generics else {
-        return (None, extends, implements);
-    };
+    // A declaration with no generic half still NAMES its parents, and a bare generic parent
+    // (`class Model implements Arrayable` where `Arrayable` is a PHPDoc template) must reach the
+    // pass like any other mention, or it survives as the stripped template's name.
+    let generics = generics.unwrap_or_else(|| {
+        Box::new(GenericDecl {
+            type_params: Vec::new(),
+            extends_args: Vec::new(),
+            interface_args: Vec::new(),
+        })
+    });
     let GenericDecl {
         type_params,
         extends_args,
@@ -63,9 +70,14 @@ fn walk_interface_heritage<P: Pass>(
     pass: &P,
     span: Span,
 ) -> (Option<Box<GenericDecl>>, Vec<Name>) {
-    let Some(generics) = generics else {
-        return (None, extends);
-    };
+    // See `walk_class_heritage`: a bare generic parent must reach the pass too.
+    let generics = generics.unwrap_or_else(|| {
+        Box::new(GenericDecl {
+            type_params: Vec::new(),
+            extends_args: Vec::new(),
+            interface_args: Vec::new(),
+        })
+    });
     let GenericDecl {
         type_params,
         extends_args: _,

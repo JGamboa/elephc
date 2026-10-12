@@ -185,7 +185,13 @@ pub fn finalize_physical_program(
     // Per physical file, because the lexer discards comments and they are recovered from the
     // source text by line: that only means anything while the file is still its own, before
     // include resolution splices every file into one program without rebasing line numbers.
-    let program = crate::docblock::apply(program, source);
+    // Escape hatch: `ELEPHC_PHPDOC_GENERICS=off` reads every doc comment as php-src does (as a
+    // comment), restoring the pre-generics behaviour for code whose PHPDoc elephc cannot honour.
+    let program = if std::env::var("ELEPHC_PHPDOC_GENERICS").is_ok_and(|v| v == "off") {
+        program
+    } else {
+        crate::docblock::apply(program, source)
+    };
     Ok(crate::conditional::apply(program, defines))
 }
 
