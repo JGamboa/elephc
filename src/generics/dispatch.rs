@@ -63,8 +63,9 @@ pub fn erase_dispatched(program: Program) -> Program {
             ancestors_methods(host, &owners, &mut related, &mut seen, false);
             descendants_methods(host, &owners, &children, &mut related, &mut BTreeSet::new());
         }
+        let everything = related.contains(ANY_METHOD);
         for method in &owner.methods {
-            if owner.is_interface || related.contains(method) {
+            if owner.is_interface || everything || related.contains(method) {
                 dispatched.insert((key.clone(), method.clone()));
             }
         }
@@ -164,13 +165,59 @@ fn ancestors_methods(
     if !seen.insert(key.to_string()) {
         return;
     }
-    let Some(owner) = owners.get(key) else { return };
+    let Some(owner) = owners.get(key) else {
+        // Not declared by the program: a built-in. Its methods are reached by dynamic dispatch
+        // as much as a user interface's are (`ArrayAccess::offsetGet` runs for `$bag["k"]`).
+        match builtin_methods(key) {
+            Some(methods) => out.extend(methods.iter().map(|m| m.to_string())),
+            // A built-in this table does not describe (an SPL or exception class, or a name
+            // from outside the program): every method may override one of its, so all are
+            // treated as dispatched. Erasure is php-src's own reading, so this only costs
+            // monomorphization.
+            None => {
+                out.insert(ANY_METHOD.to_string());
+            }
+        }
+        return;
+    };
     if include_self {
         flattened_methods(key, owners, out, &mut BTreeSet::new());
     }
     for inherited in owner.parent.iter().chain(owner.interfaces.iter()) {
         ancestors_methods(inherited, owners, out, seen, true);
     }
+}
+
+/// Stands for "every method" in a related-method set, when an ancestor is a built-in whose
+/// methods are not known here. No PHP method name can contain `*`.
+const ANY_METHOD: &str = "*";
+
+/// The lower-cased methods of the built-in interfaces a user class commonly implements, by
+/// template key, inherited interfaces included; `None` for any other undeclared name.
+fn builtin_methods(key: &str) -> Option<&'static [&'static str]> {
+    const ITERATOR: &[&str] = &["current", "key", "next", "rewind", "valid"];
+    Some(match key {
+        "traversable" => &[],
+        "iterator" => ITERATOR,
+        "iteratoraggregate" => &["getiterator"],
+        "arrayaccess" => &["offsetexists", "offsetget", "offsetset", "offsetunset"],
+        "countable" => &["count"],
+        "outeriterator" => &["current", "key", "next", "rewind", "valid", "getinneriterator"],
+        "recursiveiterator" => &["current", "key", "next", "rewind", "valid", "haschildren", "getchildren"],
+        "seekableiterator" => &["current", "key", "next", "rewind", "valid", "seek"],
+        "splobserver" => &["update"],
+        "splsubject" => &["attach", "detach", "notify"],
+        "stringable" => &["__tostring"],
+        "jsonserializable" => &["jsonserialize"],
+        "serializable" => &["serialize", "unserialize"],
+        "unitenum" => &["cases"],
+        "backedenum" => &["cases", "from", "tryfrom"],
+        "throwable" => &[
+            "getmessage", "getcode", "getfile", "getline", "gettrace", "getprevious",
+            "gettraceasstring", "__tostring",
+        ],
+        _ => return None,
+    })
 }
 
 /// Collects the methods every descendant of `key` declares, traits included.
@@ -277,14 +324,26 @@ fn erase_method(method: &mut ClassMethod, class_params: &[String]) {
 }
 
 /// Collapses `?mixed` and any union with a `mixed` member to `mixed`, which php-src spells only
-/// that way (`?mixed` is a compile error there).
+/// that way (`?mixed` is a compile error there), and an array whose element types erased to
+/// `mixed` (`array<mixed, mixed>`, `mixed[]`) to the plain `array` php-src sees.
+///
+/// The plain keyword matters beyond spelling: `array<mixed, mixed>` is hash storage and `mixed[]`
+/// packed storage, so either one gives the method a physical signature that differs from an
+/// inherited `array` parameter, and the backend cannot adapt a dispatched call across that.
 fn collapse_mixed(ty: TypeExpr) -> TypeExpr {
     let is_mixed = |t: &TypeExpr| matches!(t, TypeExpr::Named(n) if n.as_str().eq_ignore_ascii_case("mixed"));
+    let plain_array = || TypeExpr::Named(crate::names::Name::unqualified("array"));
     match ty {
         TypeExpr::Nullable(inner) if is_mixed(&inner) => *inner,
+        TypeExpr::Nullable(inner) => TypeExpr::Nullable(Box::new(collapse_mixed(*inner))),
         TypeExpr::Union(members) if members.iter().any(is_mixed) => {
             TypeExpr::Named(crate::names::Name::unqualified("mixed"))
         }
+        TypeExpr::Union(members) => {
+            TypeExpr::Union(members.into_iter().map(collapse_mixed).collect())
+        }
+        TypeExpr::AssocArray { key, value } if is_mixed(&key) && is_mixed(&value) => plain_array(),
+        TypeExpr::Array(element) if is_mixed(&element) => plain_array(),
         other => other,
     }
 }

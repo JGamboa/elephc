@@ -38,8 +38,10 @@ pub struct TypeParam {
     pub variance: Variance,
     /// Whether the parameter was declared by a PHPDoc `@template*` tag rather than native syntax.
     ///
-    /// Only the variance check reads it: php-src never enforces a PHPDoc variance marker, so a
-    /// marker the declaration breaks is demoted to invariant instead of rejecting the file.
+    /// Read by the variance check, which demotes a PHPDoc variance marker the declaration
+    /// breaks to invariant (php-src never enforces one) instead of rejecting the file, and by
+    /// `crate::generics::dispatch`, which erases a PHPDoc template's class parameters from its
+    /// dynamically dispatched methods. Native parameters keep both checks strict.
     /// Excluded from equality, so an annotated declaration and its native spelling stay the
     /// same AST.
     pub from_docblock: bool,
