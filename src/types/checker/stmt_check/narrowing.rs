@@ -91,6 +91,16 @@ impl Checker {
             return Ok(None);
         };
         let negated = prefix_negated ^ comparison_negated;
+        // `instanceof Coll` where `Coll` is a generic template tests its member-less MARKER
+        // interface (`crate::generics::classes`), which every instantiation implements. Narrowing
+        // to it would hide every method the value has, so the receiver keeps its type and a call
+        // on it dispatches as it would without the guard.
+        if let GuardTarget::Exact(PhpType::Object(class)) = &target {
+            let key = crate::generics::classes::template_key(class);
+            if self.class_templates.iter().any(|template| template.key == key) {
+                return Ok(None);
+            }
+        }
         let Some(key) = self.guard_env_key(receiver) else {
             return Ok(None);
         };

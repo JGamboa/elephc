@@ -539,3 +539,92 @@ run(new Child());
     );
     assert_eq!(out, "Child 5");
 }
+
+/// `@template T of Model` documenting a native `Model` parameter and return refines both, so
+/// the call returns the argument's own class.
+#[test]
+fn test_docblock_bounded_template_refines_the_native_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class Model { public string $n = "m"; }
+class User extends Model { public function hi() { return "hi"; } }
+class Repo {
+    /**
+     * @template T of Model
+     * @param T $m
+     * @return T
+     */
+    public function keep(Model $m): Model { return $m; }
+    /**
+     * @template T of Model
+     * @param T $m
+     * @return T
+     */
+    public function keepUntyped($m): Model { return $m; }
+}
+$r = new Repo();
+echo $r->keep(new User())->hi(), "|", $r->keepUntyped(new User())->hi();
+"#,
+    );
+    assert_eq!(out, "hi|hi");
+}
+
+/// A method template that no position adopts (every annotation lost to a native hint) is
+/// dropped, so the method compiles with its native signature.
+#[test]
+fn test_docblock_template_no_position_adopts_is_dropped() {
+    let out = compile_and_run(
+        r#"<?php
+class Repo {
+    /**
+     * @template T of object
+     * @param T $m
+     * @return T
+     */
+    public function keep(int $m): int { return $m + 1; }
+}
+echo (new Repo())->keep(4);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// A method template on a method implementing a built-in interface (`ArrayAccess::offsetGet`,
+/// `ArrayAccess::offsetSet`, `JsonSerializable::jsonSerialize`) is dispatched dynamically and
+/// erased, so the class still implements the interface.
+#[test]
+fn test_docblock_template_on_builtin_interface_method_is_erased() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess, JsonSerializable, Countable {
+    private array $items = ["x" => 1];
+    public function offsetExists(mixed $k): bool { return isset($this->items[$k]); }
+    /**
+     * @template TK
+     * @param TK $k
+     * @return mixed
+     */
+    public function offsetGet($k): mixed { return $this->items[$k]; }
+    /**
+     * @template TK
+     * @template TV
+     * @param TK $k
+     * @param TV $v
+     */
+    public function offsetSet($k, $v): void { $this->items[$k] = $v; }
+    public function offsetUnset(mixed $k): void {}
+    /**
+     * @template T
+     * @return T
+     */
+    public function jsonSerialize(): mixed { return $this->items; }
+    public function count(): int { return count($this->items); }
+}
+function rd(ArrayAccess $a) { return $a["x"]; }
+function js(JsonSerializable $j) { return count($j->jsonSerialize()); }
+$b = new Bag(); $b["y"] = 2;
+echo $b["x"], " ", rd($b), " ", $b->offsetGet("y"), " ", json_encode($b), " ", count($b), " ", js($b);
+"#,
+    );
+    assert_eq!(out, "1 1 2 {\"x\":1,\"y\":2} 2 2");
+}

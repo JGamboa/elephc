@@ -2413,3 +2413,134 @@ fn test_bare_docblock_generic_interface_on_a_plain_class() {
     ));
     assert_eq!(out, "1");
 }
+
+/// `instanceof` against a PHPDoc interface template is true for a class implementing it bare,
+/// and the narrowed guard still evaluates once per object.
+#[test]
+fn test_instanceof_bare_docblock_generic_interface() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1]; }\n",
+        "}\n",
+        "class Other {}\n",
+        "echo var_export(new Model() instanceof Arrayable, true), \"|\";\n",
+        "function chk($x) { echo var_export($x instanceof Arrayable, true), \"|\"; }\n",
+        "chk(new Model()); chk(new Other()); chk(3);\n",
+        "$o = new Model(); if ($o instanceof Arrayable) { echo \"yes\"; } else { echo \"no\"; }\n",
+    ));
+    assert_eq!(out, "true|true|false|false|yes");
+}
+
+/// `instanceof` against a PHPDoc interface template is true for a class implementing one of
+/// its instantiations (`@implements Arrayable<string, int>`).
+#[test]
+fn test_instanceof_docblock_generic_interface_through_an_instantiation() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "/** @implements Arrayable<string, int> */\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1]; }\n",
+        "}\n",
+        "function chk($x) { echo var_export($x instanceof Arrayable, true), \"|\"; }\n",
+        "chk(new Model());\n",
+        "$o = new Model(); echo var_export($o instanceof Arrayable, true);\n",
+    ));
+    assert_eq!(out, "true|true");
+}
+
+/// `instanceof` against a generic CLASS template is true for any of its instantiations and for
+/// a subclass extending one, PHPDoc or native alike.
+#[test]
+fn test_instanceof_generic_class_template_matches_every_instantiation() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "class Coll {\n",
+        "    /** @param array<TKey, TValue> $items */\n",
+        "    public function __construct(public array $items) {}\n",
+        "}\n",
+        "/** @extends Coll<string, string> */\n",
+        "class SColl extends Coll {}\n",
+        "class Box<T> { public function __construct(public T $v) {} }\n",
+        "function chk($x) { echo var_export($x instanceof Coll, true), \"|\"; }\n",
+        "chk(new Coll([\"a\" => 1])); chk(new Coll([1 => \"b\"])); chk(new SColl([\"k\" => \"v\"]));\n",
+        "chk(new Box(1));\n",
+        "$b = new Box<int>(1); $s = new Box<string>(\"s\");\n",
+        "echo var_export($b instanceof Box, true), \"|\", var_export($s instanceof Box, true), \"|\";\n",
+        "echo var_export(new Coll([\"z\" => 0]) instanceof Coll, true);\n",
+    ));
+    assert_eq!(out, "true|true|true|false|true|true|true");
+}
+
+/// Erasing a PHPDoc template's `array<TKey, TValue>` on a dispatched method gives back the plain
+/// `array` php-src sees, so the method still adapts to an interface declaring `array`.
+#[test]
+fn test_erased_docblock_assoc_array_matches_a_native_array_contract() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "interface Enum { public function merge(array $xs); }\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "class Coll implements Enum {\n",
+        "    /** @param array<TKey, TValue> $items */\n",
+        "    public function __construct(public array $items) {}\n",
+        "    /**\n",
+        "     * @param array<TKey, TValue> $xs\n",
+        "     * @return array<TKey, TValue>\n",
+        "     */\n",
+        "    public function merge(array $xs) { $o = $xs; foreach ($this->items as $k => $v) { $o[$k] = $v; } return $o; }\n",
+        "}\n",
+        "/** @extends Coll<string, string> */\n",
+        "class SColl extends Coll {}\n",
+        "$c = new SColl([\"k\" => \"a\"]);\n",
+        "$r = $c->merge([\"p\", \"q\"]); echo implode(\",\", $r), \"|\";\n",
+        "function m(Enum $e) { return implode(\",\", $e->merge([1, 2])); } echo m($c);\n",
+    ));
+    assert_eq!(out, "p,q,a|1,2,a");
+}
+
+/// An `instanceof` guard on a generic template keeps the receiver's methods reachable: the
+/// value is not narrowed to the template's member-less marker, so the call dispatches.
+#[test]
+fn test_instanceof_generic_template_guard_keeps_methods_callable() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1, \"n\" => 2]; }\n",
+        "}\n",
+        "function f($x) { if ($x instanceof Arrayable) { return count($x->toArray()); } return -1; }\n",
+        "echo f(new Model()), \"|\", f(3), \"|\";\n",
+        "$o = new Model(); if ($o instanceof Arrayable) { echo implode(\",\", array_keys($o->toArray())); }\n",
+    ));
+    assert_eq!(out, "2|-1|id,n");
+}
