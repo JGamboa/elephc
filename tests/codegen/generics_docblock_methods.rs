@@ -468,3 +468,74 @@ fn test_comment_scan_follows_the_php_lexer() {
         );
     }
 }
+
+/// An interface method's PHPDoc `@template` is erased: the interface keeps its native signature,
+/// so `TInstance` is not an unknown type and the implementing class still conforms.
+#[test]
+fn test_docblock_template_on_interface_method_is_erased() {
+    let out = compile_and_run(
+        r#"<?php
+interface Container {
+    /**
+     * @template TInstance of object
+     * @param TInstance $instance
+     * @return TInstance
+     */
+    public function instance(string $abstract, $instance);
+}
+class Box { public int $v = 7; }
+class C implements Container {
+    public function instance(string $abstract, $instance) { return $instance; }
+}
+function viaContract(Container $c) { return $c->instance("a", new Box())->v; }
+echo (new C())->instance("a", new Box())->v, "|", viaContract(new C());
+"#,
+    );
+    assert_eq!(out, "7|7");
+}
+
+/// A class method that declares `@template` while implementing a plain interface method keeps
+/// a vtable slot, so the class still implements the interface and dispatch reaches it.
+#[test]
+fn test_docblock_template_on_interface_implementation_keeps_conformance() {
+    let out = compile_and_run(
+        r#"<?php
+interface Repo { public function get(string $key, $default = null); }
+class ArrayRepo implements Repo {
+    /**
+     * @template TDefault
+     * @param TDefault $default
+     * @return mixed|TDefault
+     */
+    public function get(string $key, $default = null) { return $default; }
+}
+function read(Repo $r) { return $r->get("k", "contract"); }
+echo (new ArrayRepo())->get("k", "direct"), "|", read(new ArrayRepo());
+"#,
+    );
+    assert_eq!(out, "direct|contract");
+}
+
+/// A generic method that a subclass overrides is dispatched dynamically: calling it through the
+/// parent type runs the child's body, as php-src does.
+#[test]
+fn test_docblock_template_method_override_dispatches_to_the_child() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function pick($v) { echo "Base "; return $v; }
+}
+class Child extends Base {
+    public function pick($v) { echo "Child "; return $v; }
+}
+function run(Base $b) { echo $b->pick(5); }
+run(new Child());
+"#,
+    );
+    assert_eq!(out, "Child 5");
+}

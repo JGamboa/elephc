@@ -178,6 +178,20 @@ impl Templates {
         self.by_name.values()
     }
 
+    /// Demotes one template parameter to invariant, the reading of a PHPDoc marker the
+    /// declaration does not keep. Returns whether a parameter was changed.
+    pub(super) fn demote_to_invariant(&mut self, key: &str, param: &str) -> bool {
+        let Some(template) = self.by_name.get_mut(key) else {
+            return false;
+        };
+        let mut changed = false;
+        for declared in template.type_params.iter_mut().filter(|p| p.name == param) {
+            changed |= declared.variance != crate::parser::ast::Variance::Invariant;
+            declared.variance = crate::parser::ast::Variance::Invariant;
+        }
+        changed
+    }
+
     /// One template by its normalized name, for a pass that follows an inheritance clause.
     pub(super) fn by_key(&self, key: &str) -> Option<&Template> {
         self.by_name.get(key)
@@ -376,6 +390,12 @@ struct Instantiate<'a> {
     generic_functions: &'a std::collections::HashSet<String>,
     /// Template names declared inside a conditional, for the diagnostic that names them.
     conditional: &'a std::collections::HashSet<String>,
+    /// Every class-like name the program itself declares, by template key.
+    ///
+    /// A mention of a name OUTSIDE this set is a built-in (`IteratorAggregate`, `ArrayAccess`)
+    /// or an unknown class; its PHPStan-style type arguments describe nothing elephc stores, so
+    /// they are erased rather than rejected.
+    declared: &'a std::collections::HashSet<String>,
     /// (enclosing function, `new` site) -> the class the checker inferred for it.
     new_names: &'a HashMap<(String, Span), String>,
     /// `RefCell` because `Pass::transform_type` takes `&self`: the walk rebuilds the tree and
@@ -425,6 +445,13 @@ impl Instantiate<'_> {
     /// so the recursion belongs here rather than in the walker.
     fn rewrite(&self, ty: TypeExpr, span: Span) -> TypeExpr {
         match ty {
+            TypeExpr::GenericClass { name, .. }
+                if !self.templates.contains_key(&template_key(name.as_str()))
+                    && !self.conditional.contains(&template_key(name.as_str()))
+                    && !self.declared.contains(&template_key(name.as_str())) =>
+            {
+                TypeExpr::Named(name)
+            }
             TypeExpr::GenericClass { name, args } => {
                 let args: Vec<TypeExpr> = args
                     .into_iter()
@@ -776,11 +803,17 @@ pub fn instantiate(
     let mut obligations = Vec::new();
     let mut warnings: Vec<crate::errors::CompileWarning> = Vec::new();
     let mut rounds = 0usize;
+    let declared: std::collections::HashSet<String> = {
+        let mut names = Vec::new();
+        collect_declared_names(&program, &mut names);
+        names.iter().map(|name| template_key(name)).collect()
+    };
     loop {
         let mut pass = Instantiate {
             templates,
             generic_functions: &templates_store.generic_functions,
             conditional: &templates_store.conditional,
+            declared: &declared,
             new_names: &new_names,
             requests: RefCell::new(Vec::new()),
             obligations: RefCell::new(Vec::new()),
@@ -999,7 +1032,9 @@ fn collect_declared_names(stmts: &[Stmt], names: &mut Vec<String>) {
             StmtKind::ClassDecl { name, .. }
             | StmtKind::InterfaceDecl { name, .. }
             | StmtKind::TraitDecl { name, .. } => names.push(name.clone()),
-            StmtKind::NamespaceBlock { body, .. } => collect_declared_names(body, names),
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_declared_names(body, names)
+            }
             _ => {}
         }
     }

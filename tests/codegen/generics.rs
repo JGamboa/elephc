@@ -2320,3 +2320,96 @@ echo show(...[0 => "x", "b" => 2]), "|", show(...["0" => "y", "b" => 3]), "|",
     );
     assert_eq!(out, "x:2|y:3|z:4|w:5");
 }
+
+/// A PHPDoc `@template-covariant` marker that the declaration does not keep (a writable
+/// property, a parameter) is demoted to invariant with a warning instead of rejecting a file
+/// php-src runs.
+#[test]
+fn test_docblock_covariant_marker_broken_by_the_declaration_is_demoted() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template-covariant TValue */\n",
+        "class Box {\n",
+        "    /** @var TValue */\n",
+        "    protected $value;\n",
+        "    /** @param TValue $value */\n",
+        "    public function __construct($value) { $this->value = $value; }\n",
+        "    /** @param TValue $value */\n",
+        "    public function contains($value): bool { return $this->value === $value; }\n",
+        "    /** @return TValue */\n",
+        "    public function get() { return $this->value; }\n",
+        "}\n",
+        "$b = new Box(\"a\");\n",
+        "echo $b->get(), \" \", var_export($b->contains(\"a\"), true);\n",
+    ));
+    assert_eq!(out, "a true");
+}
+
+/// PHPStan-style type arguments on built-in interfaces (`IteratorAggregate<K, V>`,
+/// `ArrayAccess<K, V>`) describe nothing elephc stores and are erased.
+#[test]
+fn test_docblock_type_arguments_on_builtin_interfaces_are_erased() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @implements IteratorAggregate<string, int>\n",
+        " * @implements ArrayAccess<string, int>\n",
+        " */\n",
+        "class Bag implements IteratorAggregate, ArrayAccess {\n",
+        "    private array $items = [];\n",
+        "    public function getIterator(): ArrayIterator { return new ArrayIterator($this->items); }\n",
+        "    public function offsetExists(mixed $k): bool { return isset($this->items[$k]); }\n",
+        "    public function offsetGet(mixed $k): mixed { return $this->items[$k]; }\n",
+        "    public function offsetSet(mixed $k, mixed $v): void { $this->items[$k] = $v; }\n",
+        "    public function offsetUnset(mixed $k): void {}\n",
+        "}\n",
+        "$b = new Bag(); $b[\"x\"] = 1; $b[\"y\"] = 2;\n",
+        "foreach ($b as $k => $v) { echo $k, \"=\", $v, \";\"; } echo $b[\"y\"];\n",
+    ));
+    assert_eq!(out, "x=1;y=2;2");
+}
+
+/// `foreach` over an instantiation inferred in the same round (`new Bag([...])`) is deferred to
+/// the round that splices the class, instead of rejecting the not-yet-declared `Bag<string, int>`.
+#[test]
+fn test_foreach_over_an_inferred_generic_iterator_aggregate() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " * @implements IteratorAggregate<TKey, TValue>\n",
+        " */\n",
+        "class Bag implements IteratorAggregate {\n",
+        "    /** @param array<TKey, TValue> $items */\n",
+        "    public function __construct(private array $items) {}\n",
+        "    public function getIterator(): ArrayIterator { return new ArrayIterator($this->items); }\n",
+        "}\n",
+        "foreach (new Bag([\"x\" => 1, \"y\" => 2]) as $k => $v) { echo $k, \"=\", $v, \";\"; }\n",
+    ));
+    assert_eq!(out, "x=1;y=2;");
+}
+
+/// A non-generic class that implements a PHPDoc-generic interface by its bare name still
+/// implements it: the bare parent is read as the interface's default instantiation instead of
+/// naming the stripped template.
+#[test]
+fn test_bare_docblock_generic_interface_on_a_plain_class() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1]; }\n",
+        "}\n",
+        "function dump(Arrayable $a) { echo count($a->toArray()); }\n",
+        "dump(new Model());\n",
+    ));
+    assert_eq!(out, "1");
+}
