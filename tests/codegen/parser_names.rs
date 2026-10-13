@@ -112,3 +112,26 @@ namespace {
 "#);
     assert_eq!(out, "TNM\nmode mode\n");
 }
+
+/// `\static::class`, `\self::class` and `\parent::class` resolve like their unqualified
+/// forms, as in PHP 8 (reviewer probes r16, s05, t15); `\static` keeps late static binding.
+#[test]
+fn test_fully_qualified_special_class_fetch_matches_unqualified() {
+    let out = compile_and_run(r#"<?php
+namespace N {
+    class P {}
+    class A extends P {
+        static function f() { return \static::class; }
+        static function both() { return [static::class, \static::class, \self::class, \parent::class]; }
+    }
+    class B extends A {}
+    echo A::f(), ' ', B::f(), "\n";
+    echo implode(',', B::both()), "\n";
+}
+namespace {
+    class G { static function f() { return \static::class; } }
+    echo G::f(), "\n";
+}
+"#);
+    assert_eq!(out, "N\\A N\\B\nN\\B,N\\B,N\\A,N\\P\nG\n");
+}

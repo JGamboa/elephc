@@ -62,6 +62,11 @@ pub(super) fn scan_tokens_in_source(
     // `cursor.remaining().len()` right after a `\` token, so the next word can tell whether
     // the separator touches it (PHP 8 lexes `A\Default\X` as one T_NAME_QUALIFIED token).
     let mut backslash_end: Option<usize> = None;
+    // Whether that `\` starts the name (no word touches it from the left): a sole
+    // `\self` / `\parent` / `\static` segment must keep its keyword token.
+    let mut backslash_leads_name = false;
+    // `cursor.remaining().len()` right after a word token, to classify the next `\`.
+    let mut word_end: Option<usize> = None;
     loop {
         skip_whitespace_and_comments(&mut cursor);
 
@@ -84,6 +89,7 @@ pub(super) fn scan_tokens_in_source(
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
             tokens.extend(string_tokens);
             backslash_end = None;
+            word_end = None;
         } else if cursor.remaining().starts_with("<<<") {
             // Heredoc/nowdoc — may contain interpolation ($var) for heredoc
             cursor.advance(); // consume first <
@@ -92,6 +98,7 @@ pub(super) fn scan_tokens_in_source(
             let heredoc_tokens = literals::scan_heredoc(&mut cursor)?;
             tokens.extend(heredoc_tokens);
             backslash_end = None;
+            word_end = None;
         } else {
             let starts_word = cursor.peek().is_some_and(literals::is_ident_start);
             let remaining_before = cursor.remaining();
@@ -101,11 +108,22 @@ pub(super) fn scan_tokens_in_source(
             let span = crate::span::Span::with_end_from(span, end);
             let consumed_len = remaining_before.len() - cursor.remaining().len();
             if starts_word
-                && keyword_is_name_segment(&token, touches_backslash, cursor.remaining())
+                && keyword_is_name_segment(
+                    &token,
+                    touches_backslash,
+                    touches_backslash && backslash_leads_name,
+                    cursor.remaining(),
+                )
             {
                 token = Token::Identifier(remaining_before[..consumed_len].to_string());
             }
-            backslash_end = matches!(token, Token::Backslash).then(|| cursor.remaining().len());
+            if matches!(token, Token::Backslash) {
+                backslash_leads_name = word_end != Some(remaining_before.len());
+                backslash_end = Some(cursor.remaining().len());
+            } else {
+                backslash_end = None;
+            }
+            word_end = starts_word.then(|| cursor.remaining().len());
             let metadata = if starts_word && !matches!(token, Token::Identifier(_)) {
                 let source_spelling = &remaining_before[..consumed_len];
                 if token.canonical_word_spelling() == Some(source_spelling) {
@@ -133,9 +151,17 @@ pub(super) fn scan_tokens_in_source(
 ///
 /// Exceptions kept as their dedicated tokens:
 /// - `namespace\X` as the first segment is PHP's T_NAME_RELATIVE, not a name segment.
+/// - `\self`, `\parent` and `\static` as the only segment keep their keyword token: PHP
+///   resolves `\static::class` like `static::class` and rejects every other use with
+///   "'\static' is an invalid class name", which the parser reports.
 /// - A final segment after `\` that is a literal, predefined, or magic constant (`\true`,
 ///   `\PHP_EOL`, `A\PHP_EOL`) keeps its token; the parser already accepts those spellings.
-fn keyword_is_name_segment(token: &Token, touches_backslash: bool, rest: &str) -> bool {
+fn keyword_is_name_segment(
+    token: &Token,
+    touches_backslash: bool,
+    after_leading_backslash: bool,
+    rest: &str,
+) -> bool {
     if matches!(token, Token::Identifier(_)) || token.canonical_word_spelling().is_none() {
         return false;
     }
@@ -144,6 +170,9 @@ fn keyword_is_name_segment(token: &Token, touches_backslash: bool, rest: &str) -
         after.next() == Some('\\') && after.next().is_some_and(literals::is_ident_start);
     if followed_by_segment {
         return touches_backslash || !matches!(token, Token::Namespace);
+    }
+    if after_leading_backslash && matches!(token, Token::Self_ | Token::Parent | Token::Static) {
+        return false;
     }
     touches_backslash && !is_constant_word_token(token)
 }

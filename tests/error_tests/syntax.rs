@@ -947,3 +947,33 @@ fn test_error_lone_keyword_is_not_a_name_segment() {
     expect_error("<?php function f(Default $x) {}", "Expected parameter variable");
     expect_error("<?php echo Default\\ X;", "Unexpected token: Default");
 }
+
+/// Verifies PHP's "'\static' is an invalid class name" for fully qualified `\self`, `\parent`,
+/// and `\static` outside a `::class` fetch (reviewer probes s01-s04, s09, s12).
+#[test]
+fn test_error_fully_qualified_special_class_names_are_invalid() {
+    expect_error(
+        "<?php class A { const X = 'ax'; static function f() { return \\self::X; } }",
+        "'\\self' is an invalid class name",
+    );
+    expect_error(
+        "<?php class P { static function g() { return 1; } } class C extends P { static function f() { return \\parent::g(); } }",
+        "'\\parent' is an invalid class name",
+    );
+    expect_error(
+        "<?php class P { static function f() { return \\static::f(); } }",
+        "'\\static' is an invalid class name",
+    );
+    expect_error(
+        "<?php class P { static function mk() { return new \\static; } }",
+        "'\\static' is an invalid class name",
+    );
+    expect_error(
+        "<?php class A { function f(\\self $x): \\self { return $x; } }",
+        "'\\self' is an invalid class name",
+    );
+    expect_error(
+        "<?php class A { function f($o) { return $o instanceof \\static; } }",
+        "'\\static' is an invalid class name",
+    );
+}

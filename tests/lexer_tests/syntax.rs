@@ -174,4 +174,10 @@ fn test_keyword_segments_in_qualified_names() {
     let t = tokens("<?php \\true; \\PHP_EOL; A\\PHP_EOL");
     assert!(t.contains(&Token::True));
     assert_eq!(t.iter().filter(|t| **t == Token::PhpEol).count(), 2);
+    // A sole `\self` / `\parent` / `\static` segment keeps its keyword token (PHP resolves
+    // `\static::class` like `static::class`); inside a longer name it is a segment.
+    let t = tokens(r"<?php \static; \self; \parent; A\static; \static\X");
+    assert_eq!(t.iter().filter(|t| **t == Token::Static).count(), 1);
+    assert!(t.contains(&Token::Self_) && t.contains(&Token::Parent));
+    assert_eq!(t.iter().filter(|t| **t == Token::Identifier("static".into())).count(), 2);
 }
