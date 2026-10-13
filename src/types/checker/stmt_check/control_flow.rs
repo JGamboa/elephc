@@ -643,8 +643,16 @@ impl Checker {
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
 
+                // Locals a condition defines only on one of its edges (`$a && ($r = f())` on the
+                // true edge, `!$x || !($y = g())` on the false one) are defined in the region that
+                // edge reaches and only there. A later clause, the `else` and — when every clause
+                // diverges — the code after the `if` are reached through the false edges.
+                let mut false_edge_inserted: Vec<(String, PhpType)> = Vec::new();
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    let true_defs = self.condition_edge_definitions(cond, env, true);
+                    let false_defs = self.condition_edge_definitions(cond, env, false);
+                    let true_inserted = Self::insert_edge_definitions(env, &true_defs);
                     let branch_entry_targets = self.callable_array_targets.clone();
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
@@ -714,6 +722,8 @@ impl Checker {
                         self.callable_array_target_versions = branch_entry_target_versions;
                         self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     }
+                    Self::remove_edge_definitions(env, &true_inserted);
+                    false_edge_inserted.extend(Self::insert_edge_definitions(env, &false_defs));
                 }
 
                 // Final else body (if present) is checked with the accumulated complement.
@@ -771,6 +781,13 @@ impl Checker {
                     };
                     Some((key.clone(), joined))
                 });
+                let all_clauses_diverge = else_body.is_none()
+                    && clauses
+                        .iter()
+                        .all(|(_, body)| self.body_cannot_fall_through(body));
+                if !all_clauses_diverge {
+                    Self::remove_edge_definitions(env, &false_edge_inserted);
+                }
                 if !keep_complement_after_if {
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
@@ -825,7 +842,11 @@ impl Checker {
                 if let Some(g) = &guard {
                     env.insert(g.var.clone(), g.then_ty.clone());
                 }
+                // `while ($ok && ($row = next()))`: the body runs on the condition's true edge.
+                let true_defs = self.condition_edge_definitions(condition, env, true);
+                let true_inserted = Self::insert_edge_definitions(env, &true_defs);
                 let errors = self.check_break_continue_target_body(body, env);
+                Self::remove_edge_definitions(env, &true_inserted);
                 if let Some(saved_origin) = saved_origin {
                     self.exit_flow_narrowing(saved_origin);
                 }
@@ -1144,13 +1165,18 @@ impl Checker {
         body: &[Stmt],
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        let mut true_inserted = Vec::new();
         if let Some(c) = condition {
             self.infer_type_with_assignment_effects(c, env)?;
+            // The body and the update run on the condition's true edge.
+            let true_defs = self.condition_edge_definitions(c, env, true);
+            true_inserted = Self::insert_edge_definitions(env, &true_defs);
         }
         if let Some(s) = update {
             self.check_stmt(s, env)?;
         }
         let errors = self.check_break_continue_target_body(body, env);
+        Self::remove_edge_definitions(env, &true_inserted);
         if errors.is_empty() {
             Ok(())
         } else {

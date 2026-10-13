@@ -36,6 +36,7 @@ mod generic_new;
 mod generic_variance;
 mod inference;
 mod loop_storage;
+pub(crate) mod condition_edges;
 mod method_pass;
 mod override_returns;
 mod mixed_storage_scan;

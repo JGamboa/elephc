@@ -316,3 +316,77 @@ fn test_lazy_null_to_array_join_keeps_php_null() {
         "bool(true)\nbool(false)\nstring(4) \"NULL\"\nint(1)\nbool(false)\nbool(true)\nstring(5) \"array\"\nint(2)\nbool(false)\nstring(4) \"NULL\"\nint(1)\nbool(true)\nstring(5) \"array\"\nint(2)\nint(5)\nNULL\n"
     );
 }
+
+/// Verifies a local assigned in a lazy operand of a condition is defined where that edge leads: the `if`/`while`/`for` body on the true edge of `&&`, the code after a diverging `if` on the false edge of `||` (P2c r2).
+#[test]
+fn test_condition_edge_definitions_reach_the_guarded_region() {
+    let out = compile_and_run(
+        r#"<?php
+        // A local assigned in a lazy operand of a condition is defined on the edge that implies it.
+        class O { public $name = "N"; function m() { return $this; } }
+        function f($v) { return $v; }
+        function a($c) { if ($c && ($x = f(new O))) { return $x->name ?? false; } return "no"; }
+        var_dump(a(true), a(false));
+        function b($c) { if (!$c || !($y = f(5))) { return "early"; } return $y + 1; }
+        var_dump(b(true), b(false));
+        function c() { $i = 0; while ($i < 3 && ($r = f($i * 2)) !== null) { echo $r, ","; $i++; } echo "\n"; }
+        c();
+        function d($c) { if ($c && ($p = f("p")) && ($q = f("q"))) { return $p . $q; } elseif (!$c || ($z = f("z"))) { return "elif"; } return "else"; }
+        var_dump(d(true), d(false));
+        function e($c) { return ($c && ($t = f(7))) ? $t * 2 : -1; }
+        var_dump(e(true), e(false));
+        function g($c) { for ($i = 0; $i < 2 && ($v = f($i + 10)); $i++) { echo $v, ","; } echo "\n"; }
+        g(1);
+        "#,
+    );
+    assert_eq!(out, "string(1) \"N\"\nstring(2) \"no\"\nint(6)\nstring(5) \"early\"\n0,2,4,\nstring(2) \"pq\"\nstring(4) \"elif\"\nint(14)\nint(-1)\n10,11,\n");
+}
+
+/// Verifies Container.php:819 (`is_callable($cb) && ! ($r = new R(...))->isAnonymous()`), nested `&&`/`||`, `!`, elseif false edges and ternary conditions define the assigned local on the right edge (P2c r2).
+#[test]
+fn test_condition_edge_definitions_nested_and_negated() {
+    let out = compile_and_run(
+        r#"<?php
+        // Container.php:819 shape, nested &&/||, `!`, elseif false edges and diverging `if` (P2c r2).
+        class S { public $name = "Scope"; }
+        class R { function __construct(public $anon) {} function isAnonymous() { return $this->anon; } function getClosureScopeClass() { return new S; } }
+        class C {
+            function get($cb) {
+                if (is_callable($cb) && ! ($reflector = new R($cb === 'x'))->isAnonymous()) {
+                    return $reflector->getClosureScopeClass()->name ?? false;
+                }
+                return "other";
+            }
+        }
+        $c = new C; var_dump($c->get('strlen'), $c->get('x'), $c->get(5));
+        function f($v) { return $v; }
+        function n1($a, $b) { if ($a && ($b || ($z = f(3)))) { return isset($z) ? "z" : "noz"; } return "f"; }
+        var_dump(n1(true, false), n1(true, true), n1(false, false));
+        function n2($a) { if (!(!$a || !($w = f("w")))) { return $w; } return "-"; }
+        var_dump(n2(1), n2(0));
+        function n3($a) { if (!$a || ($y = f(9)) === null) { return "early"; } return $y * 2; }
+        var_dump(n3(1), n3(0));
+        function n4($a) { if ($a) { return "a"; } elseif (($q = f("q")) && ($r = f("r"))) { return $q . $r; } else { return "e"; } }
+        var_dump(n4(0), n4(1));
+        $top = true;
+        if (!$top || !($g = f("g"))) { echo "no\n"; } else { echo $g, "\n"; }
+        echo ($top && ($h = f(4))) ? $h + 1 : 0, "\n";
+        "#,
+    );
+    assert_eq!(out, "string(5) \"Scope\"\nstring(5) \"other\"\nstring(5) \"other\"\nstring(1) \"z\"\nstring(3) \"noz\"\nstring(1) \"f\"\nstring(1) \"w\"\nstring(1) \"-\"\nint(18)\nstring(5) \"early\"\nstring(2) \"qr\"\nstring(1) \"a\"\ng\n5\n");
+}
+
+/// Verifies both arms of `? :` retyping one local are checked from the entry environment and joined (review P2c r1 N1: a spurious "cannot reassign").
+#[test]
+fn test_ternary_arms_retyping_the_same_local_are_joined() {
+    let out = compile_and_run(
+        r#"<?php
+        // Both arms of `? :` retype the same local: checked in parallel, then joined (P2c r1 N1).
+        function g(bool $c) { $y = null; $r = $c ? ($y = "s") : ($y = 1); var_dump($r, $y); }
+        g(true); g(false);
+        function h(bool $c) { $n = 0; $c ? ($n = 1.5) : ($n = 2); var_dump($n); }
+        h(true); h(false);
+        "#,
+    );
+    assert_eq!(out, "string(1) \"s\"\nstring(1) \"s\"\nint(1)\nint(1)\nfloat(1.5)\nint(2)\n");
+}

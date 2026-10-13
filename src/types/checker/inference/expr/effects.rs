@@ -171,6 +171,11 @@ impl Checker {
                 let guard_var = guard.as_ref().map(|guard| guard.var.clone());
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
+                // `($a && ($t = f())) ? $t : 0`: each arm sees what its condition edge defines.
+                let true_defs = self.condition_edge_definitions(condition, env, true);
+                let false_defs = self.condition_edge_definitions(condition, env, false);
+                Self::insert_edge_definitions(&mut then_env, &true_defs);
+                Self::insert_edge_definitions(&mut else_env, &false_defs);
                 if let Some(guard) = guard {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
@@ -184,11 +189,24 @@ impl Checker {
                 if branch_retypes_existing_local(env, &then_env, guard_var.as_deref())
                     || branch_retypes_existing_local(env, &else_env, guard_var.as_deref())
                 {
-                    let before = env.clone();
-                    let then_ty = self.infer_type_with_assignment_effects(then_expr, env)?;
-                    let else_ty = self.infer_type_with_assignment_effects(else_expr, env)?;
-                    env.retain(|name, _| before.contains_key(name));
-                    widen_lazy_edge_disagreements(env, &[&then_env, &else_env]);
+                    // The arms are alternatives, so each one is re-checked from the entry
+                    // environment (like the two bodies of an `if`/`else`) and the results are
+                    // joined. Checking them in sequence made `$c ? ($y = "s") : ($y = 1)` a
+                    // spurious "cannot reassign $y from string to int".
+                    let mut then_real = env.clone();
+                    Self::insert_edge_definitions(&mut then_real, &true_defs);
+                    let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_real)?;
+                    let mut else_real = env.clone();
+                    Self::insert_edge_definitions(&mut else_real, &false_defs);
+                    let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_real)?;
+                    let names = env.keys().cloned().collect::<Vec<_>>();
+                    for name in names {
+                        if let Some(ty) = then_real.get(&name) {
+                            env.insert(name, ty.clone());
+                        }
+                    }
+                    merge_array_storage_effects(env, &else_real);
+                    widen_lazy_edge_disagreements(env, &[&then_real, &else_real]);
                     return Ok(merge_match_arm_result_type(self, then_ty, else_ty));
                 }
                 merge_array_storage_effects(env, &else_env);
