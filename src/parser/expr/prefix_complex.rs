@@ -945,6 +945,9 @@ pub(super) fn parse_new_object(
     };
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
+        if let Some(name_expr) = parse_new_static_property_reference(tokens, pos, &receiver, span) {
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_parenthesis_free_new_postfix(tokens, *pos)?;
             return Ok(Expr::new(
@@ -963,9 +966,26 @@ pub(super) fn parse_new_object(
 
     // `new $variable(args)` — the class name is held in a variable; we'll
     // resolve it through the runtime class table at codegen time.
+    // `new $this->prop(...)`: the class name is a property of `$this`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::This)) {
+        let mut probe = *pos + 1;
+        if let Some(name_expr) =
+            parse_new_variable_reference_tail(tokens, &mut probe, Expr::new(ExprKind::This, span))?
+        {
+            *pos = probe;
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
+    }
     if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
         let var_name = name.clone();
         *pos += 1;
+        if let Some(name_expr) = parse_new_variable_reference_tail(
+            tokens,
+            pos,
+            Expr::new(ExprKind::Variable(var_name.clone()), span),
+        )? {
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_dynamic_new_class_reference(tokens, *pos)?;
             return Ok(Expr::new(
@@ -994,6 +1014,12 @@ pub(super) fn parse_new_object(
         span,
         "Expected class name after 'new'",
     )?;
+    if type_args.is_empty() {
+        let receiver = StaticReceiver::Named(class_name.clone());
+        if let Some(name_expr) = parse_new_static_property_reference(tokens, pos, &receiver, span) {
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
+    }
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         reject_parenthesis_free_new_postfix(tokens, *pos)?;
         return Ok(Expr::new(
@@ -1005,6 +1031,102 @@ pub(super) fn parse_new_object(
     let args = parse_args(tokens, pos, span)?;
     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(new_object_kind(class_name, type_args, args), span))
+}
+
+/// Parses PHP's `new C::$prop` / `new static::$prop` class-name reference: the class to build is
+/// the value of a static property. Returns `None` (consuming nothing) for any other shape.
+fn parse_new_static_property_reference(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    receiver: &StaticReceiver,
+    span: Span,
+) -> Option<Expr> {
+    let (Some((Token::DoubleColon, _)), Some((Token::Variable(property), _))) =
+        (tokens.get(*pos), tokens.get(*pos + 1))
+    else {
+        return None;
+    };
+    let property = property.clone();
+    *pos += 2;
+    Some(Expr::new(
+        ExprKind::StaticPropertyAccess { receiver: receiver.clone(), property },
+        span,
+    ))
+}
+
+/// Parses the rest of a `new $var...` class-name reference — `->prop`, `?->prop`, `[dim]` and
+/// `::$prop` links, as PHP's `new_variable` grammar allows — and returns the name expression,
+/// or `None` (consuming nothing) when the variable is used alone.
+fn parse_new_variable_reference_tail(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    base: Expr,
+) -> Result<Option<Expr>, CompileError> {
+    let mut expr = base;
+    let mut extended = false;
+    loop {
+        let span = expr.span;
+        match (tokens.get(*pos).map(|(t, _)| t), tokens.get(*pos + 1).map(|(t, _)| t)) {
+            (Some(Token::Arrow | Token::QuestionArrow), Some(Token::Identifier(property))) => {
+                let nullsafe = matches!(tokens[*pos].0, Token::QuestionArrow);
+                let property = property.clone();
+                *pos += 2;
+                let object = Box::new(expr);
+                expr = Expr::new(
+                    if nullsafe {
+                        ExprKind::NullsafePropertyAccess { object, property }
+                    } else {
+                        ExprKind::PropertyAccess { object, property }
+                    },
+                    span,
+                );
+            }
+            (Some(Token::LBracket), _) => {
+                *pos += 1;
+                let index = parse_expr(tokens, pos)?;
+                if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::RBracket)) {
+                    return Err(CompileError::new(span, "Expected ']'"));
+                }
+                *pos += 1;
+                expr = Expr::new(
+                    ExprKind::ArrayAccess { array: Box::new(expr), index: Box::new(index) },
+                    span,
+                );
+            }
+            (Some(Token::DoubleColon), Some(Token::Variable(property))) => {
+                let property = property.clone();
+                *pos += 2;
+                expr = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("__elephc_dynamic_static_property"),
+                        args: vec![expr, Expr::new(ExprKind::StringLiteral(property), span)],
+                    },
+                    span,
+                );
+            }
+            _ => break,
+        }
+        extended = true;
+    }
+    Ok(extended.then_some(expr))
+}
+
+/// Finishes `new <name expression>` with optional constructor arguments as a dynamic `new`.
+fn finish_dynamic_new(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    name_expr: Expr,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    let args = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        *pos += 1;
+        parse_args(tokens, pos, span)?
+    } else {
+        reject_dynamic_new_class_reference(tokens, *pos)?;
+        Vec::new()
+    };
+    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+    Ok(Expr::new(ExprKind::NewDynamic { name_expr: Box::new(name_expr), args }, span))
 }
 
 /// Builds a static receiver, generic or not.

@@ -47,7 +47,7 @@ pub(crate) use assign::{
     starts_destructuring_assignment, starts_destructuring_pattern,
 };
 pub(crate) use namespace_use::token_as_import_name;
-pub(crate) use recovery::recover_to_statement_boundary;
+pub(crate) use recovery::{recover_after_failed_stmt, recover_to_statement_boundary};
 
 /// Appends one parsed statement to a file- or namespace-scope statement list.
 ///

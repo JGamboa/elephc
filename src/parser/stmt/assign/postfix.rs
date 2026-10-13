@@ -63,6 +63,14 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
+    if crate::parser::expr::is_dynamic_class_member_read(&lhs_expr) {
+        // `$class::$prop[] = v` / `$class::$prop[k] = v`: the read desugar is a value, so the
+        // write would land in a temporary.
+        return Err(CompileError::new(
+            span,
+            crate::parser::expr::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+        ));
+    }
 
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
@@ -112,7 +120,15 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
                 )
                 .map(Some);
             }
-            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+            // `call()[] = v;`: the expression form already appends to a call temporary.
+            other => {
+                let append = crate::parser::expr::append_assignment_expr(
+                    Expr::new(other, lhs_span),
+                    rhs,
+                    span,
+                )?;
+                StmtKind::ExprStmt(append)
+            }
         };
         return Ok(Some(Stmt::new(stmt, span)));
     }
@@ -732,6 +748,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_dynamic_member_write(&lhs_expr, span)?;
     let op = if is_increment {
         AssignmentOperator::Compound(BinOp::Add)
     } else {

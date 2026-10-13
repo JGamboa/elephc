@@ -457,6 +457,7 @@ fn parse_prefix_inc_dec(
     // which cannot be read twice).
     let rewind = *pos;
     if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+        super::assignment_targets::reject_dynamic_member_write(&target, span)?;
         if let Some(desugared) =
             super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
         {
@@ -508,6 +509,15 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if super::calls::parse_first_class_callable_parens(tokens, pos)? {
+                    // PHP builds a Closure over the runtime callable (`Closure::fromCallable`).
+                    // A wrapper closure would answer reflection (`isAnonymous`, scope class)
+                    // differently, so refuse rather than compile something PHP would not run.
+                    return Err(CompileError::new(
+                        span,
+                        "First-class callable syntax on a variable (`$callback(...)`) is not supported: elephc cannot build a Closure from a runtime callable value",
+                    ));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
