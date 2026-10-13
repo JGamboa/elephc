@@ -401,8 +401,9 @@ fn test_error_unexpected_token_in_expr() {
 /// Verifies the error diagnostic for unexpected token in stmt.
 #[test]
 fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+    // A token that cannot begin any statement or expression produces "Unexpected token".
+    // (`42;` is a valid PHP expression statement and now compiles.)
+    expect_error("<?php => 42;", "Unexpected token at statement position");
 }
 
 /// Verifies the error diagnostic for missing function name.
@@ -798,9 +799,11 @@ fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
         r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
         "Unexpected token: Include",
     );
+    // `K::$s = include "f.php";` is supported as a statement (hoisted through a hidden
+    // local); in a `for` clause it is still rejected, since the clause is not a statement list.
     expect_error(
-        r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
-        "Unexpected token: Include",
+        r#"<?php class K { public static $s; } for (K::$s = include "f.php"; false; ) {} echo 1;"#,
+        "include/require is not supported in a for clause",
     );
     // The same rejection inside a clause, which is the case the review asked about.
     expect_error(
@@ -881,4 +884,52 @@ fn test_error_class_constant_name_after_comma() {
         expect_error(&format!("<?php {owner} C {{ const ; }}"), "Expected class constant name after 'const'");
     }
     expect_error("<?php class C { const FIRST = 1; const ; }", "Expected class constant name after 'const'");
+}
+
+/// Verifies PHP 8.5's rejection of attributes on a multi-constant declaration list.
+#[test]
+fn test_error_attribute_on_const_list_is_rejected() {
+    expect_error(
+        "<?php #[Foo] const A = 1, B = 2; echo A;",
+        "Cannot apply attributes to multiple constants at once",
+    );
+}
+
+/// Verifies a non-declaration statement after attributes is still rejected (const is now allowed).
+#[test]
+fn test_error_attribute_on_return_is_rejected() {
+    expect_error(
+        "<?php function f() { #[Foo] return 1; } echo f();",
+        "Attributes are only allowed before declarations",
+    );
+}
+
+/// Verifies a destructuring `while` condition that is not the whole condition fails clearly.
+#[test]
+fn test_error_while_destructuring_must_be_whole_condition() {
+    expect_error(
+        "<?php $q = []; while ([$a] = array_shift($q) or false) { echo $a; }",
+        "must be the whole condition",
+    );
+}
+
+/// Verifies include/require values on static-property targets the hoist cannot cover fail clearly.
+#[test]
+fn test_error_include_value_on_unsupported_static_targets() {
+    for src in [
+        r#"<?php class K { public static $s; } K::$s ??= require "f.php";"#,
+        r#"<?php class K { public static $s = ''; } K::$s .= include "f.php";"#,
+        r#"<?php class K { public static $s = []; } K::$s['k'] = require "f.php";"#,
+    ] {
+        expect_error(src, "include/require as the value of this assignment is not supported yet");
+    }
+}
+
+/// Verifies a trailing comma in a `static` declaration list is rejected like PHP.
+#[test]
+fn test_error_static_var_list_trailing_comma() {
+    expect_error(
+        "<?php function f() { static $a = 1, ; return $a; } echo f();",
+        "Expected variable after 'static'",
+    );
 }

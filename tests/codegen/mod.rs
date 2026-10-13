@@ -102,3 +102,4 @@ mod dead_strip;
 mod locals_retype;
 mod stack_guard;
 mod zval;
+mod parser_stmt_frontier;

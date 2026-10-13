@@ -20,7 +20,8 @@ use crate::parser::ast::{CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::parser::stmt::{
     expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
-    parse_destructuring_pattern_unpack, parse_stmt, starts_destructuring_pattern,
+    parse_destructuring_loop_condition, parse_destructuring_pattern_unpack, parse_stmt,
+    starts_destructuring_assignment, starts_destructuring_pattern,
 };
 use crate::span::Span;
 
@@ -182,6 +183,23 @@ pub fn parse_while(
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'while'")?;
+    // `while ([$a, $b] = array_shift($q))`: the destructuring runs at the head of every
+    // iteration, so the loop becomes `while (true) { <head>; <body> }` (see
+    // `parse_destructuring_loop_condition` for the head and why it keeps PHP's semantics).
+    if starts_destructuring_assignment(tokens, *pos) {
+        let head = parse_destructuring_loop_condition(tokens, pos, span, "while")?;
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
+        let body = parse_control_body(tokens, pos, &Token::EndWhile, "endwhile")?;
+        let mut loop_body = head;
+        loop_body.extend(body);
+        return Ok(Stmt::new(
+            StmtKind::While {
+                condition: Expr::new(ExprKind::BoolLiteral(true), span),
+                body: loop_body,
+            },
+            span,
+        ));
+    }
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
     let body = parse_control_body(tokens, pos, &Token::EndWhile, "endwhile")?;
@@ -629,13 +647,13 @@ fn parse_for_clause(
 /// once the clause started going through the real statement parser.
 ///
 /// Only two shapes can reach it, which is why this is a match and not a tree walk.
-/// `ExprKind::IncludeValue` has exactly TWO construction sites, both calling
-/// `parser::stmt::simple::try_parse_value_include`: `parse_return`, whose `Return` is not on
-/// the clause allow-list, and `parse_simple_assign`, which builds a plain `StmtKind::Assign`
-/// and only for `AssignmentOperator::Assign`. That branch runs BEFORE
-/// `parse_assignment_value_expr`, so no typed, indexed, property or static-property
-/// assignment can carry one — `include` reaches those through the ordinary expression
-/// parser, which rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
+/// `ExprKind::IncludeValue` is only built by `parser::stmt::simple::try_parse_value_include`,
+/// called from `parse_return` (a `Return` is not on the clause allow-list),
+/// `parse_simple_assign` (a plain `StmtKind::Assign`, only for `AssignmentOperator::Assign`)
+/// and `assign::scoped_include` (a static-property assignment hoisted into a `Synthetic`
+/// whose first piece is such an `Assign`). No typed, indexed or instance-property assignment
+/// can carry one — `include` reaches those through the ordinary expression parser, which
+/// rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
 /// pins that invariant, and fails here if it ever changes.
 ///
 /// A closure body is deliberately NOT inspected. Its include is DEFERRED: it runs when the
