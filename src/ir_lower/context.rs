@@ -4540,6 +4540,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
         if input.ir_type == IrType::I64 {
+            // A null-typed local is carried in an `I64` word holding the null SENTINEL, which is
+            // non-zero: branching on it directly took `$c = null; $c || f();` down the TRUE edge
+            // (skipping `f()`) and `$c && f()` down the false one. PHP's null is always falsy.
+            if self.builder.value_php_type(input.value) == PhpType::Void {
+                return crate::ir_lower::expr::emit_bool_literal(self, false, span);
+            }
             return input;
         }
         self.emit_value(

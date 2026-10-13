@@ -33,6 +33,7 @@ pub(super) fn lower_null_coalesce(
         .create_named_block("coalesce.default", Vec::new());
     let value_block = ctx.builder.create_named_block("coalesce.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
+    let mut join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
         then_target: default_block,
@@ -43,20 +44,22 @@ pub(super) fn lower_null_coalesce(
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
     let default_reachable = !ctx.builder.insertion_block_is_terminated();
     let default_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.exit_edge(ctx);
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     store_value_into_temp(ctx, &temp_name, result_type, value, expr.span);
     let value_reachable = !ctx.builder.insertion_block_is_terminated();
     let value_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.exit_edge(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         default_initialized,
@@ -204,6 +207,7 @@ pub(super) fn lower_short_ternary(
     let merge = ctx
         .builder
         .create_named_block("short_ternary.merge", Vec::new());
+    let mut join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: value_block,
@@ -214,20 +218,22 @@ pub(super) fn lower_short_ternary(
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), value, expr.span);
     let value_reachable = !ctx.builder.insertion_block_is_terminated();
     let value_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.exit_edge(ctx);
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
     let default_reachable = !ctx.builder.insertion_block_is_terminated();
     let default_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.exit_edge(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         value_initialized,

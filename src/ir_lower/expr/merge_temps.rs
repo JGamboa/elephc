@@ -178,6 +178,20 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // An assignment yields the stored value. The syntactic fallback answers `int` for it, so
+        // `$c ?: $o = new C` typed its merge temp as an integer and the backend refused to cast
+        // the object. A plain local store yields its value's type; a write with a prelude or a
+        // result temporary (a property, a dimension, an append) merges as boxed `mixed`.
+        ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+            if result_target.is_none()
+                && prelude.is_empty()
+                && matches!(target.kind, ExprKind::Variable(_))
+            {
+                materialized_expr_type_for_merge(ctx, value)
+            } else {
+                PhpType::Mixed
+            }
+        }
         _ => fallback_expr_type(expr),
     }
 }
