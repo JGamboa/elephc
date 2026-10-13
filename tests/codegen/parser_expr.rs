@@ -222,3 +222,157 @@ fn test_new_plain_forms_still_work() {
     );
     assert_eq!(out, "qxy\n");
 }
+
+/// Verifies `$class::CONST` / `$class::$prop` apply PHP visibility from the calling scope, and
+/// that an unrelated class's private static of the same name does not break the dispatch.
+#[test]
+fn test_dynamic_member_read_respects_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+        class A { private const P = 'priv'; protected const R = 'prot';
+          protected static $sp = 'sp';
+          public static function inside($c) { return $c::P . $c::R . $c::$sp; } }
+        class K { private static $cache = 'k'; public static function get() { return self::$cache; } }
+        class B { public static $cache = 'b'; }
+        function g($c, $n) {
+            try { return $n === 'P' ? $c::P : ($n === 'R' ? $c::R : $c::$sp); }
+            catch (\Error $e) { return 'E:' . $e->getMessage(); }
+        }
+        echo A::inside('A'), "\n", g('A', 'P'), "\n", g(new A, 'R'), "\n", g('A', 'S'), "\n";
+        $c = 'B'; echo $c::$cache, K::get(), "\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "privprotsp\nE:Cannot access private constant A::P\nE:Cannot access protected constant A::R\n\
+         E:Cannot access protected property A::$sp\nbk\n"
+    );
+}
+
+/// Verifies `$this::$p` reads the runtime class's own static (a subclass redeclaring it).
+#[test]
+fn test_this_static_property_uses_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+        class A { const X = 'A'; public static $p = 'pa';
+          public function f() { $t = $this; return $this::X . $t::X . $this::$p . $t::$p; } }
+        class B extends A { const X = 'B'; public static $p = 'pb'; }
+        echo (new A)->f(), '|', (new B)->f(), "\n";
+        "#,
+    );
+    assert_eq!(out, "AApapa|BBpbpb\n");
+}
+
+/// Verifies `$obj::m()` applies method visibility from the calling scope (PHP's messages), and
+/// that a private static inherited from the declaring scope is callable through a subclass.
+#[test]
+fn test_dynamic_static_call_respects_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+        class A { private static function sec() { return 'secret'; } protected static function pro() { return 'prot'; }
+          public static function callSec($o) { return $o::sec() . $o::pro(); } }
+        class B extends A {}
+        $b = new B; $a = new A;
+        echo A::callSec(new B), "\n";
+        try { echo $a::sec(), "\n"; } catch (\Error $e) { echo 'E:', $e->getMessage(), "\n"; }
+        try { echo $b::pro(), "\n"; } catch (\Error $e) { echo 'E:', $e->getMessage(), "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "secretprot\nE:Call to private method A::sec() from global scope\n\
+         E:Call to protected method A::pro() from global scope\n"
+    );
+}
+
+/// Verifies candidates with a different arity do not break `$x::m(...)`: surplus arguments
+/// are evaluated and ignored like PHP, too few throw ArgumentCountError, literal spreads count.
+#[test]
+fn test_dynamic_static_call_arity_per_candidate() {
+    let out = compile_and_run(
+        r#"<?php
+        function t($v) { echo "eval($v) "; return $v; }
+        class A { public static function f($a, $b = 'd') { return "$a$b"; } }
+        class B { public static function f(int $a) { return $a * 2; } }
+        class C { public static function f($a, $b) { return "C$a$b"; } }
+        function r($o) { echo "recv "; return $o; }
+        echo r('A')::f(t(1), t(2)), "\n";
+        echo r(new B)::f(t(3), t(4)), "\n";
+        foreach (['A', 'B'] as $c) { echo $c::f(5), "\n"; }
+        echo r('A')::f(...[7, 8]), "\n";
+        try { $c = 'C'; echo $c::f(1), "\n"; } catch (\ArgumentCountError $e) { echo get_class($e), "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "recv eval(1) eval(2) 12\nrecv eval(3) eval(4) 6\n5d\n10\nrecv 78\nArgumentCountError\n"
+    );
+}
+
+/// Verifies a class-name string loses exactly one leading backslash, like PHP.
+#[test]
+fn test_dynamic_class_name_strips_one_leading_backslash() {
+    let out = compile_and_run(
+        r#"<?php
+        namespace App\Sub;
+        class Kid { const V = 'kid'; }
+        function r(string $c) { try { return $c::V; } catch (\Error $e) { return 'E'; } }
+        echo r('\App\Sub\Kid'), '|', r('\\\\App\Sub\Kid'), "\n";
+        "#,
+    );
+    assert_eq!(out, "kid|E\n");
+}
+
+/// Verifies `new $this->prop(...)` and its chains.
+#[test]
+fn test_new_with_this_property_class_reference() {
+    let out = compile_and_run(
+        r#"<?php
+        class Q { public string $v; public function __construct($v = 'q') { $this->v = $v; } }
+        class R extends Q {}
+        class M { public $o; public $arr = ['k' => R::class];
+          public function inst() { return new $this->o('i'); } public function bare() { return new $this->arr['k']; } }
+        $m = new M; $m->o = 'R';
+        echo get_class($m->inst()), $m->inst()->v, get_class($m->bare()), "\n";
+        "#,
+    );
+    assert_eq!(out, "RiR\n");
+}
+
+/// Verifies the statement form `call()[] = $v;` behaves like PHP (a discarded temporary or
+/// `offsetSet(null, $v)`).
+#[test]
+fn test_statement_append_to_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+        class Coll implements ArrayAccess {
+            public static array $log = [];
+            public function offsetExists(mixed $o): bool { return true; }
+            public function offsetGet(mixed $o): mixed { return 1; }
+            public function offsetSet(mixed $o, mixed $v): void { self::$log[] = var_export($o, true) . $v; }
+            public function offsetUnset(mixed $o): void {}
+        }
+        function arr(): array { return [1]; }
+        function app(): mixed { return new Coll; }
+        arr()[] = 9;
+        app()[] = 'x';
+        echo implode(',', Coll::$log), "\n";
+        "#,
+    );
+    assert_eq!(out, "NULLx\n");
+}
+
+/// Verifies an instance method that a subclass overrides, reached through `$obj::m()` from a
+/// related class, is refused at compile time instead of running the wrong body.
+#[test]
+fn test_dynamic_static_call_overridden_instance_method_is_refused() {
+    let error = compile_cli_file_with_flags_expect_failure(
+        r#"<?php
+        class A { public function hi() { return 'A'; } public function via(A $o) { return $o::hi(); } }
+        class B extends A { public function hi() { return 'B'; } }
+        echo (new A)->via(new A);
+        "#,
+        &[],
+    );
+    assert!(error.contains("because a subclass overrides it"), "{error}");
+}

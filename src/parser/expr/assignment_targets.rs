@@ -1006,7 +1006,10 @@ fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Exp
 /// see `temporary_append_expr`. A variable or property base in expression position stays
 /// rejected: an expression-level write to a local has no node of its own, and the
 /// assignment-with-prelude shape it would need returns a wrong value from closures today.
-pub(super) fn append_assignment_expr(base: Expr, value: Expr, span: Span) -> Result<Expr, crate::errors::CompileError> {
+pub(crate) fn append_assignment_expr(base: Expr, value: Expr, span: Span) -> Result<Expr, crate::errors::CompileError> {
+    if is_dynamic_class_member_read(&base) {
+        return Err(crate::errors::CompileError::new(span, DYNAMIC_STATIC_PROPERTY_WRITE_ERROR));
+    }
     if is_call_like_append_base(&base) {
         return Ok(temporary_append_expr(base, value, span));
     }
@@ -1098,4 +1101,21 @@ fn is_call_like_append_base(expr: &Expr) -> bool {
             | ExprKind::ClosureCall { .. }
             | ExprKind::ExprCall { .. }
     )
+}
+
+/// Diagnostic for a write through `$class::$prop`, shared by every write shape.
+pub(crate) const DYNAMIC_STATIC_PROPERTY_WRITE_ERROR: &str =
+    "Writing a static property through a dynamic class (`$class::$prop = ...`) is not supported; use the class name";
+
+/// Returns true for the parser's `$class::X` / `$class::$prop` read desugars, which are values,
+/// not places: a write through them would silently land in a temporary.
+pub(crate) fn is_dynamic_class_member_read(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } => matches!(
+            name.as_str().trim_start_matches('\\'),
+            "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property"
+        ),
+        ExprKind::ArrayAccess { array, .. } => is_dynamic_class_member_read(array),
+        _ => false,
+    }
 }

@@ -966,6 +966,16 @@ pub(super) fn parse_new_object(
 
     // `new $variable(args)` — the class name is held in a variable; we'll
     // resolve it through the runtime class table at codegen time.
+    // `new $this->prop(...)`: the class name is a property of `$this`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::This)) {
+        let mut probe = *pos + 1;
+        if let Some(name_expr) =
+            parse_new_variable_reference_tail(tokens, &mut probe, Expr::new(ExprKind::This, span))?
+        {
+            *pos = probe;
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
+    }
     if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
         let var_name = name.clone();
         *pos += 1;

@@ -134,6 +134,10 @@ pub(crate) fn recover_after_failed_stmt(
     pos: &mut usize,
     stmt_start: usize,
 ) {
+    // A declaration whose member failed (an error in a class's last method, say) returns with
+    // its own body still open: the method's `}` was consumed, the class's was not. Close those
+    // braces first, or the class's `}` is reported as an unexpected statement.
+    close_braces_opened_since(tokens, pos, stmt_start);
     let previous = (*pos > stmt_start && *pos > 0)
         .then(|| tokens.get(*pos - 1).map(|(token, _)| token))
         .flatten();
@@ -277,5 +281,63 @@ fn is_clean_resume_token(token: &Token) -> bool {
             | Token::Continue
             | Token::Case
             | Token::Default
+            // Expression statements may also start with these (`[$a] = ...`, `(fn)()`, `@f()`,
+            // `!$x && f()`, `-1 . f()`, `new Foo;`, a literal, ...): stopping short of them made
+            // recovery swallow the following, correct statement.
+            | Token::LParen
+            | Token::LBracket
+            | Token::LBrace
+            | Token::At
+            | Token::Bang
+            | Token::Minus
+            | Token::Plus
+            | Token::Tilde
+            | Token::Ampersand
+            | Token::Semicolon
+            | Token::StringLiteral(_)
+            | Token::IntLiteral(_)
+            | Token::FloatLiteral(_)
+            | Token::True
+            | Token::False
+            | Token::Null
+            | Token::New
+            | Token::Clone
+            | Token::Match
+            | Token::Fn
+            | Token::Yield
+            | Token::AttrOpen
+            | Token::Packed
+            | Token::Extern
+            | Token::IfDef
+            | Token::Question
+            | Token::DunderDir
+            | Token::DunderFile
+            | Token::DunderLine
+            | Token::DunderFunction
+            | Token::DunderClass
+            | Token::DunderMethod
+            | Token::DunderNamespace
+            | Token::DunderTrait
     )
+}
+
+/// Advances `pos` past the `}` that close every `{` opened in `tokens[start..pos]`.
+fn close_braces_opened_since(tokens: &[SpannedToken], pos: &mut usize, start: usize) {
+    let mut open = 0usize;
+    for (token, _) in tokens.iter().take(*pos).skip(start) {
+        match token {
+            Token::LBrace => open += 1,
+            Token::RBrace => open = open.saturating_sub(1),
+            _ => {}
+        }
+    }
+    while open > 0 {
+        match tokens.get(*pos).map(|(token, _)| token) {
+            None | Some(Token::Eof) => return,
+            Some(Token::LBrace) => open += 1,
+            Some(Token::RBrace) => open -= 1,
+            _ => {}
+        }
+        *pos += 1;
+    }
 }

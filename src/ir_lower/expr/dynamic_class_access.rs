@@ -21,6 +21,7 @@
 //!   matched class is read instead of throwing PHP's visibility `Error`.
 
 use super::*;
+use crate::parser::ast::Visibility;
 
 /// Which member family a dynamic-receiver read targets.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,10 @@ pub(super) fn lower_dynamic_class_member_call(
     for (arm, class_name) in arms {
         ctx.builder.position_at_end(arm);
         ctx.restore_initialized_slots(split_initialized.clone());
+        if let Some(message) = member_read_access_error(ctx, kind, &class_name, member) {
+            throw_error_and_merge(ctx, "Error", literal(&message, span), &result_temp, merge, span);
+            continue;
+        }
         let receiver = StaticReceiver::Named(Name::from(class_name));
         let read = match kind {
             DynamicMember::Constant => Expr::new(
@@ -130,29 +135,25 @@ pub(super) fn lower_dynamic_class_member_call(
 
 /// Builds the expression that yields the receiver's runtime class name as a string.
 ///
-/// PHP strips one leading `\` from a class-name string (`'\Foo'::X` works); `get_class()`
-/// never returns one. A `mixed`/union receiver splits on `is_object()` at runtime.
+/// PHP strips exactly one leading `\` from a class-name string (`'\Foo'::X` works, `'\\Foo'`
+/// does not); `get_class()` never returns one. A `mixed`/union receiver splits on `is_object()` at runtime.
 fn runtime_class_name_expr(receiver_type: &PhpType, receiver: Expr, span: Span) -> Expr {
     let call = |name: &str, args: Vec<Expr>| {
         Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args }, span)
     };
-    let backslash = || Expr::new(ExprKind::StringLiteral("\\".to_string()), span);
     match receiver_type.codegen_repr() {
         PhpType::Object(_) => call("get_class", vec![receiver]),
-        PhpType::Str => call("ltrim", vec![receiver, backslash()]),
+        PhpType::Str => strip_one_leading_backslash(receiver, span),
         _ => Expr::new(
             ExprKind::Ternary {
                 condition: Box::new(call("is_object", vec![receiver.clone()])),
                 then_expr: Box::new(call("get_class", vec![receiver.clone()])),
-                else_expr: Box::new(call(
-                    "ltrim",
-                    vec![
-                        Expr::new(
-                            ExprKind::Cast { target: CastType::String, expr: Box::new(receiver) },
-                            span,
-                        ),
-                        backslash(),
-                    ],
+                else_expr: Box::new(strip_one_leading_backslash(
+                    Expr::new(
+                        ExprKind::Cast { target: CastType::String, expr: Box::new(receiver) },
+                        span,
+                    ),
+                    span,
                 )),
             },
             span,
@@ -267,6 +268,7 @@ fn lower_dynamic_static_call(
     let ExprKind::StringLiteral(method) = &method.kind else {
         return None;
     };
+    let call_args = &flatten_literal_spreads(call_args);
     let span = expr.span;
     let receiver_is_this = matches!(receiver.kind, ExprKind::This);
     let receiver_value = lower_expr(ctx, receiver);
@@ -280,21 +282,44 @@ fn lower_dynamic_static_call(
 
     let method_key = php_symbol_key(method);
     let mut by_ref_candidate = None;
-    let mut candidates: Vec<(String, bool)> = ctx
+    let mut candidates: Vec<MethodCandidate> = ctx
         .classes
         .iter()
         .filter_map(|(class_name, info)| {
-            let (sig, is_static) = match info.static_methods.get(&method_key) {
-                Some(sig) => (sig, true),
-                None => (info.methods.get(&method_key)?, false),
+            let (sig, is_static, visibility, declaring) = match (
+                info.static_methods.get(&method_key),
+                info.methods.get(&method_key),
+            ) {
+                (Some(sig), _) => (
+                    sig,
+                    true,
+                    info.static_method_visibilities.get(&method_key).cloned(),
+                    info.static_method_declaring_classes.get(&method_key).cloned(),
+                ),
+                (None, Some(sig)) => (
+                    sig,
+                    false,
+                    info.method_visibilities.get(&method_key).cloned(),
+                    info.method_declaring_classes.get(&method_key).cloned(),
+                ),
+                // A private method of an ancestor is not in the child's tables, yet PHP finds it
+                // (and allows it from the declaring scope): `A::callSec(new B)` → `$o::sec()`.
+                (None, None) => inherited_private_static_method(ctx, info, &method_key)?,
             };
             if sig.ref_params.iter().any(|by_ref| *by_ref) {
                 by_ref_candidate.get_or_insert_with(|| class_name.clone());
             }
-            Some((class_name.clone(), is_static))
+            Some(MethodCandidate {
+                class_name: class_name.clone(),
+                is_static,
+                visibility,
+                declaring: declaring.unwrap_or_else(|| class_name.clone()),
+                required: sig.defaults.iter().filter(|default| default.is_none()).count(),
+                max_args: sig.variadic.is_none().then_some(sig.params.len()),
+            })
         })
         .collect();
-    candidates.sort();
+    candidates.sort_by(|left, right| left.class_name.cmp(&right.class_name));
     if let Some(class_name) = by_ref_candidate {
         // The checker only sees the by-value primitive, so a by-reference argument would be
         // passed as a copy: refuse instead of silently dropping the write-back.
@@ -306,17 +331,23 @@ fn lower_dynamic_static_call(
         );
     }
     let has_this = ctx.has_local_slot("this");
+    let has_spread = call_args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+    let scope_label = match &ctx.current_class {
+        Some(scope) => format!("scope {scope}"),
+        None => "global scope".to_string(),
+    };
 
     let result_temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let split_initialized = ctx.initialized_slots_snapshot();
     let merge = ctx.builder.create_named_block("dyn_static_call.merge", Vec::new());
     let mut arms = Vec::new();
-    for (class_name, is_static) in candidates {
+    for candidate in candidates {
         let arm = ctx.builder.create_named_block("dyn_static_call.arm", Vec::new());
         let skip = ctx.builder.create_named_block("dyn_static_call.skip", Vec::new());
-        let matches = lower_expr(ctx, &class_name_matches_expr(&name_local, &class_name, span));
+        let matches =
+            lower_expr(ctx, &class_name_matches_expr(&name_local, &candidate.class_name, span));
         conditional_branch(ctx, matches.value, arm, skip);
-        arms.push((arm, class_name, is_static));
+        arms.push((arm, candidate));
         ctx.builder.position_at_end(skip);
     }
     let undefined = string_concat_expr(
@@ -327,67 +358,109 @@ fn lower_dynamic_static_call(
         ],
         span,
     );
-    throw_error_and_merge(ctx, undefined, &result_temp, merge, span);
+    throw_error_and_merge(ctx, "Error", undefined, &result_temp, merge, span);
 
-    for (arm, class_name, is_static) in arms {
+    for (arm, candidate) in arms {
         ctx.builder.position_at_end(arm);
         ctx.restore_initialized_slots(split_initialized.clone());
-        if is_static {
-            let call = Expr::new(
-                ExprKind::StaticMethodCall {
-                    receiver: StaticReceiver::Named(Name::from(class_name)),
-                    method: method.clone(),
-                    args: call_args.to_vec(),
+        let MethodCandidate { class_name, is_static, visibility, declaring, required, max_args } =
+            candidate;
+        if !scope_can_access(ctx, visibility.as_ref(), &declaring) {
+            let message = format!(
+                "Call to {} method {declaring}::{method}() from {scope_label}",
+                visibility_word(visibility.as_ref())
+            );
+            throw_error_and_merge(ctx, "Error", literal(&message, span), &result_temp, merge, span);
+            continue;
+        }
+        if !has_spread && call_args.len() < required {
+            let bound = if max_args == Some(required) { "exactly" } else { "at least" };
+            let message = format!(
+                "Too few arguments to function {declaring}::{method}(), {} passed and {bound} {required} expected",
+                call_args.len()
+            );
+            throw_error_and_merge(
+                ctx,
+                "ArgumentCountError",
+                literal(&message, span),
+                &result_temp,
+                merge,
+                span,
+            );
+            continue;
+        }
+        if !is_static {
+            let non_static = literal(
+                &format!("Non-static method {class_name}::{method}() cannot be called statically"),
+                span,
+            );
+            let related = ctx.current_class.as_deref().is_some_and(|scope| {
+                super::property_access::class_extends_class(ctx, scope, &class_name)
+                    || super::property_access::class_extends_class(ctx, &class_name, scope)
+            });
+            if !has_this || !related {
+                // `$this` (if any) can never be an instance of `C`: PHP refuses the static call.
+                throw_error_and_merge(ctx, "Error", non_static, &result_temp, merge, span);
+                continue;
+            }
+            if !receiver_is_this && subclass_overrides_method(ctx, &class_name, &method_key) {
+                // PHP would run `C::m()` non-virtually on `$this`; `$this->m()` could dispatch to
+                // an override instead, so refuse rather than call the wrong body.
+                crate::ir_lower::diagnostics::refuse(
+                    span,
+                    &format!(
+                        "Calling instance method `{class_name}::{method}()` through `$object::{method}()` from a related class is not supported because a subclass overrides it; call it on the object"
+                    ),
+                );
+            }
+            // `$this instanceof C`: PHP runs `C::m()` on `$this`.
+            let this_is_c = Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(Expr::new(ExprKind::This, span)),
+                    target: InstanceOfTarget::Name(Name::from(class_name.clone())),
                 },
                 span,
             );
-            store_expr_into_temp(ctx, &result_temp, PhpType::Mixed, &call, span);
-            branch_to(ctx, merge);
-            continue;
+            let on_this = ctx.builder.create_named_block("dyn_static_call.this", Vec::new());
+            let not_this = ctx.builder.create_named_block("dyn_static_call.no_this", Vec::new());
+            let this_is_c = lower_expr(ctx, &this_is_c);
+            conditional_branch(ctx, this_is_c.value, on_this, not_this);
+            ctx.builder.position_at_end(not_this);
+            throw_error_and_merge(ctx, "Error", non_static, &result_temp, merge, span);
+            ctx.builder.position_at_end(on_this);
         }
-        let non_static = literal(
-            &format!("Non-static method {class_name}::{method}() cannot be called statically"),
-            span,
-        );
-        if !has_this {
-            throw_error_and_merge(ctx, non_static, &result_temp, merge, span);
-            continue;
-        }
-        // `$this instanceof C`: PHP runs `C::m()` on `$this`.
-        let this_is_c = Expr::new(
-            ExprKind::InstanceOf {
-                value: Box::new(Expr::new(ExprKind::This, span)),
-                target: InstanceOfTarget::Name(Name::from(class_name.clone())),
-            },
-            span,
-        );
-        let on_this = ctx.builder.create_named_block("dyn_static_call.this", Vec::new());
-        let not_this = ctx.builder.create_named_block("dyn_static_call.no_this", Vec::new());
-        let this_is_c = lower_expr(ctx, &this_is_c);
-        conditional_branch(ctx, this_is_c.value, on_this, not_this);
-        ctx.builder.position_at_end(not_this);
-        throw_error_and_merge(ctx, non_static, &result_temp, merge, span);
-        ctx.builder.position_at_end(on_this);
-        if receiver_is_this || !subclass_overrides_method(ctx, &class_name, &method_key) {
-            let call = Expr::new(
+        let args = arm_call_args(ctx, call_args, if has_spread { None } else { max_args }, span);
+        let call = if is_static {
+            // An inherited private method lives only on its declaring class.
+            let target = if ctx
+                .classes
+                .get(class_name.as_str())
+                .is_some_and(|info| info.static_methods.contains_key(&method_key))
+            {
+                class_name
+            } else {
+                declaring
+            };
+            Expr::new(
+                ExprKind::StaticMethodCall {
+                    receiver: StaticReceiver::Named(Name::from(target)),
+                    method: method.clone(),
+                    args,
+                },
+                span,
+            )
+        } else {
+            Expr::new(
                 ExprKind::MethodCall {
                     object: Box::new(Expr::new(ExprKind::This, span)),
                     method: method.clone(),
-                    args: call_args.to_vec(),
+                    args,
                 },
                 span,
-            );
-            store_expr_into_temp(ctx, &result_temp, PhpType::Mixed, &call, span);
-            branch_to(ctx, merge);
-        } else {
-            let unsupported = literal(
-                &format!(
-                    "elephc: calling overridden instance method {class_name}::{method}() through `$object::{method}()` is not supported"
-                ),
-                span,
-            );
-            throw_error_and_merge(ctx, unsupported, &result_temp, merge, span);
-        }
+            )
+        };
+        store_expr_into_temp(ctx, &result_temp, PhpType::Mixed, &call, span);
+        branch_to(ctx, merge);
     }
     ctx.builder.position_at_end(merge);
     Some(take_owned_temp(ctx, &result_temp, span))
@@ -438,13 +511,14 @@ fn conditional_branch(ctx: &mut LoweringContext<'_, '_>, cond: ValueId, then_tar
 /// Throws `new Error($message)` and keeps the unreachable fallthrough well formed.
 fn throw_error_and_merge(
     ctx: &mut LoweringContext<'_, '_>,
+    error_class: &str,
     message: Expr,
     result_temp: &str,
     merge: BlockId,
     span: Span,
 ) {
     let error = Expr::new(
-        ExprKind::NewObject { class_name: Name::unqualified("Error"), args: vec![message] },
+        ExprKind::NewObject { class_name: Name::unqualified(error_class), args: vec![message] },
         span,
     );
     let error = lower_expr(ctx, &error);
@@ -457,4 +531,196 @@ fn throw_error_and_merge(
     );
     store_expr_into_temp(ctx, result_temp, PhpType::Mixed, &Expr::new(ExprKind::Null, span), span);
     branch_to(ctx, merge);
+}
+
+/// Builds `str_starts_with($n, "\\") ? substr($n, 1) : $n` — PHP drops ONE leading backslash.
+fn strip_one_leading_backslash(name: Expr, span: Span) -> Expr {
+    let call = |function: &str, args: Vec<Expr>| {
+        Expr::new(ExprKind::FunctionCall { name: Name::unqualified(function), args }, span)
+    };
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(call("str_starts_with", vec![name.clone(), literal("\\", span)])),
+            then_expr: Box::new(call(
+                "substr",
+                vec![name.clone(), Expr::new(ExprKind::IntLiteral(1), span)],
+            )),
+            else_expr: Box::new(name),
+        },
+        span,
+    )
+}
+
+/// Returns whether the lowering scope (the class whose code is being lowered, if any) may see a
+/// member of `visibility` declared on `declaring`, by PHP's rules.
+fn scope_can_access(
+    ctx: &LoweringContext<'_, '_>,
+    visibility: Option<&Visibility>,
+    declaring: &str,
+) -> bool {
+    let scope = ctx.current_class.as_deref();
+    match visibility {
+        None | Some(Visibility::Public) => true,
+        Some(Visibility::Private) => {
+            scope.is_some_and(|scope| php_symbol_key(scope) == php_symbol_key(declaring))
+        }
+        Some(Visibility::Protected) => scope.is_some_and(|scope| {
+            super::property_access::class_extends_class(ctx, scope, declaring)
+                || super::property_access::class_extends_class(ctx, declaring, scope)
+        }),
+    }
+}
+
+/// PHP's spelling of a non-public visibility in access errors.
+fn visibility_word(visibility: Option<&Visibility>) -> &'static str {
+    match visibility {
+        Some(Visibility::Private) => "private",
+        _ => "protected",
+    }
+}
+
+/// Returns PHP's access `Error` message when reading `member` of `class_name` is not allowed
+/// from the lowering scope, or `None` when the ordinary named read applies.
+fn member_read_access_error(
+    ctx: &LoweringContext<'_, '_>,
+    kind: DynamicMember,
+    class_name: &str,
+    member: &str,
+) -> Option<String> {
+    match kind {
+        DynamicMember::Constant => {
+            // Walk to the class that declares the constant; interface and enum members are public.
+            let mut current = Some(class_name.to_string());
+            while let Some(name) = current {
+                let info = ctx.classes.get(name.as_str())?;
+                if info.constants.contains_key(member) {
+                    let visibility = info.constant_visibilities.get(member);
+                    if matches!(visibility, Some(Visibility::Private)) && name != class_name {
+                        // Private constants are not inherited.
+                        return Some(format!("Undefined constant {class_name}::{member}"));
+                    }
+                    if scope_can_access(ctx, visibility, &name) {
+                        return None;
+                    }
+                    return Some(format!(
+                        "Cannot access {} constant {class_name}::{member}",
+                        visibility_word(visibility)
+                    ));
+                }
+                current = info.parent.clone();
+            }
+            None
+        }
+        DynamicMember::StaticProperty => {
+            let info = ctx.classes.get(class_name)?;
+            let visibility = info.static_property_visibilities.get(member);
+            let declaring = info
+                .static_property_declaring_classes
+                .get(member)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            if scope_can_access(ctx, visibility, declaring) {
+                return None;
+            }
+            Some(format!(
+                "Cannot access {} property {class_name}::${member}",
+                visibility_word(visibility)
+            ))
+        }
+    }
+}
+
+/// One class that declares or inherits the dynamically called method.
+struct MethodCandidate {
+    class_name: String,
+    is_static: bool,
+    visibility: Option<Visibility>,
+    declaring: String,
+    /// Parameters without a default.
+    required: usize,
+    /// `None` when the method is variadic.
+    max_args: Option<usize>,
+}
+
+/// Returns the arguments one arm passes. PHP evaluates surplus arguments to a non-variadic user
+/// method and then ignores them; the call node cannot carry them, so every argument is first
+/// evaluated, in order, into a temporary and only the first `max` are passed.
+fn arm_call_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    call_args: &[Expr],
+    max: Option<usize>,
+    span: Span,
+) -> Vec<Expr> {
+    let Some(max) = max.filter(|max| call_args.len() > *max) else {
+        return call_args.to_vec();
+    };
+    let mut passed = Vec::with_capacity(max);
+    for (index, arg) in call_args.iter().enumerate() {
+        let value = lower_expr(ctx, arg);
+        let value_type = normalize_value_php_type(ctx.builder.value_php_type(value.value));
+        let local = ctx.declare_synthetic_php_local(value_type.clone());
+        store_value_into_temp(ctx, &local, value_type, value, span);
+        if index < max {
+            passed.push(Expr::new(ExprKind::Variable(local), arg.span));
+        }
+    }
+    passed
+}
+
+/// Finds a private static method an ancestor of `info` declares, which PHP resolves for
+/// `$child::m()` although the child's method table does not list it.
+///
+/// The arm calls it on the declaring class, so late static binding inside it would see that
+/// class instead of the child: a body that uses `static` is refused rather than miscompiled.
+fn inherited_private_static_method<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    info: &'a crate::types::ClassInfo,
+    method_key: &str,
+) -> Option<(&'a crate::types::FunctionSig, bool, Option<Visibility>, Option<String>)> {
+    let mut parent = info.parent.clone();
+    while let Some(name) = parent {
+        let ancestor = ctx.classes.get(name.as_str())?;
+        if let Some(sig) = ancestor.static_methods.get(method_key) {
+            let visibility = ancestor.static_method_visibilities.get(method_key).cloned();
+            if !matches!(visibility, Some(Visibility::Private)) {
+                return None;
+            }
+            let uses_late_static = ancestor.method_decls.iter().any(|decl| {
+                php_symbol_key(&decl.name) == method_key && {
+                    let body = format!("{:?}", decl.body);
+                    body.contains("receiver: Static") || body.contains("get_called_class")
+                }
+            });
+            if uses_late_static {
+                crate::ir_lower::diagnostics::refuse(
+                    ancestor.declaration_span,
+                    &format!(
+                        "Calling private static method `{name}::{method_key}()` through a subclass with `$class::{method_key}()` is not supported because it uses late static binding"
+                    ),
+                );
+            }
+            return Some((sig, true, visibility, Some(name)));
+        }
+        parent = ancestor.parent.clone();
+    }
+    None
+}
+
+/// Expands `...[a, b]` (a literal list) into plain arguments so arity can be checked per arm.
+fn flatten_literal_spreads(args: &[Expr]) -> Vec<Expr> {
+    let mut flat = Vec::with_capacity(args.len());
+    for arg in args {
+        match &arg.kind {
+            ExprKind::Spread(inner) => match &inner.kind {
+                ExprKind::ArrayLiteral(items)
+                    if items.iter().all(|item| !matches!(item.kind, ExprKind::Spread(_))) =>
+                {
+                    flat.extend(items.iter().cloned());
+                }
+                _ => flat.push(arg.clone()),
+            },
+            _ => flat.push(arg.clone()),
+        }
+    }
+    flat
 }

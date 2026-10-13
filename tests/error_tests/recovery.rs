@@ -443,3 +443,54 @@ fn test_error_expression_append_to_variable_is_rejected_clearly() {
         "only supported on a call result",
     );
 }
+
+/// Verifies appends through `$class::$prop` are rejected clearly in statement and expression
+/// position (the read desugar is a value: the write would silently land in a temporary).
+#[test]
+fn test_error_dynamic_static_property_append_is_rejected() {
+    for src in [
+        "<?php class C { public static $t = []; } $c = 'C'; $c::$t[] = 'a';",
+        "<?php class C { public static $t = []; } $c = 'C'; $x = ($c::$t[] = 'b');",
+        "<?php class C { public static $t = []; } $c = 'C'; $f = fn($v) => $c::$t[] = $v;",
+        "<?php class C { public static $t = []; } $c = 'C'; $c::$t['k'] = 'a';",
+        "<?php class C { public static $t = []; } $c = 'C'; $x = ($c::$t['k'] = 'a');",
+    ] {
+        expect_error(src, "Writing a static property through a dynamic class");
+    }
+}
+
+/// Verifies an error inside a class's last method reports once, without a bogus `RBrace`
+/// for the class's own closing brace.
+#[test]
+fn test_parser_recovery_error_in_last_method_does_not_cascade() {
+    let messages = parse_error_messages(
+        "<?php
+        class M { public $o;
+          public function a() { return 1; } public function inst() { return 1 +; } }
+        echo 'after';",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+}
+
+/// Verifies recovery after a statement that consumed its `;` resumes at a following
+/// statement that starts with `[`, `(`, `@`, `new` or a literal instead of swallowing it.
+#[test]
+fn test_parser_recovery_keeps_expression_statement_starts() {
+    // Each `$c::$t[] = ...;` is rejected after its parser consumed the `;`; the next statement
+    // carries its own error, which is lost if recovery swallows that statement.
+    let messages = parse_error_messages(
+        "<?php
+        $c = 'C';
+        $c::$t[] = 'a';
+        [$a, $b] = [1, 2 +];
+        $c::$t[] = 'b';
+        (function () { echo 1 +; })();
+        $c::$t[] = 'c';
+        @foo(1 +);
+        $c::$t[] = 'd';
+        new Foo(1 +);
+        $c::$t[] = 'e';
+        'lit' . (1 +);",
+    );
+    assert_eq!(messages.len(), 10, "expected two errors per pair, got {:?}", messages);
+}

@@ -446,6 +446,12 @@ fn parse_expr_bp_inner(
             }
 
             if !is_assignment_expression_target(&lhs) {
+                if super::assignment_targets::is_dynamic_class_member_read(&lhs) {
+                    return Err(CompileError::new(
+                        lhs.span,
+                        super::assignment_targets::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+                    ));
+                }
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
 
@@ -733,19 +739,17 @@ fn parse_dynamic_class_member_read(
             "Writing a static property through a dynamic class (`$class::$prop = ...`) is not supported; use the class name",
         ));
     }
-    if matches!(receiver.kind, ExprKind::This) {
-        let kind = if primitive == "__elephc_dynamic_class_constant" {
+    // `$this::NAME` is exactly `static::NAME`. `$this::$prop` deliberately is NOT rewritten to
+    // `static::$prop`: that node reads the declaring class's storage from an instance method
+    // when a subclass redeclares the property, so it goes through the runtime-class dispatch.
+    if matches!(receiver.kind, ExprKind::This) && primitive == "__elephc_dynamic_class_constant" {
+        return Ok(Expr::new(
             ExprKind::ScopedConstantAccess {
                 receiver: crate::parser::ast::StaticReceiver::Static,
                 name,
-            }
-        } else {
-            ExprKind::StaticPropertyAccess {
-                receiver: crate::parser::ast::StaticReceiver::Static,
-                property: name,
-            }
-        };
-        return Ok(Expr::new(kind, span));
+            },
+            span,
+        ));
     }
     Ok(Expr::new(
         ExprKind::FunctionCall {
