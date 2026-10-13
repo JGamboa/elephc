@@ -49,6 +49,7 @@ mod iterator_cleanup;
 mod iterator_aggregate_owners;
 mod boxed_array_predicates;
 mod boxed_array_set_comparators;
+mod branch_merge_types;
 mod reference_loop_cleanup;
 mod static_callable_string_owners;
 mod reference_cells;

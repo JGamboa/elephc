@@ -64,6 +64,7 @@ struct ArrayWrite<'a> {
 pub fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
+    condition: Option<&Expr>,
     entry: &TypeEnv,
     packed_counter: Option<&str>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
@@ -72,6 +73,18 @@ pub fn loop_carried_storage_types(
     collect_value_assignments(body, &mut assignments);
     if let Some(update) = update {
         collect_value_assignment_stmt(update, &mut assignments);
+    }
+    // A store in a lazily evaluated operand of the loop CONDITION (`while ($i < 3 && ($x = 10))`)
+    // runs on some evaluations of the header and not on others, so the header's local must hold
+    // both representations; see `lazy_condition_contract`.
+    let mut lazy_condition_names = HashSet::new();
+    if let Some(condition) = condition {
+        let mut lazy = Vec::new();
+        collect_lazy_operand_assignments(condition, &mut lazy);
+        for (name, _) in &lazy {
+            lazy_condition_names.insert((*name).to_string());
+        }
+        assignments.extend(lazy);
     }
 
     let mut writes = Vec::new();
@@ -119,7 +132,14 @@ pub fn loop_carried_storage_types(
                 )
                 .map(|contract| (name.clone(), contract));
             }
-            null_entry_contract(entry_ty, fixed_ty).map(|contract| (name.clone(), contract))
+            null_entry_contract(entry_ty, fixed_ty)
+                .or_else(|| {
+                    lazy_condition_names
+                        .contains(name)
+                        .then(|| lazy_condition_contract(entry_ty, fixed_ty))
+                        .flatten()
+                })
+                .map(|contract| (name.clone(), contract))
         })
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
@@ -519,6 +539,71 @@ fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType
         return None;
     }
     Some(PhpType::Mixed)
+}
+
+/// Storage contract for a scalar local a lazy operand of the loop condition retypes.
+///
+/// EIR lowers the condition ONCE, against the types the header is entered with, and joins the
+/// operand's store with the edge that skipped it (`LazyBranchJoin`) as boxed `mixed`. Without a
+/// header contract the back edge then carried that box into a header still typed with the entry
+/// representation: `$x = null; while ($i < 3 && ($x = 10)) {}` left `NULL` (and leaked the box),
+/// and a null-typed `!$x` was folded to a constant. Boxing the local before the loop gives the
+/// header, both edges and the back edge one representation.
+fn lazy_condition_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
+    let (entry_repr, fixed_repr) = (entry_ty.codegen_repr(), fixed_ty.codegen_repr());
+    if entry_repr == fixed_repr || entry_repr == PhpType::Mixed {
+        return None;
+    }
+    Some(PhpType::Mixed)
+}
+
+/// Collects the local stores that sit in a lazily evaluated operand of `expr`: the right side of
+/// `&&`/`||`/`and`/`or`, the default of `?:` and `??`, and both arms of `? :`. Stores outside
+/// such an operand run on every evaluation and need no contract of their own.
+fn collect_lazy_operand_assignments<'a>(
+    expr: &'a Expr,
+    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+) {
+    match &expr.kind {
+        ExprKind::BinaryOp {
+            left,
+            op: crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or,
+            right,
+        } => {
+            collect_lazy_operand_assignments(left, out);
+            collect_value_assignments_from_expr(right, out);
+        }
+        ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
+            collect_lazy_operand_assignments(value, out);
+            collect_value_assignments_from_expr(default, out);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_lazy_operand_assignments(condition, out);
+            collect_value_assignments_from_expr(then_expr, out);
+            collect_value_assignments_from_expr(else_expr, out);
+        }
+        ExprKind::Assignment {
+            target,
+            value,
+            conditional_value_temp,
+            ..
+        } if conditional_value_temp.is_none() => {
+            // `$x ??= v` on a local is lazy too: its value is a `??` whose default is `v`.
+            if let ExprKind::Variable(name) = &target.kind {
+                if matches!(value.kind, ExprKind::NullCoalesce { .. }) {
+                    out.push((name, AssignedValue::Expr(value)));
+                }
+            }
+            collect_lazy_operand_assignments(value, out);
+        }
+        _ => visit_child_expressions(expr, &mut |child| {
+            collect_lazy_operand_assignments(child, out)
+        }),
+    }
 }
 
 /// Returns a self-evident scalar type when semantic inference is unavailable.

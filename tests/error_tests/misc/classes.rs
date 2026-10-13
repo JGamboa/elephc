@@ -228,10 +228,10 @@ fn test_error_nullsafe_first_class_callable_is_rejected() {
 /// Verifies the error diagnostic for nullsafe assignment target is rejected.
 #[test]
 fn test_error_nullsafe_assignment_target_is_rejected() {
-    // nullsafe cannot appear on the left-hand side of an assignment.
+    // nullsafe cannot appear on the left-hand side of an assignment; PHP's own diagnostic.
     expect_error(
         "<?php class Profile {} class User { public ?Profile $profile; } $user = new User(); $user?->profile = new Profile();",
-        "Invalid assignment target",
+        "Can't use nullsafe operator in write context",
     );
 }
 

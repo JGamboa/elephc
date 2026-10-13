@@ -42,6 +42,7 @@ fn stabilize_loop_storage(
     loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
+    condition: Option<&Expr>,
     env: &mut TypeEnv,
     packed_counter: Option<&str>,
 ) {
@@ -58,6 +59,7 @@ fn stabilize_loop_storage(
     let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
+        condition,
         &snapshot,
         packed_counter,
         &mut |expr, analysis_env| {
@@ -540,7 +542,7 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -794,7 +796,7 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 self.callable_array_targets.clear();
@@ -807,7 +809,7 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
@@ -885,6 +887,7 @@ impl Checker {
                     stmt.span,
                     body,
                     update.as_deref(),
+                    condition.as_ref(),
                     env,
                     packed_counter_name.as_deref(),
                 );

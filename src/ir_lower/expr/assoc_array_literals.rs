@@ -110,9 +110,21 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
-        ExprKind::Ternary { .. } => {
-            // Use the actual branch-merge representation before choosing hash storage.
-            ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
+        // Every lazily merged expression lowers through a merge temp typed from its branches;
+        // typing the slot from the syntactic fallback (`int` for most branch shapes) coerced a
+        // string or boxed branch into an integer element.
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Match { .. } => {
+            // A merge that may yield null is a nullable tagged scalar in a local, which an array
+            // slot cannot hold; such an element is boxed like a literal `null` element.
+            let merged = materialized_expr_type_for_merge(ctx, value);
+            if php_type_allows_null(&merged) {
+                PhpType::Mixed
+            } else {
+                ir_array_storage_type(merged)
+            }
         }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
