@@ -197,9 +197,38 @@ pub(crate) fn apply_implicit_tostring_return_types(
                     .any(|parent| reaches_stringable(parent, interface_map, seen))
             })
     }
+    // `(string)`, `echo` and interpolation call `__toString()` statically on the declared class
+    // (no virtual dispatch yet, frente P10/toString-dispatch). A class whose `__toString()` a
+    // subclass overrides would convert with the wrong body, so it keeps its untyped declaration
+    // and the contract error it had before instead of compiling to the wrong output.
+    let overridden_by_subclass = |class_name: &str| {
+        class_map.values().any(|other| {
+            if other.name == class_name
+                || !other
+                    .methods
+                    .iter()
+                    .any(|method| php_symbol_key(&method.name) == "__tostring")
+            {
+                return false;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut parent = other.extends.as_deref();
+            while let Some(name) = parent {
+                if name == class_name {
+                    return true;
+                }
+                if !seen.insert(name.to_string()) {
+                    break;
+                }
+                parent = class_map.get(name).and_then(|class| class.extends.as_deref());
+            }
+            false
+        })
+    };
     let needs_implicit: Vec<String> = class_map
         .values()
         .filter(|class| class.methods.iter().any(untyped_tostring))
+        .filter(|class| !overridden_by_subclass(&class.name))
         .filter(|class| {
             let mut seen_classes = std::collections::HashSet::new();
             let mut seen_interfaces = std::collections::HashSet::new();
@@ -336,6 +365,7 @@ struct SourceVisibleShape {
     declared_params: Vec<bool>,
     ref_params: Vec<bool>,
     has_defaults: Vec<bool>,
+    defaults: Vec<Option<Expr>>,
     variadic: Option<String>,
 }
 
@@ -387,6 +417,13 @@ impl SourceVisibleShape {
                 .enumerate()
                 .filter(|(index, _)| keep(*index))
                 .map(|(_, default)| default.is_some())
+                .collect(),
+            defaults: sig
+                .defaults
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, default)| default.clone())
                 .collect(),
             variadic: sig
                 .variadic
@@ -514,9 +551,11 @@ pub(crate) fn validate_signature_compatibility(
     }
 
     // PHP lets an override make a required parameter optional (the child accepts every call the
-    // parent accepts), but never the reverse. The physical parameter count is unchanged either
-    // way, so the shared vtable slot keeps one ABI; a call through the parent's static type always
-    // passes the parameter, and one through the child's type fills the child's own default.
+    // parent accepts), but never the reverse. The physical parameter count is unchanged, and a
+    // call through the parent's static type always passes the parameter. That alone does not keep
+    // the slot ABI: a class override must also keep every parameter's physical representation
+    // (checked in `validate_override_signature`), or the parent's caller passes a word the child
+    // reads as another type.
     if parent
         .has_defaults
         .iter()
@@ -528,6 +567,25 @@ pub(crate) fn validate_signature_compatibility(
             &format!(
                 "Cannot change optional parameter layout when {} {}: {}::{}",
                 context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    // A default is filled at the call site from the caller's static signature, so a call through
+    // the parent's (or interface's) type passes the parent's default even when the runtime class
+    // declares another one. Until defaults are supplied by the callee (frente P10), an override
+    // must keep the inherited default value wherever the parent has one.
+    if let Some(index) = parent
+        .defaults
+        .iter()
+        .zip(&child.defaults)
+        .position(|pair| matches!(pair, (Some(parent_default), Some(child_default)) if parent_default != child_default))
+    {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change the default value of parameter ${} when {} {}: {}::{} (not yet supported until P10: calls through the parent's type would pass the parent's default)",
+                child.param_names[index], context, kind, owner_name, method_name
             ),
         ));
     }
@@ -661,6 +719,18 @@ pub(crate) fn validate_override_signature(
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
     )?;
+    // Compiler-injected overrides are written against their builtin parents' real ABI.
+    if method.span.line != 0 {
+        validate_override_parameter_abi(
+            checker,
+            class_name,
+            &method.name,
+            kind,
+            &child_sig,
+            parent_sig,
+            method.span,
+        )?;
+    }
     // `#[\ReturnTypeWillChange]` only relaxes PHP's tentative return types, which exist on
     // internal (compiler-injected) parents. A source parent stays strict, as in PHP.
     let return_type_will_change =
@@ -707,21 +777,35 @@ pub(crate) fn validate_override_signature(
             &child_sig,
         )
     });
-    if parent_sig.declared_return && !return_compatible && return_type_will_change {
+    if parent_sig.declared_return && return_type_will_change {
         // A class override shares the parent's vtable slot and its caller-visible return ABI,
         // and no adapter re-boxes the result, so a relaxed return must keep the parent's
-        // physical representation. Anything else is refused rather than miscompiled.
-        if child_sig
-            .return_type
-            .reference_payload_compatible(&parent_sig.return_type)
+        // physical representation, even when the types are otherwise compatible (a `mixed`
+        // parent read through a concrete child word crashes). An untyped child is refused too:
+        // body inference may still change its return representation after this check.
+        if method.return_type.is_some()
+            && child_sig
+                .return_type
+                .reference_payload_compatible(&parent_sig.return_type)
         {
             return Ok(());
         }
+        let detail = if method.return_type.is_none() {
+            format!(
+                "an untyped #[\\ReturnTypeWillChange] override cannot be dispatched through the parent's native return type {}; declare a return type with that representation",
+                parent_sig.return_type
+            )
+        } else {
+            format!(
+                "#[\\ReturnTypeWillChange] return type {} cannot be dispatched through the parent's native return type {}",
+                child_sig.return_type, parent_sig.return_type
+            )
+        };
         return Err(CompileError::new(
             method.span,
             &format!(
-                "Cannot override {} {}::{} with #[\\ReturnTypeWillChange] return type {}: elephc cannot dispatch it through the parent's native return type {}",
-                kind, class_name, method.name, child_sig.return_type, parent_sig.return_type
+                "Cannot override {} {}::{}: {} (not yet supported until P10)",
+                kind, class_name, method.name, detail
             ),
         ));
     }
@@ -825,4 +909,78 @@ fn union_self_return_compatible(
                         })
                 }))
     })
+}
+
+/// Rejects class overrides whose parameters the parent's callers would pass in another physical
+/// representation.
+///
+/// A call through the parent's static type materializes every argument with the parent's
+/// signature and jumps to the child's vtable entry, and no adapter converts the words (frente
+/// P10). So every declared parameter must keep the parent's representation, an untyped child
+/// parameter cannot replace a declared one (its type is only inferred later from call sites),
+/// and a renamed variadic must still accept the parent's element type.
+fn validate_override_parameter_abi(
+    checker: &Checker,
+    class_name: &str,
+    method_name: &str,
+    kind: &str,
+    child_sig: &FunctionSig,
+    parent_sig: &FunctionSig,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    let child = SourceVisibleShape::of(child_sig);
+    let parent = SourceVisibleShape::of(parent_sig);
+    let widen_error = |index: usize, detail: String| {
+        CompileError::new(
+            span,
+            &format!(
+                "Cannot widen parameter representation when overriding {}: {}::{} parameter ${} ({}; not yet supported until P10)",
+                kind, class_name, method_name, child.param_names[index], detail
+            ),
+        )
+    };
+    for index in 0..child.param_count.min(parent.param_count) {
+        if child.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let parent_declared = parent.declared_params.get(index).copied().unwrap_or(false);
+        let child_declared = child.declared_params.get(index).copied().unwrap_or(false);
+        let parent_ty = &parent.param_types[index];
+        let child_ty = &child.param_types[index];
+        if parent_declared && !child_declared {
+            return Err(widen_error(
+                index,
+                format!("the parent passes {}, the override drops the declared type", parent_ty),
+            ));
+        }
+        if parent_declared && child_declared && !child_ty.reference_payload_compatible(parent_ty) {
+            return Err(widen_error(
+                index,
+                format!("the parent passes {}, the override expects {}", parent_ty, child_ty),
+            ));
+        }
+    }
+    if child.variadic.is_some() && parent.variadic.is_some() {
+        if let (Some(child_ty), Some(parent_ty)) =
+            (child.param_types.last(), parent.param_types.last())
+        {
+            let index = child.param_count - 1;
+            if !checker.type_accepts(child_ty, parent_ty) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Cannot narrow variadic parameter ${} when overriding {}: {}::{} (expects {}, parent accepts {})",
+                        child.param_names[index], kind, class_name, method_name, child_ty, parent_ty
+                    ),
+                ));
+            }
+            if !child_ty.reference_payload_compatible(parent_ty) {
+                return Err(widen_error(
+                    index,
+                    format!("the parent passes {}, the override expects {}", parent_ty, child_ty),
+                ));
+            }
+        }
+    }
+    Ok(())
 }

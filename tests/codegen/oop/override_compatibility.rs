@@ -117,7 +117,7 @@ echo "\n";
     assert_eq!(out, "3\n3\n123\n");
 }
 
-/// An untyped `__toString()` gets PHP 8's implicit `: string` under `Stringable` and a builtin parent, also through an override chain.
+/// An untyped `__toString()` gets PHP 8's implicit `: string` under `Stringable` and a builtin parent, including an inheriting subclass that does not override it.
 #[test]
 fn test_untyped_tostring_gets_implicit_string_return() {
     let out = compile_and_run(
@@ -126,9 +126,7 @@ class Name implements Stringable {
     public function __construct(private string $n) {}
     public function __toString() { return "name:" . $this->n; }
 }
-class Nick extends Name {
-    public function __toString() { return "nick/" . parent::__toString(); }
-}
+class Nick extends Name {}
 class Oops extends Exception {
     public function __toString() { return "oops"; }
 }
@@ -138,7 +136,7 @@ echo show(new Name("z")), " ", show(new Nick("w")), "\n";
 var_dump(new Nick("q") instanceof Stringable);
 "#,
     );
-    assert_eq!(out, "name:x nick/name:y oops\nname:z nick/name:w\nbool(true)\n");
+    assert_eq!(out, "name:x name:y oops\nname:z name:w\nbool(true)\n");
 }
 
 /// Regression guard: exact override signatures (same optional layout, covariant object return) keep compiling and dispatching.
@@ -169,7 +167,7 @@ fn test_return_type_will_change_static_builtin_override() {
         r#"<?php
 class MyDate extends DateTime {
     #[\ReturnTypeWillChange]
-    public static function createFromFormat($format, $datetime, $timezone = null): ?static
+    public static function createFromFormat(string $format, string $datetime, ?DateTimeZone $timezone = null): ?static
     {
         $d = new MyDate("2020-01-02 03:04:05");
         return $datetime === "" ? null : $d;
@@ -181,4 +179,55 @@ var_dump(MyDate::createFromFormat("Y-m-d", ""));
 "#,
     );
     assert_eq!(out, "MyDate 2020-01-02\nNULL\n");
+}
+
+/// Review p45: required -> optional with the same declared type keeps the ABI and dispatches through the parent.
+#[test]
+fn test_override_optional_params_keeping_type_and_default_still_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo { public $v = "foo"; }
+class Base { public function f(int $n, Foo $x): string { return "B" . $n . $x->v; } }
+class Child extends Base { public function f(int $n = 3, Foo $x = new Foo()): string { return "C" . $n . $x->v; } }
+function viaBase(Base $b): string { return $b->f(1, new Foo()); }
+echo viaBase(new Base()), viaBase(new Child()), (new Child())->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "B1fooC1fooC3foo\n");
+}
+
+/// Review p47: an interface implementation may widen to `?Foo = null`; interface dispatch boxes the argument.
+#[test]
+fn test_interface_impl_nullable_default_dispatches_through_interface() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo { public $v = "foo"; }
+interface I { public function f(Foo $x): string; }
+class C implements I { public function f(?Foo $x = null): string { return "C" . ($x === null ? "null" : $x->v); } }
+function viaI(I $i): string { return $i->f(new Foo()); }
+echo viaI(new C()), (new C())->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "CfooCnull\n");
+}
+
+/// Review p10: a renamed variadic with the same element type, called positionally, by name and with spreads.
+#[test]
+fn test_override_renamed_variadic_with_named_and_spread_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function m(int $k, array ...$arrays): string { return "B" . $k . ":" . json_encode($arrays); } }
+class Child extends Base { public function m(int $k, array ...$lists): string { return "C" . $k . ":" . json_encode($lists); } }
+function viaBase(Base $b): string { return $b->m(1, [1], [2]); }
+echo viaBase(new Base()), " ", viaBase(new Child()), "\n";
+$c = new Child();
+echo $c->m(2, lists: [3]), "\n";
+echo $c->m(k: 3), "\n";
+function viaBaseNamed(Base $b): string { return $b->m(4, arrays: [5]); }
+echo viaBaseNamed(new Child()), "\n";
+function viaBaseSpread(Base $b): string { return $b->m(5, ...[[6], [7]]); }
+echo viaBaseSpread(new Child()), "\n";
+"#,
+    );
+    assert_eq!(out, "B1:[[1],[2]] C1:[[1],[2]]\nC2:{\"lists\":[3]}\nC3:[]\nC4:{\"arrays\":[5]}\nC5:[[6],[7]]\n");
 }
