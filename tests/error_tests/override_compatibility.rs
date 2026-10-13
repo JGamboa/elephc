@@ -226,15 +226,6 @@ fn test_error_override_class_relative_default_counts_as_changed() {
     );
 }
 
-/// `static` under a static `static|false` is read with the boxed layout through `static::`.
-#[test]
-fn test_error_static_override_union_return_narrowed_to_static() {
-    expect_error(
-        r#"<?php class P { public static function make(): static|false { return false; } } class C extends P { public static function make(): static { return new static(); } }"#,
-        r#"Cannot override static method C::make with union return type C: it changes the physical return representation"#,
-    );
-}
-
 /// Review ronda 3 (d2): the override redefines `X`, so `self::X` is a changed default.
 #[test]
 fn test_error_override_redefined_self_constant_default() {
@@ -244,31 +235,11 @@ fn test_error_override_redefined_self_constant_default() {
     );
 }
 
-/// Companion of the upstream `test_late_static_union_override_can_narrow_to_static` (codegen,
-/// now `#[ignore]` until P10): the direct call worked, but `$m->duplicate()` through `MaybeCloneable` read the object word as a boxed value
-/// (TypeError in `get_class()` on laravel/main), so the narrowing is refused until P10.
-#[test]
-fn test_error_override_late_static_union_narrowed_to_static() {
-    expect_error(
-        r#"<?php class MaybeCloneable { public function duplicate(): static|false { return false; } } final class AlwaysCloneable extends MaybeCloneable { public function duplicate(): static { return $this; } public function label(): string { return "clone"; } } echo (new AlwaysCloneable())->duplicate()->label();"#,
-        r#"Cannot override method AlwaysCloneable::duplicate with union return type AlwaysCloneable: it changes the physical return representation"#,
-    );
-}
-
 /// Inside an override family the representation is boxed, but PHP's contravariance still applies (review n12 compiled once the family exemption skipped the representation rule).
 #[test]
 fn test_error_family_override_parameter_still_contravariant() {
     expect_error(
         r#"<?php class P { public function f(int $a) { return 1; } } class C extends P { public function f(string $a) { return 2; } }"#,
         r#"Cannot narrow parameter $a when overriding method: C::f (expects string, parent accepts int)"#,
-    );
-}
-
-/// The family ABI does not box an object narrowed out of `?N` yet (`$r->n` read garbage through the parent), so it stays refused until P10.
-#[test]
-fn test_error_family_override_object_return_narrowed_from_nullable() {
-    expect_error(
-        r#"<?php class N { public $n = "N"; } class P { public function f(): ?N { return null; } } class C extends P { public function f(): N { return new N(); } }"#,
-        r#"Cannot override method C::f with union return type N: it changes the physical return representation"#,
     );
 }

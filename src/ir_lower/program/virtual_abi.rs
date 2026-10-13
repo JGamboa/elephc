@@ -59,7 +59,9 @@ fn unify_family(
     let return_type = override_families::agreed_return(members);
     // A member body boxes its own result only when the shared return became Mixed under it;
     // a placeholder has no body and just takes the agreed type.
-    let return_widened = return_type == Some(PhpType::Mixed)
+    let return_widened = return_type
+        .as_ref()
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && members.iter().any(|member| {
             !member.placeholder && member.sig.return_type.codegen_repr() != PhpType::Mixed
         });

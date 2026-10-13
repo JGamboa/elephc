@@ -874,12 +874,12 @@ pub(crate) fn validate_override_signature(
         ));
     }
     // A union return narrowed by the override is only sound while both sides share one physical
-    // return representation: the parent's caller reads the result with the parent's layout and no
-    // adapter re-boxes it (until P10, the per-family ABI). `int|null` (tagged scalar) or `false`
+    // return representation, unless the override family ABI boxes it (`family_abi`): the
+    // parent's caller reads the result with the parent's layout. `int|null` (tagged scalar) or `false`
     // under a boxed `Node|int|null`/`Node|false` would be read as the wrong word.
     if parent_sig.declared_return
         && return_compatible
-        && !(family_abi && family_boxes_return(&child_sig.return_type))
+        && !family_abi
         && (matches!(parent_sig.return_type, PhpType::Union(_))
             || matches!(child_sig.return_type, PhpType::Union(_)))
         && !child_sig
@@ -1401,19 +1401,3 @@ fn override_family_unifies(
     reached_declaration
 }
 
-/// Returns whether the family ABI can box an override's narrower return into the family's shared
-/// `mixed` return: a boxed value already, a scalar (re-coerced by the body contract) or a tagged
-/// nullable int. Object and array returns narrowed out of a boxed union are not boxed by the
-/// family body yet (`?N` -> `N`, `array|false` -> `array` read the raw pointer), so they stay
-/// refused until P10.
-fn family_boxes_return(child_return: &PhpType) -> bool {
-    matches!(
-        child_return.codegen_repr(),
-        PhpType::Mixed
-            | PhpType::TaggedScalar
-            | PhpType::Int
-            | PhpType::Float
-            | PhpType::Str
-            | PhpType::Bool
-    )
-}

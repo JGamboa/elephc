@@ -372,3 +372,19 @@ via(new Node()); via(new Twig()); via(new Leaf());
     );
     assert_eq!(out, "bool(false)\nstring(1) \"T\"\nbool(false)\n");
 }
+
+/// Ronda 5 (x20): `?N` narrowed to `N` inside an override family; the object returned through
+/// the parent must be boxed by the family return so `$r->n` reads the property.
+#[test]
+fn test_family_override_object_return_narrowed_from_nullable() {
+    let out = compile_and_run(
+        r#"<?php
+class N { public $n = "N"; }
+class P { public function f(): ?N { return null; } }
+class C extends P { public function f(): N { return new N(); } }
+function via(P $p) { $r = $p->f(); var_dump($r === null ? null : $r->n); }
+via(new P()); via(new C());
+"#,
+    );
+    assert_eq!(out, "NULL\nstring(1) \"N\"\n");
+}

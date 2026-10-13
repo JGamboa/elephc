@@ -468,7 +468,6 @@ if ($type instanceof ReflectionUnionType) {
 
 /// Verifies a child override may covariantly narrow `static|false` to `static`.
 #[test]
-#[ignore = "P10: static|false→static override changes return representation; see probes/lsp/PENDING.md"]
 fn test_late_static_union_override_can_narrow_to_static() {
     let out = compile_and_run(
         r#"<?php

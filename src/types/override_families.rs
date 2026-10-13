@@ -154,17 +154,39 @@ pub(crate) fn groups(classes: &HashMap<String, ClassInfo>) -> Vec<FamilyGroup> {
 
 /// Returns the return type every caller can share, or `None` when no member has a body yet.
 ///
-/// Implementations that agree on one representation keep their type, anything else is `Mixed`.
+/// Implementations that agree on one representation keep their type. Otherwise the family
+/// travels boxed: when one member's own return is already a boxed type naming every other
+/// member's value (`?N` over an override returning `N`, `static|false` over `static`), that type
+/// is shared, so callers keep its precise PHP type (property reads, `=== null` narrowing) instead
+/// of an untyped `mixed`; anything else is `Mixed`.
 pub(crate) fn agreed_return(members: &[FamilyMember]) -> Option<PhpType> {
-    let mut concrete = members
+    let concrete: Vec<&PhpType> = members
         .iter()
         .filter(|member| !member.placeholder)
-        .map(|member| &member.sig.return_type);
-    let first = concrete.next()?;
-    if concrete.all(|ty| same_abi(ty, first)) {
-        Some(first.clone())
-    } else {
-        Some(PhpType::Mixed)
+        .map(|member| &member.sig.return_type)
+        .collect();
+    let first = *concrete.first()?;
+    if concrete.iter().all(|ty| same_abi(ty, first)) {
+        return Some(first.clone());
+    }
+    let boxed_cover = concrete.iter().find(|candidate| {
+        matches!(candidate, PhpType::Union(_))
+            && candidate.codegen_repr() == PhpType::Mixed
+            && concrete.iter().all(|ty| union_names(candidate, ty))
+    });
+    Some(boxed_cover.map_or(PhpType::Mixed, |ty| (*ty).clone()))
+}
+
+/// Returns whether every value of `ty` is one of the union `cover`'s members in the same
+/// representation (objects of any class share one pointer representation).
+fn union_names(cover: &PhpType, ty: &PhpType) -> bool {
+    let PhpType::Union(members) = cover else {
+        return false;
+    };
+    let member_of = |ty: &PhpType| members.iter().any(|member| same_abi(member, ty));
+    match ty {
+        PhpType::Union(tys) => tys.iter().all(member_of),
+        other => member_of(other),
     }
 }
 
