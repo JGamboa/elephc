@@ -43,7 +43,6 @@ function to(bool $c, P $a, P $b) { return $c ? $a : $b; }
 function si(int $a, int $b) { return $a ?: $b; }
 function ci(?int $a, int $b) { return $a ?? $b; }
 function cs(?string $a, string $b) { return $a ?? $b; }
-function co(?P $a, P $b) { return $a ?? $b; }
 function mi(int $k) { return match ($k) { 1 => 10, 2 => 20, default => 30 }; }
 function ms(int $k) { return match ($k) { 1 => "a", default => "b" }; }
 "#;
@@ -55,7 +54,6 @@ function ms(int $k) { return match ($k) { 1 => "a", default => "b" }; }
         ("si", PhpType::Int),
         ("ci", PhpType::Int),
         ("cs", PhpType::Str),
-        ("co", object.clone()),
         ("mi", PhpType::Int),
         ("ms", PhpType::Str),
     ] {
@@ -80,8 +78,12 @@ function ib(bool $c) { return $c ? 42 : false; }
 function sm(bool $c) { $r = gr(); return $r->n ?: 3; }
 function cm(?int $a) { $r = gr(); return $a ?? $r->n; }
 function mm(int $k) { $r = gr(); return match ($k) { 1 => 2, default => $r->n }; }
+function co(?R $a, R $b) { return $a ?? $b; }
+function so(?R $a, R $b) { return $a ?: $b; }
 "#;
-    for name in ["tm", "tu", "ib", "sm", "cm", "mm"] {
+    // `?R` is a boxed `mixed` cell; narrowing its non-null arm to an `R` slot would store the box
+    // pointer as an object, so these merges stay boxed.
+    for name in ["tm", "tu", "ib", "sm", "cm", "mm", "co", "so"] {
         let reprs = merge_temp_reprs(source, name);
         assert!(
             reprs.contains(&PhpType::Mixed),

@@ -174,3 +174,119 @@ var_dump(match ($t) { true => "x", default => "y" }, ($t ? 3 : 0) ?: 9, sum(10))
         "int(1)\nint(2)\nstring(1) \"a\"\nint(2)\nstring(1) \"x\"\nint(3)\nint(5)\n"
     );
 }
+
+/// Shared declarations for the nullable-object merges: `?X` values are boxed `mixed` cells.
+const NULLABLE_OBJECTS: &str = r#"<?php
+class X { public $n; function __construct($n) { $this->n = $n; } }
+function mo(int $n): ?X { return $n ? new X($n) : null; }
+$o = new X(1); $x = new X(2);
+"#;
+
+fn run_nullable(body: &str) -> String {
+    compile_and_run(&format!("{NULLABLE_OBJECTS}{body}"))
+}
+
+/// `?X ?: X` into a local: the non-null arm used to be narrowed to an object slot while its
+/// value was still the boxed cell, so `$r->n` read the box pointer.
+#[test]
+fn test_short_ternary_nullable_object_value_and_object_default() {
+    let out = run_nullable(
+        r#"function a1(?X $p, X $d) { $r = $p ?: $d; return $r->n; }
+function k4(?X $p, X $d) { return ($p ?: $d)->n; }
+function k2(bool $c, ?X $p, X $d) { $r = $c ? ($p ?: $d) : $d; return $r->n; }
+var_dump(a1($x, $o), a1(null, $o), k4($x, $o), k4(null, $o), k2(true, $x, $o), k2(true, null, $o));
+"#,
+    );
+    assert_eq!(out, "int(2)\nint(1)\nint(2)\nint(1)\nint(2)\nint(1)\n");
+}
+
+/// `?X ?? X` (wrong in main too) and both operators as array-literal elements.
+#[test]
+fn test_null_coalesce_nullable_object_value_and_object_default() {
+    let out = run_nullable(
+        r#"function a2(?X $p, X $d) { $r = $p ?? $d; return $r->n; }
+function px(?X $p, X $d) { return [($p ?: $d)->n, ($p ?? $d)->n]; }
+var_dump(a2($x, $o), a2(null, $o));
+echo json_encode(px($x, $o)), json_encode(px(null, $o)), "\n";
+"#,
+    );
+    assert_eq!(out, "int(2)\nint(1)\n[2,2][1,1]\n");
+}
+
+/// A `?X` call result as the value arm keeps the right object (it printed another class's
+/// object and then crashed).
+#[test]
+fn test_nullable_object_call_result_merges() {
+    let out = run_nullable(
+        r#"$w = mo(2) ?: $o; $w2 = mo(0) ?: $o; $q = mo(2) ?? $o; $q2 = mo(0) ?? $o;
+var_dump($w->n, $w2->n, $q->n, $q2->n, get_class($w), $q instanceof X);
+foreach ([0, 2] as $k) { echo (mo($k) ?: $o)->n, (mo($k) ?? $o)->n, "\n"; }
+"#,
+    );
+    assert_eq!(out, "int(2)\nint(1)\nint(2)\nint(1)\nstring(1) \"X\"\nbool(true)\n11\n22\n");
+}
+
+/// A `match` with no matching arm and no `default` throws a catchable `UnhandledMatchError`
+/// that renders the subject as PHP does.
+#[test]
+fn test_match_without_default_throws_catchable_unhandled_match_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {}
+function m($x) {
+    try { return match ($x) { 1 => "a", 2 => 2 }; }
+    catch (\UnhandledMatchError $e) { return $e->getMessage(); }
+}
+var_dump(m(1), m(2), m(3), m("s"), m(1.5), m(true), m(null), m([1]), m(new Foo()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"a\"\nint(2)\nstring(22) \"Unhandled match case 3\"\n\
+         string(24) \"Unhandled match case 's'\"\nstring(24) \"Unhandled match case 1.5\"\n\
+         string(25) \"Unhandled match case true\"\nstring(25) \"Unhandled match case NULL\"\n\
+         string(34) \"Unhandled match case of type array\"\n\
+         string(32) \"Unhandled match case of type Foo\"\n"
+    );
+}
+
+/// The subject held for the `UnhandledMatchError` message is released when an arm matches, so a
+/// destructor runs where PHP runs it, and the heap stays balanced.
+#[test]
+fn test_match_without_default_releases_subject_on_match() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class D { function __construct(public int $k) {} function __destruct() { echo "d{$this->k}\n"; } }
+function f() {
+    $o = new D(9); $s = match ($o) { $o => "same" }; echo $s, "\n"; unset($o); echo "after\n";
+}
+f(); echo "end\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "same\nd9\nafter\nend\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Truthiness of a nullable int (a tagged scalar pair) in `?:`, a ternary condition, `(bool)`,
+/// `if` and `!`: it was dispatched as a boxed cell and crashed.
+#[test]
+fn test_nullable_int_truthiness_in_short_ternary_and_conditions() {
+    let out = compile_and_run(
+        r#"<?php
+class H { public ?int $pi = null; }
+function c1(?int $p) { return $p ?: 5; }
+function c2(?int $p) { return $p ? "t" : "f"; }
+function c3(?int $p) { return (bool) $p; }
+function c4(?int $p) { if ($p) { return "yes"; } return "no"; }
+var_dump(c1(3), c1(null), c1(0), c2(3), c2(null), c2(0), c3(3), c3(null), c3(0), c4(-1), c4(null));
+$h = new H(); var_dump($h->pi ?: 5, !$h->pi); $h->pi = 7; var_dump($h->pi ?: 5, !$h->pi);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(3)\nint(5)\nint(5)\nstring(1) \"t\"\nstring(1) \"f\"\nstring(1) \"f\"\nbool(true)\n\
+         bool(false)\nbool(false)\nstring(3) \"yes\"\nstring(2) \"no\"\nint(5)\nbool(true)\nint(7)\n\
+         bool(false)\n"
+    );
+}

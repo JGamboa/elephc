@@ -77,7 +77,7 @@ impl PendingBranchValue {
     /// guard has proven non-null (the value arm of `??`, the truthy arm of `?:`). An arm whose
     /// only possible value is null is unreachable and contributes nothing.
     pub(super) fn excluding_null(mut self) -> Self {
-        self.merge_type = match self.merge_type.take().map(strip_void_from_union) {
+        self.merge_type = match self.merge_type.take().map(non_null_merge_type) {
             Some(PhpType::Void) | None => None,
             Some(non_null) => Some(normalize_value_php_type(non_null)),
         };
@@ -87,6 +87,38 @@ impl PendingBranchValue {
     /// Returns the definitely initialized slots at the end of the branch, after its store.
     pub(super) fn initialized(&self) -> &HashSet<LocalSlotId> {
         &self.initialized
+    }
+}
+
+/// Returns the type a proven-non-null arm of `??`/`?:` contributes to a merge: `php_type` without
+/// its null member, when the merge store can reach that narrower representation from the value's
+/// own one.
+///
+/// A scalar or array narrowed out of a boxed `mixed` cell is converted by `coerce_value_for_temp`
+/// (cast or payload unbox), and a tagged `?int` narrows to its raw scalar. A nullable object
+/// (`?X`, represented as a boxed `mixed` cell) has no such conversion: narrowing it to `X` typed
+/// the merge temp as an object pointer and stored the BOX pointer in it, so `$p ?: $d` over
+/// `?X $p` read garbage or crashed. Such an arm keeps its nullable type, and the merge stays boxed.
+pub(super) fn non_null_merge_type(php_type: PhpType) -> PhpType {
+    let value_repr = php_type.codegen_repr();
+    let non_null = strip_void_from_union(php_type.clone());
+    let narrowed_repr = non_null.codegen_repr();
+    let reachable = narrowed_repr == value_repr
+        || value_repr != PhpType::Mixed
+        || matches!(
+            narrowed_repr,
+            PhpType::Void
+                | PhpType::Int
+                | PhpType::Bool
+                | PhpType::Float
+                | PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+        );
+    if reachable {
+        non_null
+    } else {
+        php_type
     }
 }
 
@@ -231,7 +263,7 @@ pub(super) fn short_ternary_merge_result_type(
 ) -> PhpType {
     // Mirrors `lower_short_ternary`: the value arm only reaches the merge when truthy (so never
     // null), and a null default keeps the merge nullable.
-    let value_ty = strip_void_from_union(materialized_expr_type_for_merge(ctx, value));
+    let value_ty = non_null_merge_type(materialized_expr_type_for_merge(ctx, value));
     let default_ty = materialized_expr_type_for_merge(ctx, default);
     nullable_aware_branch_merge_type(&value_ty, &default_ty)
 }
@@ -290,7 +322,7 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::NullCoalesce { value, default } => {
             // Mirrors `lower_null_coalesce`: the value arm only reaches the merge when non-null.
-            let value_ty = strip_void_from_union(materialized_expr_type_for_merge(ctx, value));
+            let value_ty = non_null_merge_type(materialized_expr_type_for_merge(ctx, value));
             let default_ty = materialized_expr_type_for_merge(ctx, default);
             nullable_aware_branch_merge_type(&value_ty, &default_ty)
         }
