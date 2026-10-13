@@ -89,6 +89,7 @@ pub(crate) use instance_property_writes::{
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
+pub(crate) use return_coercions::coerce_boxed_family_param;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
 pub(super) use array_write_core::{

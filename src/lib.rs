@@ -77,6 +77,7 @@ pub mod opcache_prelude;
 pub mod shared_ini_prelude;
 /// PHP `(object)` cast standard-library prelude injection.
 pub mod object_cast_prelude;
+pub mod natives_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.

@@ -76,6 +76,8 @@ fn check_source_with_defines_and_options(
     // helper's own name is rejected here rather than reaching the checker as a duplicate.
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
         .map_err(|e| e.message.clone())?;
+    let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
@@ -104,6 +106,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
+    let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
@@ -288,6 +291,8 @@ mod type_system;
 mod reference_detach;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
+#[path = "error_tests/native_classes.rs"]
+mod native_classes;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
 #[path = "error_tests/extensions.rs"]

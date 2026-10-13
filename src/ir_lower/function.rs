@@ -287,6 +287,35 @@ pub(crate) fn lower_class_method(
         .cloned()
         .unwrap_or(fallback);
     let name = format!("{}::{}", class_name, method_name);
+    if let Some(contract) = module.family_body_contracts.get(&(
+        class_name.to_string(),
+        php_symbol_key(method_name),
+        is_static,
+    )) {
+        let params = contract
+            .params
+            .iter()
+            .filter_map(|(index, ty)| {
+                let (param_name, _) = signature.params.get(*index)?;
+                let prefix = format!(
+                    "{}(): Argument #{} (${}) must be of type {}, ",
+                    name,
+                    index + 1,
+                    param_name,
+                    match ty.codegen_repr() {
+                        PhpType::Int => "int",
+                        PhpType::Float => "float",
+                        PhpType::Bool => "bool",
+                        _ => "string",
+                    }
+                );
+                Some((param_name.clone(), ty.clone(), prefix))
+            })
+            .collect();
+        PENDING_FAMILY_CONTRACT.with(|pending| {
+            *pending.borrow_mut() = Some((params, contract.declared_return.clone()));
+        });
+    }
     // Generator methods lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let method_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -1626,6 +1655,15 @@ fn lower_closure_function_with_signature(
     signature
 }
 
+thread_local! {
+    /// The family contract `lower_class_method` hands to the very next body it lowers:
+    /// `(param name, declared type, TypeError prefix)` per boxed parameter, and the boxed
+    /// declared return. Taken before any nested closure body can be lowered.
+    static PENDING_FAMILY_CONTRACT: std::cell::RefCell<
+        Option<(Vec<(String, PhpType, String)>, Option<PhpType>)>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
     function: &mut Function,
@@ -1781,6 +1819,17 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
+    // A method body boxed into its override family's call ABI enforces its own declared scalar
+    // contract: the caller no longer coerces the argument, and the shared slot takes a Mixed
+    // result (`crate::ir_lower::program::virtual_abi`).
+    if let Some((params, declared_return)) =
+        PENDING_FAMILY_CONTRACT.with(|pending| pending.borrow_mut().take())
+    {
+        for (param_name, declared, prefix) in &params {
+            crate::ir_lower::stmt::coerce_boxed_family_param(&mut ctx, param_name, declared, prefix);
+        }
+        ctx.boxed_return_contract = declared_return;
+    }
     if let Some(class) = property_initializers {
         super::property_initializers::lower(&mut ctx, class);
     } else if !super::throwable_constructors::lower(&mut ctx) {
