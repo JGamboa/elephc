@@ -112,6 +112,8 @@ pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+/// Conditionally-injected PHP-written stdlib functions (`pack`, `unpack`, `version_compare`, ...).
+pub mod stdlib_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

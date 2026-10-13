@@ -124,6 +124,9 @@ pub struct TemplateSignature {
     /// factory is how a real codebase offers more than one way to build something — inference
     /// that fires only at `new` would miss where most construction happens.
     pub static_methods: Vec<StaticMethodSignature>,
+    /// Whether the template is a CLASS (rather than an interface or trait), whose marker
+    /// interface must stay invisible to reflection.
+    pub is_class: bool,
 }
 
 /// One static method of a generic class, as the checker needs it to infer at a call.
@@ -158,6 +161,7 @@ impl Templates {
                 constructor_params: constructor_param_types(&template.declaration),
                 constructor_variadic: constructor_variadic_type(&template.declaration),
                 static_methods: static_method_signatures(&template.declaration),
+                is_class: matches!(template.declaration.kind, StmtKind::ClassDecl { .. }),
             })
             .collect()
     }

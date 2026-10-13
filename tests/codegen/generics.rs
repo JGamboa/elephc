@@ -2544,3 +2544,78 @@ fn test_instanceof_generic_template_guard_keeps_methods_callable() {
     ));
     assert_eq!(out, "2|-1|id,n");
 }
+
+/// A CLASS template's marker interface exists only for `instanceof`: reflection sees what php-src
+/// sees (no interface `Box`, nothing extra in `class_implements`), `is_subclass_of` holds only
+/// for a class extending an instantiation, and an INTERFACE template stays a visible interface.
+#[test]
+fn test_class_template_marker_is_hidden_from_reflection() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "class Box { /** @param T $v */ public function __construct(public $v) {} }\n",
+        "/** @extends Box<int> */\n",
+        "class IntBox extends Box {}\n",
+        "/** @template T */\n",
+        "interface Coll { /** @return T */ public function first(); }\n",
+        "/** @implements Coll<int> */\n",
+        "class IntColl implements Coll { public function first() { return 1; } }\n",
+        "$b = new Box(5); $s = new Box(\"s\"); $i = new IntBox(3);\n",
+        "var_dump($b instanceof Box, $s instanceof Box, $i instanceof Box, new IntColl() instanceof Coll);\n",
+        "var_dump(interface_exists('Box'), is_a($b, 'Box'), is_subclass_of($b, 'Box'), is_subclass_of($i, 'Box'), is_subclass_of('IntBox', 'Box'));\n",
+        "var_dump(in_array('Box', get_declared_interfaces()), in_array('Coll', get_declared_interfaces()), interface_exists('Coll'));\n",
+        "var_dump(class_implements($b), class_implements($i), class_implements('IntBox'));\n",
+    ));
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nbool(true)\nbool(true)\nbool(true)\n",
+            "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n",
+            "bool(false)\nbool(true)\nbool(true)\n",
+            "array(0) {\n}\narray(0) {\n}\narray(0) {\n}\n",
+        )
+    );
+}
+
+/// An `instanceof` guard on a template is not a narrowing for the mixed-storage scan either, so
+/// reassigning the guarded local inside it is an ordinary store.
+#[test]
+fn test_instanceof_generic_template_guard_is_not_a_storage_narrowing() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "interface Coll { /** @return T */ public function first(); }\n",
+        "/** @implements Coll<int> */\n",
+        "class IntColl implements Coll { public function first() { return 7; } public function extra() { return \"x\"; } }\n",
+        "interface Shape { public function area(); }\n",
+        "class Sq implements Shape, Coll { public function area() { return 4; } public function first() { return 9; } }\n",
+        "function a($x) { return $x instanceof Coll ? $x->first() : -1; }\n",
+        "function b(Shape $x) { if ($x instanceof Coll) { return $x->area(); } return 0; }\n",
+        "function c($x) { if (!$x instanceof Coll) { return \"no\"; } return $x->first(); }\n",
+        "function d($x) { return $x instanceof Coll && $x->first() > 5 ? \"big\" : \"small\"; }\n",
+        "echo a(new IntColl()), a(1), b(new Sq()), c(new Sq()), c(2), d(new IntColl()), d(new Sq()), \"|\";\n",
+        "$v = 1; if ($v instanceof Coll) { $v = new IntColl(); } echo $v, \"|\";\n",
+        "$w = new IntColl(); if ($w instanceof Coll) { echo $w->extra(); }\n",
+    ));
+    assert_eq!(out, "7-149nobigbig|1|x");
+}
+
+/// An `instanceof` guard on a template keeps an object-typed local's own class, so it still
+/// reaches a parameter typed with that class inside and after the guard.
+#[test]
+fn test_instanceof_generic_template_guard_keeps_the_object_type() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "interface Coll { /** @return T */ public function first(); }\n",
+        "/** @implements Coll<int> */\n",
+        "class IntColl implements Coll { public $n = 3; public function first() { return 7; } }\n",
+        "function take(IntColl $c) { return $c->n; }\n",
+        "$w = new IntColl();\n",
+        "if ($w instanceof Coll) { $y = $w; echo $y->first(), take($w), $w->n, \"|\"; }\n",
+        "echo take($w), \"|\";\n",
+        "$arr = [new IntColl(), 5, \"s\"];\n",
+        "foreach ($arr as $e) { if ($e instanceof Coll) { echo $e->first() + 1; } else { echo \"-\"; } }\n",
+    ));
+    assert_eq!(out, "733|3|8--");
+}

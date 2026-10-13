@@ -393,6 +393,14 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `self::$x = require 'f.php';`: PHP's include is an expression, but elephc can only
+    // expand one bound to a plain local, so it is hoisted (see `scoped_include`).
+    if super::scoped_include::starts_value_include(tokens, *pos) {
+        return super::scoped_include::lower_scoped_include_assignment(
+            tokens, pos, lhs_expr, op, is_append, span,
+        )
+        .map(Some);
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
