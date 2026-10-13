@@ -18,9 +18,10 @@ pub(super) fn lower_match(
     expr: &Expr,
 ) -> LoweredValue {
     let subject = lower_expr(ctx, subject);
-    let result_type = match_merge_result_type(ctx, arms, default, expr);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx.builder.create_named_block("match.merge", Vec::new());
+    // Every arm result is parked and the merge temp is typed from the lowered arm values (see
+    // `PendingBranchValue`), so an arm the pre-lowering estimate cannot name keeps its value.
+    let mut pending = Vec::new();
 
     for (conditions, result) in arms {
         let result_block = ctx.builder.create_named_block("match.result", Vec::new());
@@ -47,20 +48,18 @@ pub(super) fn lower_match(
             fallthrough = Some(next_test);
         }
         ctx.builder.position_at_end(result_block);
-        store_expr_into_temp(ctx, &temp_name, result_type.clone(), result, expr.span);
-        branch_to(ctx, merge);
+        pending.extend(lower_pending_branch(ctx, result));
         if let Some(fallthrough) = fallthrough {
             ctx.builder.position_at_end(fallthrough);
         }
     }
     if let Some(default) = default {
-        store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
-        branch_to(ctx, merge);
+        pending.extend(lower_pending_branch(ctx, default));
     } else if !ctx.builder.insertion_block_is_terminated() {
         let message = ctx.intern_string("Fatal error: unhandled match case\n");
         ctx.builder.terminate(Terminator::Fatal { message });
     }
+    let (temp_name, _) = store_pending_branches(ctx, pending, merge, Some(expr), expr.span);
     ctx.builder.position_at_end(merge);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
-
