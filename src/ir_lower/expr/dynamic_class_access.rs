@@ -281,7 +281,7 @@ fn lower_dynamic_static_call(
     store_expr_into_temp(ctx, &name_local, PhpType::Str, &class_name_expr, span);
 
     let method_key = php_symbol_key(method);
-    let mut by_ref_candidate = None;
+    let passed_args = call_args.len();
     let mut candidates: Vec<MethodCandidate> = ctx
         .classes
         .iter()
@@ -306,30 +306,46 @@ fn lower_dynamic_static_call(
                 // (and allows it from the declaring scope): `A::callSec(new B)` → `$o::sec()`.
                 (None, None) => inherited_private_static_method(ctx, info, &method_key)?,
             };
-            if sig.ref_params.iter().any(|by_ref| *by_ref) {
-                by_ref_candidate.get_or_insert_with(|| class_name.clone());
-            }
+            let late_static_unsupported = (declaring.as_deref() != Some(class_name.as_str())
+                && matches!(visibility, Some(Visibility::Private))
+                && !info.static_methods.contains_key(&method_key))
+                .then(|| {
+                    let declaring = declaring.clone().unwrap_or_default();
+                    inherited_private_late_static_blocker(ctx, &declaring, &method_key)
+                })
+                .flatten();
+            // A by-reference parameter only matters when this call site passes that argument:
+            // the checker saw the by-value primitive, so the write-back cannot happen.
+            let by_ref_unsupported = sig
+                .ref_params
+                .iter()
+                .take(passed_args)
+                .any(|by_ref| *by_ref)
+                .then(|| {
+                    format!(
+                        "elephc: calling {class_name}::{method}() through a dynamic class (`$class::{method}()`) with an argument for a by-reference parameter is not supported; name the class"
+                    )
+                });
+            let variadic_slots = usize::from(sig.variadic.is_some());
             Some(MethodCandidate {
                 class_name: class_name.clone(),
                 is_static,
                 visibility,
                 declaring: declaring.unwrap_or_else(|| class_name.clone()),
-                required: sig.defaults.iter().filter(|default| default.is_none()).count(),
+                // The variadic parameter is never required.
+                required: sig
+                    .params
+                    .iter()
+                    .zip(sig.defaults.iter())
+                    .take(sig.params.len() - variadic_slots.min(sig.params.len()))
+                    .filter(|(_, default)| default.is_none())
+                    .count(),
                 max_args: sig.variadic.is_none().then_some(sig.params.len()),
+                unsupported: late_static_unsupported.or(by_ref_unsupported),
             })
         })
         .collect();
     candidates.sort_by(|left, right| left.class_name.cmp(&right.class_name));
-    if let Some(class_name) = by_ref_candidate {
-        // The checker only sees the by-value primitive, so a by-reference argument would be
-        // passed as a copy: refuse instead of silently dropping the write-back.
-        crate::ir_lower::diagnostics::refuse(
-            span,
-            &format!(
-                "Calling `{class_name}::{method}()` through a dynamic class (`$class::{method}()`) is not supported because it takes a by-reference parameter; name the class"
-            ),
-        );
-    }
     let has_this = ctx.has_local_slot("this");
     let has_spread = call_args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
     let scope_label = match &ctx.current_class {
@@ -363,13 +379,25 @@ fn lower_dynamic_static_call(
     for (arm, candidate) in arms {
         ctx.builder.position_at_end(arm);
         ctx.restore_initialized_slots(split_initialized.clone());
-        let MethodCandidate { class_name, is_static, visibility, declaring, required, max_args } =
-            candidate;
+        let MethodCandidate {
+            class_name,
+            is_static,
+            visibility,
+            declaring,
+            required,
+            max_args,
+            unsupported,
+        } = candidate;
         if !scope_can_access(ctx, visibility.as_ref(), &declaring) {
             let message = format!(
                 "Call to {} method {declaring}::{method}() from {scope_label}",
                 visibility_word(visibility.as_ref())
             );
+            throw_error_and_merge(ctx, "Error", literal(&message, span), &result_temp, merge, span);
+            continue;
+        }
+        if let Some(message) = unsupported {
+            // Only this arm is unsupported: other receivers at the same site still compile.
             throw_error_and_merge(ctx, "Error", literal(&message, span), &result_temp, merge, span);
             continue;
         }
@@ -640,6 +668,8 @@ struct MethodCandidate {
     required: usize,
     /// `None` when the method is variadic.
     max_args: Option<usize>,
+    /// Why this arm cannot be lowered faithfully; the arm then throws instead.
+    unsupported: Option<String>,
 }
 
 /// Returns the arguments one arm passes. PHP evaluates surplus arguments to a non-variadic user
@@ -670,8 +700,8 @@ fn arm_call_args(
 /// Finds a private static method an ancestor of `info` declares, which PHP resolves for
 /// `$child::m()` although the child's method table does not list it.
 ///
-/// The arm calls it on the declaring class, so late static binding inside it would see that
-/// class instead of the child: a body that uses `static` is refused rather than miscompiled.
+/// The arm calls it on the declaring class; `inherited_private_late_static_blocker` decides
+/// whether late static binding inside it still behaves as PHP's would.
 fn inherited_private_static_method<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     info: &'a crate::types::ClassInfo,
@@ -684,20 +714,6 @@ fn inherited_private_static_method<'a>(
             let visibility = ancestor.static_method_visibilities.get(method_key).cloned();
             if !matches!(visibility, Some(Visibility::Private)) {
                 return None;
-            }
-            let uses_late_static = ancestor.method_decls.iter().any(|decl| {
-                php_symbol_key(&decl.name) == method_key && {
-                    let body = format!("{:?}", decl.body);
-                    body.contains("receiver: Static") || body.contains("get_called_class")
-                }
-            });
-            if uses_late_static {
-                crate::ir_lower::diagnostics::refuse(
-                    ancestor.declaration_span,
-                    &format!(
-                        "Calling private static method `{name}::{method_key}()` through a subclass with `$class::{method_key}()` is not supported because it uses late static binding"
-                    ),
-                );
             }
             return Some((sig, true, visibility, Some(name)));
         }
@@ -723,4 +739,60 @@ fn flatten_literal_spreads(args: &[Expr]) -> Vec<Expr> {
         }
     }
     flat
+}
+
+/// Returns why calling the private static `declaring::method_key()` on the declaring class
+/// (instead of with `static` bound to a subclass) could differ from PHP, or `None` when it
+/// cannot: every `static::` use in its body is a static property that no subclass of
+/// `declaring` redeclares, so `static::$p` and `declaring::$p` name the same storage.
+fn inherited_private_late_static_blocker(
+    ctx: &LoweringContext<'_, '_>,
+    declaring: &str,
+    method_key: &str,
+) -> Option<String> {
+    let info = ctx.classes.get(declaring)?;
+    let decl = info.method_decls.iter().find(|decl| php_symbol_key(&decl.name) == method_key)?;
+    let body = format!("{:?}", decl.body);
+    let blocked = || {
+        Some(format!(
+            "elephc: calling private static method {declaring}::{method_key}() through a subclass with `$class::{method_key}()` is not supported because its late static binding would differ"
+        ))
+    };
+    if body.contains("get_called_class") {
+        return blocked();
+    }
+    // Every late-static node carries `receiver: Static` in its Debug form (`static::class`
+    // ends right after it, without a trailing field).
+    const MARKER: &str = "receiver: Static";
+    let mut rest = body.as_str();
+    while let Some(index) = rest.find(MARKER) {
+        let before = rest[..index].trim_end();
+        let node = before.strip_suffix('{').map(str::trim_end).unwrap_or(before);
+        let is_property = [
+            "StaticPropertyAccess",
+            "StaticPropertyAssign",
+            "StaticPropertyArrayPush",
+            "StaticPropertyArrayAssign",
+        ]
+        .iter()
+        .any(|kind| node.ends_with(kind));
+        let after = &rest[index + MARKER.len()..];
+        let property = after
+            .strip_prefix(", property: \"")
+            .and_then(|tail| tail.split('"').next());
+        let (true, Some(property)) = (is_property, property) else {
+            return blocked();
+        };
+        let base = info.static_property_declaring_classes.get(property);
+        let redeclared = ctx.classes.iter().any(|(other, other_info)| {
+            other != declaring
+                && super::property_access::class_extends_class(ctx, other, declaring)
+                && other_info.static_property_declaring_classes.get(property) != base
+        });
+        if redeclared {
+            return blocked();
+        }
+        rest = after;
+    }
+    None
 }

@@ -748,6 +748,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_dynamic_member_write(&lhs_expr, span)?;
     let op = if is_increment {
         AssignmentOperator::Compound(BinOp::Add)
     } else {

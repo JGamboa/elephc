@@ -457,6 +457,7 @@ fn parse_prefix_inc_dec(
     // which cannot be read twice).
     let rewind = *pos;
     if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+        super::assignment_targets::reject_dynamic_member_write(&target, span)?;
         if let Some(desugared) =
             super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
         {

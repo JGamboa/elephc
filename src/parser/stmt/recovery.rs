@@ -26,6 +26,15 @@ fn recover_with_open_delimiters(
     mut bracket_depth: usize,
 ) {
     let start = *pos;
+    // Delimiters the failed statement opened and never closed (`return [1, ;`) must not keep
+    // recovery from stopping at this statement's `;` or the enclosing `}`: they may never be
+    // closed, and skipping to EOF lost every later diagnostic. Only delimiters opened during
+    // recovery itself (and braces) still suppress boundaries.
+    let (inherited_paren, inherited_bracket) = (paren_depth, bracket_depth);
+    let mut brace_depth = 0usize;
+    let at_statement_level = |paren: usize, bracket: usize, brace: usize| {
+        brace == 0 && paren <= inherited_paren && bracket <= inherited_bracket
+    };
 
     while *pos < tokens.len() {
         match tokens[*pos].0 {
@@ -45,10 +54,19 @@ fn recover_with_open_delimiters(
                 bracket_depth = bracket_depth.saturating_sub(1);
                 *pos += 1;
             }
-            Token::Semicolon if paren_depth == 0 && bracket_depth == 0 => {
+            Token::Semicolon if at_statement_level(paren_depth, bracket_depth, brace_depth) => {
                 *pos += 1;
                 break;
             }
+            Token::LBrace if inherited_paren + inherited_bracket > 0 => {
+                brace_depth += 1;
+                *pos += 1;
+            }
+            Token::RBrace if brace_depth > 0 => {
+                brace_depth -= 1;
+                *pos += 1;
+            }
+            Token::RBrace if at_statement_level(paren_depth, bracket_depth, brace_depth) => break,
             Token::RBrace
             | Token::EndDeclare
             | Token::EndIf
@@ -167,20 +185,26 @@ pub(crate) fn recover_after_failed_stmt(
     recover_with_open_delimiters(tokens, pos, paren_depth, bracket_depth);
 }
 
-/// Counts the `(` and `[` opened and not yet closed in `tokens[start..end]`.
+/// Counts the `(` and `[` opened and not yet closed in `tokens[start..end]`, at the statement's
+/// own brace level: delimiters left open inside a nested `{...}` that already closed (an
+/// erroneous statement in a method body) belong to that block and are not inherited.
 fn open_delimiters_between(tokens: &[SpannedToken], start: usize, end: usize) -> (usize, usize) {
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
+    let mut levels = vec![(0usize, 0usize)];
     for (token, _) in tokens.iter().take(end).skip(start) {
+        let level = levels.last_mut().expect("statement level");
         match token {
-            Token::LParen => paren_depth += 1,
-            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
-            Token::LBracket => bracket_depth += 1,
-            Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            Token::LParen => level.0 += 1,
+            Token::RParen => level.0 = level.0.saturating_sub(1),
+            Token::LBracket => level.1 += 1,
+            Token::RBracket => level.1 = level.1.saturating_sub(1),
+            Token::LBrace => levels.push((0, 0)),
+            Token::RBrace if levels.len() > 1 => {
+                levels.pop();
+            }
             _ => {}
         }
     }
-    (paren_depth, bracket_depth)
+    levels.last().copied().unwrap_or((0, 0))
 }
 
 /// Skips `catch (...) {...}`, `finally {...}`, `else {...}` and `elseif (...) {...}` clauses

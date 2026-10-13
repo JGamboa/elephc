@@ -83,6 +83,7 @@ fn parse_expr_bp_inner(
             Token::PlusPlus | Token::MinusMinus => {
                 let span = tokens[*pos].1.span;
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                super::assignment_targets::reject_dynamic_member_write(&lhs, span)?;
                 match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
                     lhs.clone(),
                     increment,

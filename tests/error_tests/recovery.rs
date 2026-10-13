@@ -494,3 +494,38 @@ fn test_parser_recovery_keeps_expression_statement_starts() {
     );
     assert_eq!(messages.len(), 10, "expected two errors per pair, got {:?}", messages);
 }
+
+/// Verifies every other write context rooted in `$class::$prop` is rejected clearly.
+#[test]
+fn test_error_dynamic_static_property_write_contexts_are_rejected() {
+    let head = "<?php class C { public static $p = ['n' => 1, 0 => [1]]; } $c = 'C';";
+    for body in [
+        "$c::$p['n']++;",
+        "$c::$p['n']--;",
+        "$c::$p[0][0]++;",
+        "++$c::$p['n'];",
+        "$x = $c::$p['n']++;",
+        "$r = &$c::$p['n'];",
+        "foreach ($c::$p as &$v) { $v = 9; }",
+        "[$c::$p['n']] = [5];",
+        "class D { public static $p = []; public function m() { $this::$p['n']++; } }",
+    ] {
+        expect_error(&format!("{head} {body}"), "Writing a static property through a dynamic class");
+    }
+}
+
+/// Verifies an unclosed `[` or `(` in a statement stops recovery at that statement's `;`
+/// instead of skipping to EOF (which lost later diagnostics and reported a bogus "Expected '}'").
+#[test]
+fn test_parser_recovery_unclosed_delimiter_stops_at_statement_end() {
+    for src in [
+        "<?php class K { public function a() { return [1, ; } public function b() { return 2; } }\n$x = 1;\necho $x 3;",
+        "<?php function f() { return g(1, ; }\necho $x 3;",
+        "<?php if (true) { g(1, ; }\necho $x 3;",
+        "<?php g(1, ;\necho $x 3;",
+    ] {
+        let messages = parse_error_messages(src);
+        assert_eq!(messages.len(), 2, "{src}: {:?}", messages);
+        assert!(messages.iter().all(|m| !m.contains("Expected '}'") && !m.contains("RBrace")), "{:?}", messages);
+    }
+}

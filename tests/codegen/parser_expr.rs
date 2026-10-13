@@ -130,19 +130,18 @@ fn test_dynamic_receiver_variable_method_name_still_works() {
     assert_eq!(out, "hi\n");
 }
 
-/// Verifies a by-reference parameter reached through `$receiver::method()` is refused at compile
-/// time instead of silently passing a copy.
+/// Verifies a by-reference argument reached through `$receiver::method()` throws a catchable
+/// Error in that arm instead of silently passing a copy.
 #[test]
-fn test_dynamic_receiver_static_call_by_ref_is_refused() {
-    let error = compile_cli_file_with_flags_expect_failure(
+fn test_dynamic_receiver_static_call_by_ref_argument_throws() {
+    let out = compile_and_run(
         r#"<?php
         class A { public static function bump(&$n) { $n++; } }
         $b = new A; $n = 1;
-        $b::bump($n); echo $n;
+        try { $b::bump($n); echo $n; } catch (\Error $e) { echo 'E:', $n; }
         "#,
-        &[],
     );
-    assert!(error.contains("takes a by-reference parameter"), "{error}");
+    assert_eq!(out, "E:1");
 }
 
 /// Verifies `--strict-php` accepts `$obj::method()` although it desugars to an internal call.
@@ -375,4 +374,75 @@ fn test_dynamic_static_call_overridden_instance_method_is_refused() {
         &[],
     );
     assert!(error.contains("because a subclass overrides it"), "{error}");
+}
+
+/// Verifies a variadic parameter never counts as required in `$x::m(...)` arity checks.
+#[test]
+fn test_dynamic_static_call_variadic_is_not_required() {
+    let out = compile_and_run(
+        r#"<?php
+        class D { public static function f($a, $b, $c = "z") { return "D$a$b$c"; } }
+        class E { public static function f($a, ...$r) { return "E$a" . count($r); } }
+        class F { public static function f($a, $b = "y", ...$r) { return "F$a$b" . count($r); } }
+        class G { public static function f(...$r) { return "G" . count($r); } }
+        foreach (['E', 'F', 'G'] as $c) { echo $c::f(1), $c::f(1, 2, 3), "|"; }
+        echo "\n";
+        "#,
+    );
+    assert_eq!(out, "E10E12|F1y0F121|G1G3|\n");
+}
+
+/// Verifies a by-reference candidate only affects its own arm: other receivers at the same site
+/// compile and run, the by-ref class works when the site does not pass the by-ref argument, and
+/// passing it throws a catchable Error in that arm only (Nette's `Image::fromString(.., &$type)`).
+#[test]
+fn test_dynamic_static_call_by_ref_candidate_is_arm_local() {
+    let out = compile_and_run(
+        r#"<?php
+        class Img { public static function fromString($s, &$type = null) { $type = 't'; return "img:$s"; } }
+        class Uid { public static function fromString($v) { return "uid:$v"; } }
+        function make(string $c, $v) { return $c::fromString($v); }
+        function make2(string $c, $v) { try { $t = null; return $c::fromString($v, $t); } catch (\Error $e) { return 'E'; } }
+        echo make('Uid', 'a'), '|', make('Img', 'b'), '|', make2('Img', 'c'), "\n";
+        "#,
+    );
+    assert_eq!(out, "uid:a|img:b|E\n");
+}
+
+/// Verifies Carbon's `$instance::setLastErrors()` shape: a private static inherited from a
+/// trait-using parent, whose `static::$prop` is not redeclared, runs on the shared storage; a
+/// private static that needs `static::class` throws in its arm instead of answering wrongly.
+#[test]
+fn test_dynamic_static_call_inherited_private_late_static() {
+    let out = compile_and_run(
+        r#"<?php
+        trait Creator {
+          protected static $lastErrors = '';
+          public static function createFromFormat($v) { $instance = new static(); $instance::setLastErrors($v); return $instance; }
+          private static function setLastErrors($e): void { static::$lastErrors = $e; }
+          public static function getLastErrors() { return static::$lastErrors; }
+        }
+        class Carbon { use Creator; }
+        class SupportCarbon extends Carbon {}
+        echo get_class(SupportCarbon::createFromFormat('x')), SupportCarbon::getLastErrors(), Carbon::getLastErrors(), "\n";
+        class P { protected static $log = ''; public static function make($v) { $o = new static(); $o::rec($v); return $o; }
+          private static function rec($v): void { static::$log .= static::class . $v; } }
+        class K extends P {}
+        try { K::make('a'); echo "no error\n"; } catch (\Error $e) { echo "E\n"; }
+        "#,
+    );
+    assert_eq!(out, "SupportCarbonxx\nE\n");
+}
+
+/// Verifies `unset($class::$prop[...])` is refused at compile time.
+#[test]
+fn test_dynamic_static_property_unset_is_refused() {
+    let error = compile_cli_file_with_flags_expect_failure(
+        r#"<?php
+        class C { public static $p = ['n' => 1]; }
+        $c = 'C'; unset($c::$p['n']);
+        "#,
+        &[],
+    );
+    assert!(error.contains("Unsetting through a dynamic class"), "{error}");
 }
