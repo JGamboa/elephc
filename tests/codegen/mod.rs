@@ -81,6 +81,7 @@ mod json;
 mod serialize;
 mod regressions;
 mod objects;
+mod native_classes;
 mod destructors;
 mod reference_property_payload;
 mod references;

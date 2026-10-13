@@ -13,6 +13,7 @@ mod builtin_enums;
 mod builtin_interfaces;
 mod builtin_iterators;
 mod builtin_json;
+pub(crate) mod builtin_native_interfaces;
 mod builtin_spl_classes;
 mod builtin_class_gate;
 mod builtin_spl_exceptions;

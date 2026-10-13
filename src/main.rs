@@ -46,6 +46,7 @@ mod native_deps;
 mod names;
 mod numeric_string;
 mod object_cast_prelude;
+mod natives_prelude;
 mod opcache;
 mod opcache_prelude;
 mod shared_ini_prelude;

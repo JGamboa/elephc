@@ -497,10 +497,7 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let interfaces: Vec<String> = implements
-        .iter()
-        .map(|interface| interface.as_str().to_string())
-        .collect();
+    let interfaces = enum_interface_closure(implements, backing_type.is_some(), checker);
 
     checker.classes.insert(
         name.to_string(),
@@ -625,4 +622,44 @@ fn push_enum_readonly_property(
     property_declared_slots.push(true);
     readonly_properties.insert(property);
     property_reference_slots.push(false);
+}
+
+/// Returns the full interface list an enum's `ClassInfo` records.
+///
+/// PHP makes every enum implement `UnitEnum`, and every backed enum `BackedEnum` as well, without
+/// the declaration spelling either. Interfaces are recorded TRANSITIVELY, like a class's
+/// (`schema::classes::interfaces::collect_interfaces`): `enum E implements B` where
+/// `interface B extends A` must satisfy an `A` parameter, which the checker's
+/// `class_implements_interface` answers from this list alone.
+///
+/// `UnitEnum`/`BackedEnum` are appended whenever `builtin_native_interfaces` registered them
+/// (always, in a normal check); the builtin enums (`SortDirection`, ...) get them too, as in PHP.
+fn enum_interface_closure(
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    checker: &Checker,
+) -> Vec<String> {
+    use crate::types::checker::builtin_native_interfaces::{BACKED_ENUM, UNIT_ENUM};
+    let mut roots: Vec<String> = implements
+        .iter()
+        .map(|interface| interface.as_str().to_string())
+        .collect();
+    for implicit in [Some(UNIT_ENUM), is_backed.then_some(BACKED_ENUM)].into_iter().flatten() {
+        if checker.interfaces.contains_key(implicit) {
+            roots.push(implicit.to_string());
+        }
+    }
+    let mut interfaces = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue: std::collections::VecDeque<String> = roots.into_iter().collect();
+    while let Some(name) = queue.pop_front() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some(info) = checker.interfaces.get(&name) {
+            queue.extend(info.parents.iter().cloned());
+        }
+        interfaces.push(name);
+    }
+    interfaces
 }
