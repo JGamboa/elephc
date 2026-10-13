@@ -204,7 +204,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 {
                     let candidate = candidate.trim_start_matches('\\');
                     let date_alias = crate::name_resolver::is_global_date_procedural_alias(candidate);
-                    if crate::builtins::registry::lookup(candidate).is_some() || date_alias {
+                    if crate::builtins::registry::lookup(candidate).is_some()
+                        || date_alias
+                        || crate::stdlib_prelude::provides(candidate)
+                    {
                         let user_function = active_fold_user_function_exists(candidate);
                         let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
                             candidate,
