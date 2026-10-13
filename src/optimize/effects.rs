@@ -383,10 +383,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 combine_effects(patterns.iter().map(expr_effect)).combine(expr_effect(value))
             })))
             .combine(
+                // Without `default`, an unmatched subject throws `UnhandledMatchError`.
                 default
                     .as_ref()
                     .map(|expr| expr_effect(expr))
-                    .unwrap_or(Effect::PURE),
+                    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw()),
             ),
         ExprKind::ArrayAccess { array, index } => {
             let evaluated = expr_effect(array).combine(expr_effect(index));
