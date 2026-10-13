@@ -225,3 +225,77 @@ via(new Node()); via(new Twig()); via(new Leaf());
     );
     assert_eq!(out, "string(1) \"s\"\nstring(1) \"T\"\nstring(1) \"q\"\n");
 }
+
+/// Review ronda 4 (x01): parent `self::X` and override `Other::X` resolve to the same value.
+#[test]
+fn test_override_default_named_constant_matches_parent_self_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class Other { const X = 1; }
+class P { const X = 1; public function f(int $v = self::X) { return "p" . $v; } }
+class C extends P { public function f(int $v = Other::X) { return "c" . $v; } }
+function via(P $p) { echo $p->f(), "\n"; }
+via(new P()); via(new C()); echo (new C)->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "p1\nc1\nc1\n");
+}
+
+/// Review ronda 4 (x09): parent `parent::X` and override `self::X` both name the grandparent constant.
+#[test]
+fn test_override_default_parent_constant_from_grandparent() {
+    let out = compile_and_run(
+        r#"<?php
+class G { const X = 'g'; }
+class P extends G { public function f(string $v = parent::X) { return "p" . $v; } }
+class C extends P { public function f(string $v = self::X) { return "c" . $v; } }
+function via(P $p) { echo $p->f(), "\n"; }
+via(new P()); via(new C()); echo (new C)->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "pg\ncg\ncg\n");
+}
+
+/// Review ronda 4 (x14): `self::X` defined as `self::A * 3` resolves and folds on both sides.
+#[test]
+fn test_override_default_constant_expression_folds() {
+    let out = compile_and_run(
+        r#"<?php
+class P { const A = 2; const X = self::A * 3; public function f(int $v = self::X) { return "p" . $v; } }
+class C extends P { public function f(int $v = self::X) { return "c" . $v; } }
+function via(P $p) { echo $p->f(), "\n"; }
+via(new P()); via(new C()); echo (new C)->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "p6\nc6\nc6\n");
+}
+
+/// Review ronda 4 (x15): `X = self::A` is written in the parent, so a child redefining `A` keeps the same default.
+#[test]
+fn test_override_default_constant_chain_with_redefined_operand() {
+    let out = compile_and_run(
+        r#"<?php
+class P { const A = 2; const X = self::A; public function f(int $v = self::X) { return "p" . $v; } }
+class C extends P { const A = 5; public function f(int $v = self::X) { return "c" . $v; } }
+function via(P $p) { echo $p->f(), "\n"; }
+via(new P()); via(new C()); echo (new C)->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "p2\nc2\nc2\n");
+}
+
+/// Review ronda 4 (x26): the Laravel kernel shape one level down (`MyApp extends App implements HK`, `handle($type = self::MAIN)`).
+#[test]
+fn test_grandchild_override_default_interface_constant() {
+    let out = compile_and_run(
+        r#"<?php
+interface HK { const MAIN = 1; public function handle(int $type = self::MAIN, bool $c = true); }
+class App implements HK { public function handle(int $type = self::MAIN, bool $c = true) { return "a$type"; } }
+class MyApp extends App { public function handle(int $type = self::MAIN, bool $c = true) { return "m$type"; } }
+function via(HK $h) { echo $h->handle(), "\n"; }
+function viaA(App $h) { echo $h->handle(), "\n"; }
+via(new App()); via(new MyApp()); viaA(new MyApp()); echo (new MyApp)->handle(), "\n";
+"#,
+    );
+    assert_eq!(out, "a1\nm1\nm1\nm1\n");
+}

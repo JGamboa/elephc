@@ -289,8 +289,8 @@ fn test_error_override_redefined_self_constant_default() {
     );
 }
 
-/// Formerly `test_late_static_union_override_can_narrow_to_static` (codegen): the direct call
-/// worked, but `$m->duplicate()` through `MaybeCloneable` read the object word as a boxed value
+/// Companion of the upstream `test_late_static_union_override_can_narrow_to_static` (codegen,
+/// now `#[ignore]` until P10): the direct call worked, but `$m->duplicate()` through `MaybeCloneable` read the object word as a boxed value
 /// (TypeError in `get_class()` on laravel/main), so the narrowing is refused until P10.
 #[test]
 fn test_error_override_late_static_union_narrowed_to_static() {

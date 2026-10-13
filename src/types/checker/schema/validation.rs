@@ -1071,7 +1071,7 @@ fn inherited_default_unchanged(
     child_default: &Expr,
     same_relative_default: &dyn Fn(&Expr, &Expr) -> bool,
 ) -> bool {
-    if default_is_class_relative(parent_default) || default_is_class_relative(child_default) {
+    if default_fetches_class_constant(parent_default) || default_fetches_class_constant(child_default) {
         same_relative_default(parent_default, child_default)
     } else {
         parent_default == child_default
@@ -1106,43 +1106,62 @@ pub(crate) fn relative_defaults_name_same_value(
     }
 }
 
-/// Replaces each `self::X`/`parent::X` in a default by the constant's value as seen from `scope`.
+/// Replaces each class constant fetch in a default (`self::X`, `parent::X`, `Other::X`) by the
+/// constant's value, resolved in the scope that declares it, and folds simple integer/float
+/// arithmetic and string concatenation over literals. Returns `None` for anything it cannot
+/// resolve with certainty (`static::`, unknown constants, unsupported expression kinds that
+/// still mention a class-relative receiver), which the caller treats as a changed default.
 fn canonical_default(
     checker: &Checker,
     expr: &Expr,
     scope: &DefaultScope<'_>,
     depth: usize,
 ) -> Option<Expr> {
-    if depth > 8 {
+    if depth > 16 {
         return None;
     }
     let kind = match &expr.kind {
         ExprKind::ScopedConstantAccess { receiver, name } => {
-            let value = match receiver {
-                StaticReceiver::Self_ => scoped_constant_value(checker, scope, name)?,
-                StaticReceiver::Parent => {
-                    let parent = match scope {
-                        DefaultScope::Flattened(class) => class.extends.clone()?,
-                        DefaultScope::Registered(owner) => {
-                            checker.classes.get(*owner)?.parent.clone()?
+            let lookup_scope = match receiver {
+                StaticReceiver::Self_ => scope_clone(scope),
+                StaticReceiver::Parent => DefaultScope::Registered(scope_parent(checker, scope)?),
+                StaticReceiver::Named(class) => {
+                    let class = class.as_str().trim_start_matches('\\');
+                    match scope {
+                        DefaultScope::Flattened(flat) if flat.name == class => scope_clone(scope),
+                        _ if checker.classes.contains_key(class)
+                            || checker.interfaces.contains_key(class) =>
+                        {
+                            DefaultScope::Registered(registered_name(checker, class)?)
                         }
-                    };
-                    scoped_constant_value(checker, &DefaultScope::Registered(&parent), name)?
+                        // Not a class or interface constant the checker knows (an enum case, a
+                        // builtin): keep it as written; it compares structurally.
+                        _ => return Some(expr.clone()),
+                    }
                 }
                 _ => return None,
             };
-            // A constant's own value may refer to its declaring class again; such values were
-            // already resolved lexically when the declaring class was registered.
-            return canonical_default(checker, &value, scope, depth + 1);
+            let (value, declaring) = scoped_constant_value(checker, &lookup_scope, name, 0)?;
+            return canonical_default(checker, &value, &declaring, depth + 1);
         }
-        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
-            left: Box::new(canonical_default(checker, left, scope, depth)?),
-            op: op.clone(),
-            right: Box::new(canonical_default(checker, right, scope, depth)?),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = canonical_default(checker, left, scope, depth)?;
+            let right = canonical_default(checker, right, scope, depth)?;
+            if let Some(folded) = fold_literal_binary(&left.kind, op, &right.kind) {
+                folded
+            } else {
+                ExprKind::BinaryOp {
+                    left: Box::new(left),
+                    op: op.clone(),
+                    right: Box::new(right),
+                }
+            }
+        }
+        ExprKind::Negate(inner) => match canonical_default(checker, inner, scope, depth)?.kind {
+            ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value.checked_neg()?),
+            ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(-value),
+            other => ExprKind::Negate(Box::new(Expr::new(other, inner.span))),
         },
-        ExprKind::Negate(inner) => {
-            ExprKind::Negate(Box::new(canonical_default(checker, inner, scope, depth)?))
-        }
         ExprKind::Not(inner) => {
             ExprKind::Not(Box::new(canonical_default(checker, inner, scope, depth)?))
         }
@@ -1152,41 +1171,131 @@ fn canonical_default(
                 .map(|item| canonical_default(checker, item, scope, depth))
                 .collect::<Option<Vec<_>>>()?,
         ),
-        _ if default_is_class_relative(expr) => return None,
+        _ if default_is_class_relative(expr) || default_fetches_class_constant(expr) => {
+            return None
+        }
         other => other.clone(),
     };
     Some(Expr::new(kind, expr.span))
 }
 
-/// Looks up constant `name` as `self::name` sees it from `scope`: own constants first, then the
-/// parent chain and implemented interfaces (registered metadata already includes inherited ones).
-fn scoped_constant_value(checker: &Checker, scope: &DefaultScope<'_>, name: &str) -> Option<Expr> {
+/// Folds `int|float (+ - *) int|float` and `string . string` over literals, as PHP evaluates
+/// them in a constant expression. Anything else (division, overflow, mixed kinds) stays unfolded.
+fn fold_literal_binary(
+    left: &ExprKind,
+    op: &crate::parser::ast::BinOp,
+    right: &ExprKind,
+) -> Option<ExprKind> {
+    use crate::parser::ast::BinOp;
+    match (left, op, right) {
+        (ExprKind::IntLiteral(a), BinOp::Add, ExprKind::IntLiteral(b)) => {
+            a.checked_add(*b).map(ExprKind::IntLiteral)
+        }
+        (ExprKind::IntLiteral(a), BinOp::Sub, ExprKind::IntLiteral(b)) => {
+            a.checked_sub(*b).map(ExprKind::IntLiteral)
+        }
+        (ExprKind::IntLiteral(a), BinOp::Mul, ExprKind::IntLiteral(b)) => {
+            a.checked_mul(*b).map(ExprKind::IntLiteral)
+        }
+        (ExprKind::StringLiteral(a), BinOp::Concat, ExprKind::StringLiteral(b)) => {
+            Some(ExprKind::StringLiteral(format!("{}{}", a, b)))
+        }
+        _ => None,
+    }
+}
+
+fn scope_clone<'a>(scope: &DefaultScope<'a>) -> DefaultScope<'a> {
+    match scope {
+        DefaultScope::Flattened(class) => DefaultScope::Flattened(class),
+        DefaultScope::Registered(owner) => DefaultScope::Registered(owner),
+    }
+}
+
+/// Returns the checker's own spelling of a registered class or interface name.
+fn registered_name<'c>(checker: &'c Checker, name: &str) -> Option<&'c str> {
+    checker
+        .classes
+        .get_key_value(name)
+        .map(|(key, _)| key.as_str())
+        .or_else(|| checker.interfaces.get_key_value(name).map(|(key, _)| key.as_str()))
+}
+
+/// The registered parent class of `scope`, for `parent::`.
+fn scope_parent<'c>(checker: &'c Checker, scope: &DefaultScope<'_>) -> Option<&'c str> {
+    let parent = match scope {
+        DefaultScope::Flattened(class) => class.extends.as_deref()?,
+        DefaultScope::Registered(owner) => checker.classes.get(*owner)?.parent.as_deref()?,
+    };
+    registered_name(checker, parent)
+}
+
+/// Looks up constant `name` as `self::name` sees it from `scope`, returning its value together
+/// with the scope that declares it (a constant's value is written in its declaring class).
+/// Searches the class's own constants, then its parent chain, then its interfaces.
+fn scoped_constant_value<'a>(
+    checker: &'a Checker,
+    scope: &DefaultScope<'a>,
+    name: &str,
+    depth: usize,
+) -> Option<(Expr, DefaultScope<'a>)> {
+    if depth > 32 {
+        return None;
+    }
     match scope {
         DefaultScope::Flattened(class) => {
             if let Some(constant) = class.constants.iter().find(|constant| constant.name == name) {
-                return Some(constant.value.clone());
+                return Some((constant.value.clone(), scope_clone(scope)));
             }
             class
                 .extends
                 .as_deref()
-                .and_then(|parent| scoped_constant_value(checker, &DefaultScope::Registered(parent), name))
+                .and_then(|parent| registered_name(checker, parent))
+                .and_then(|parent| {
+                    scoped_constant_value(checker, &DefaultScope::Registered(parent), name, depth + 1)
+                })
                 .or_else(|| {
                     class.implements.iter().find_map(|iface| {
-                        scoped_constant_value(checker, &DefaultScope::Registered(iface), name)
+                        let iface = registered_name(checker, iface)?;
+                        scoped_constant_value(checker, &DefaultScope::Registered(iface), name, depth + 1)
                     })
                 })
         }
-        DefaultScope::Registered(owner) => checker
-            .classes
-            .get(*owner)
-            .and_then(|info| info.constants.get(name).cloned())
-            .or_else(|| {
-                checker
-                    .interfaces
-                    .get(*owner)
-                    .and_then(|info| info.constants.get(name).cloned())
-            }),
+        DefaultScope::Registered(owner) => {
+            if let Some(info) = checker.classes.get(*owner) {
+                if let Some(value) = info.constants.get(name) {
+                    return Some((value.clone(), DefaultScope::Registered(owner)));
+                }
+                return info
+                    .parent
+                    .as_deref()
+                    .and_then(|parent| registered_name(checker, parent))
+                    .and_then(|parent| {
+                        scoped_constant_value(checker, &DefaultScope::Registered(parent), name, depth + 1)
+                    })
+                    .or_else(|| {
+                        info.interfaces.iter().find_map(|iface| {
+                            let iface = registered_name(checker, iface)?;
+                            scoped_constant_value(checker, &DefaultScope::Registered(iface), name, depth + 1)
+                        })
+                    });
+            }
+            // Interface metadata already merges inherited constants; the declaring interface is
+            // recorded for each, which is the scope its value is written in.
+            let info = checker.interfaces.get(*owner)?;
+            let value = info.constants.get(name)?.clone();
+            let declaring = info
+                .constant_declaring_interfaces
+                .get(name)
+                .and_then(|declaring| registered_name(checker, declaring))
+                .unwrap_or(owner);
+            Some((value, DefaultScope::Registered(declaring)))
+        }
     }
+}
+
+/// Returns whether a default reads any class constant (`X::NAME`, including relative ones).
+fn default_fetches_class_constant(default: &Expr) -> bool {
+    format!("{:?}", default.kind).contains("ScopedConstantAccess")
 }
 
 /// Returns whether a default names its declaring class relatively (`self::X`, `static::X`,
