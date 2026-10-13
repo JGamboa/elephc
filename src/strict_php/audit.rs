@@ -66,6 +66,20 @@ fn reject_reserved_name(errors: &mut Vec<CompileError>, span: Span, name: &Name)
     }
 }
 
+/// Returns true for the call the parser itself synthesizes for PHP's `$class::NAME` /
+/// `$class::$prop` (`crate::parser::expr::pratt::parse_dynamic_class_member_read`).
+///
+/// The source was plain PHP, so the reserved-name rule must not fire on it. A hand-written call
+/// of the identical two-argument shape is indistinguishable after parsing and is accepted too;
+/// it has exactly the semantics of the PHP construct it spells.
+fn is_dynamic_class_member_desugar(name: &Name, args: &[Expr]) -> bool {
+    let bare = name.parts.last().map(String::as_str).unwrap_or_default();
+    matches!(
+        bare,
+        "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property"
+    ) && matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }])
+}
+
 /// Audits a statement list in order.
 fn audit_stmts(stmts: &[Stmt], errors: &mut Vec<CompileError>) {
     for stmt in stmts {
@@ -585,7 +599,9 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_stmts(prelude, errors);
         }
         ExprKind::FunctionCall { name, args } => {
-            reject_reserved_name(errors, span, name);
+            if !is_dynamic_class_member_desugar(name, args) {
+                reject_reserved_name(errors, span, name);
+            }
             audit_exprs(args, errors);
         }
         ExprKind::ArrayLiteral(items) => audit_exprs(items, errors),

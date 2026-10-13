@@ -349,3 +349,12 @@ fn test_method_global_declaration_uses_final_top_level_environment() {
         "explicit global declarations must resolve final top-level bindings",
     );
 }
+
+/// Verifies dynamic static-property writes are rejected with a targeted message.
+#[test]
+fn test_error_dynamic_static_property_write_is_rejected() {
+    expect_error(
+        "<?php class C { public static $n = 0; } $c = 'C'; $c::$n = 5;",
+        "Writing a static property through a dynamic class",
+    );
+}
