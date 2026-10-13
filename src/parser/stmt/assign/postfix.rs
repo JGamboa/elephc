@@ -59,10 +59,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     } else {
         lhs
     };
-    let lhs_expr = parse_expr(lhs_expr_tokens, &mut lhs_pos)?;
-    if lhs_pos != lhs_expr_tokens.len() {
-        return Err(CompileError::new(span, "Invalid assignment target"));
-    }
+    let Some(lhs_expr) = parse_statement_assignment_lhs(lhs_expr_tokens, &mut lhs_pos) else {
+        // `cond ?: $o->p = v;`, `$a || $b[k] = v;`, `!$o->p = f();`: the first top-level
+        // assignment operator belongs to the RIGHT operand of an operator, so the tokens before
+        // it are not a place. PHP parses these as `cond ?: ($o->p = v)`; the expression parser
+        // already binds an assignment to the variable that precedes it, so defer to it.
+        return Ok(None);
+    };
     if crate::parser::expr::is_dynamic_class_member_read(&lhs_expr) {
         // `$class::$prop[] = v` / `$class::$prop[k] = v`: the read desugar is a value, so the
         // write would land in a temporary.
@@ -72,9 +75,14 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         ));
     }
 
+    crate::parser::expr::reject_nullsafe_write(&lhs_expr, span)?;
+
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if !is_append && crate::parser::expr::is_call_dimension_place(&lhs_expr) {
+        return call_dimension_assignment_stmt(lhs_expr, op, rhs, span).map(Some);
+    }
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
     }
@@ -204,7 +212,7 @@ fn compound_rhs_can_disturb_index(target: &Expr, rhs: &Expr) -> bool {
 /// synthetic read/append/write-back sequence. The temporary append triggers the
 /// existing copy-on-write split, and the final assignment stores the detached
 /// nested array back into the original slot.
-fn lower_nested_append_assignment(
+pub(crate) fn lower_nested_append_assignment(
     target: Expr,
     value: Expr,
     span: Span,
@@ -403,10 +411,11 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     } else {
         lhs
     };
-    let lhs_expr = parse_expr(lhs_expr_tokens, &mut lhs_pos)?;
-    if lhs_pos != lhs_expr_tokens.len() {
-        return Err(CompileError::new(span, "Invalid assignment target"));
-    }
+    let Some(lhs_expr) = parse_statement_assignment_lhs(lhs_expr_tokens, &mut lhs_pos) else {
+        // `A::f() || self::$x = v;`: the assignment is the right operand of an operator, which
+        // the expression parser handles (see `try_parse_postfix_assignment`).
+        return Ok(None);
+    };
 
     *pos = assign_pos + 1;
     // `self::$x = require 'f.php';`: PHP's include is an expression, but elephc can only
@@ -419,6 +428,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if !is_append && crate::parser::expr::is_call_dimension_place(&lhs_expr) {
+        return call_dimension_assignment_stmt(lhs_expr, op, rhs, span).map(Some);
+    }
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
@@ -481,6 +493,56 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     };
 
     Ok(Some(hoisted.finish_if_used(stmt, span)))
+}
+
+/// Lowers the statement `call()[k] = v;`, PHP's write on a temporary (see
+/// `call_dimension_assignment_expr`). A compound or `??=` update is rejected.
+fn call_dimension_assignment_stmt(
+    target: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if op != AssignmentOperator::Assign {
+        return Err(CompileError::new(
+            span,
+            "Compound assignment to a dimension of a call result (`f()[k] += v`) is not supported; assign the result to a variable first",
+        ));
+    }
+    let write = crate::parser::expr::call_dimension_assignment_expr(target, rhs, span)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(write), span))
+}
+
+/// Parses the tokens before a statement's first top-level assignment operator as its target.
+///
+/// Returns `None` when they are not a place (or a call, whose dimension write PHP evaluates on
+/// a temporary): an operator expression such as `cond ?: $o->p` or `!$o->p`, or tokens that do
+/// not parse as one expression at all (`c ? $x`, the head of `c ? $x = 1 : $y = 2`). In PHP the
+/// assignment then belongs to the operator's right operand, so the statement is an expression
+/// statement and the caller hands it to the expression parser, which reports its own errors.
+fn parse_statement_assignment_lhs(tokens: &[SpannedToken], pos: &mut usize) -> Option<Expr> {
+    let expr = parse_expr(tokens, pos).ok()?;
+    if *pos != tokens.len() {
+        return None;
+    }
+    matches!(
+        expr.kind,
+        ExprKind::Variable(_)
+            | ExprKind::This
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::NullsafePropertyAccess { .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { .. }
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::NullsafeMethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
+    .then_some(expr)
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)

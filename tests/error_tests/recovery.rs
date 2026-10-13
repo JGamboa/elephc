@@ -435,12 +435,13 @@ fn test_error_first_class_callable_on_variable_is_rejected_clearly() {
     );
 }
 
-/// Verifies an expression-position append to a variable is rejected with a targeted message.
+/// Verifies an expression-position append through a dynamic property name is rejected with a
+/// targeted message (an append to a variable or property is now supported).
 #[test]
-fn test_error_expression_append_to_variable_is_rejected_clearly() {
+fn test_error_expression_append_to_dynamic_property_is_rejected_clearly() {
     expect_error(
-        "<?php $a = []; $x = ($a[] = 5);",
-        "only supported on a call result",
+        "<?php $o = new stdClass; $p = 'q'; $x = ($o->$p[] = 5);",
+        "only supported on a variable, property, static property or call result",
     );
 }
 
