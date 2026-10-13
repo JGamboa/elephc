@@ -17,13 +17,17 @@
 //!   returned as `FamilyBodyContract`s, and the body re-applies PHP's coercion on entry and
 //!   before boxing its result (`crate::ir_lower::function::lower_class_method`).
 //! - A family whose members disagree in a shape no boxing can bridge (arity, by-reference or
-//!   variadic positions, a by-reference or generator return) is refused with a diagnostic.
+//!   variadic positions, a by-reference or generator return) is refused with a diagnostic, and so
+//!   is a body whose declared union parameter would need PHP's union coercion of a boxed argument.
+//! - A boxed return keeps each member's own precise type (`static` stays the member's class), and
+//!   a member that implements an interface declaring the method with a raw return is refused: an
+//!   interface call reads the result with the interface's layout and nothing unboxes it.
 
 use std::collections::HashMap;
 
 use crate::span::Span;
 use crate::types::override_families::{self, FamilyMember};
-use crate::types::{ClassInfo, FunctionSig, PhpType};
+use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 pub(crate) use crate::ir::FamilyBodyContract;
 
@@ -36,25 +40,84 @@ pub(crate) type FamilyBodyContracts = HashMap<FamilyBodyKey, FamilyBodyContract>
 /// Unifies parameter and return ABIs across every instance and static override family.
 pub(super) fn unify_override_family_abis(
     classes: &mut HashMap<String, ClassInfo>,
+    interfaces: &HashMap<String, InterfaceInfo>,
 ) -> FamilyBodyContracts {
     let mut contracts = FamilyBodyContracts::new();
     for group in override_families::groups(classes) {
         let members = group.members(classes);
-        unify_family(classes, &group.method_key, &members, group.is_static, &mut contracts);
+        if unify_family(classes, &group.method_key, &members, group.is_static, &mut contracts) {
+            refuse_raw_interface_returns(classes, interfaces, &group.method_key, &members, group.is_static);
+        }
     }
     contracts
 }
 
+/// Refuses a member whose return the family boxed while an interface it implements declares the
+/// method with a raw (unboxed) return: a call through that interface reads the result with the
+/// interface's layout, and the interface wrappers only box, never unbox.
+fn refuse_raw_interface_returns(
+    classes: &HashMap<String, ClassInfo>,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    method_key: &str,
+    members: &[FamilyMember],
+    is_static: bool,
+) {
+    for member in members {
+        if member.sig.return_type.codegen_repr() == PhpType::Mixed {
+            continue;
+        }
+        let Some(info) = classes.get(&member.class_name) else {
+            continue;
+        };
+        let Some(boxed) = override_families::methods(info, is_static).get(method_key) else {
+            continue;
+        };
+        if boxed.return_type.codegen_repr() != PhpType::Mixed {
+            continue;
+        }
+        for interface_name in &info.interfaces {
+            let Some(interface_sig) = interfaces.get(interface_name).and_then(|interface| {
+                if is_static {
+                    interface.static_methods.get(method_key)
+                } else {
+                    interface.methods.get(method_key)
+                }
+            }) else {
+                continue;
+            };
+            let interface_repr = interface_sig.return_type.codegen_repr();
+            if interface_repr == PhpType::Mixed || interface_repr == PhpType::Void {
+                continue;
+            }
+            refuse(
+                std::slice::from_ref(member),
+                method_key,
+                &format!(
+                    "class {} implements interface {} whose {}() returns {}, but its override family returns the boxed {} (not yet supported until P10)",
+                    member.class_name,
+                    interface_name,
+                    method_key,
+                    interface_sig.return_type,
+                    boxed.return_type
+                ),
+            );
+            return;
+        }
+    }
+}
+
 /// Rewrites one family so every member shares each parameter and the return representation.
+///
+/// Returns whether the family was unified (it was not refused).
 fn unify_family(
     classes: &mut HashMap<String, ClassInfo>,
     method_key: &str,
     members: &[FamilyMember],
     is_static: bool,
     contracts: &mut FamilyBodyContracts,
-) {
+) -> bool {
     let Some(first) = members.first().map(|member| &member.sig) else {
-        return;
+        return false;
     };
     let return_type = override_families::agreed_return(members);
     // A member body boxes its own result only when the shared return became Mixed under it;
@@ -78,15 +141,15 @@ fn unify_family(
     if shape_differs {
         // Nothing to bridge when every shared position already travels the same way.
         if differing.is_empty() && !return_widened {
-            return;
+            return false;
         }
         refuse(members, method_key, "different parameter shapes (arity, by-reference or variadic)");
-        return;
+        return false;
     }
     let fixed = fixed_positions(first);
     if differing.iter().any(|index| !fixed.contains(index)) {
         refuse(members, method_key, "a by-reference or variadic parameter in different representations");
-        return;
+        return false;
     }
     if return_widened
         && members.iter().any(|member| {
@@ -96,7 +159,7 @@ fn unify_family(
         })
     {
         refuse(members, method_key, "a by-reference or generator return in a different representation");
-        return;
+        return false;
     }
     if let Some(member) = members.iter().find(|member| {
         member.body_span.is_some()
@@ -110,7 +173,21 @@ fn unify_family(
             method_key,
             "a declared nullable int parameter that would need boxing",
         );
-        return;
+        return false;
+    }
+    if let Some(member) = members.iter().find(|member| {
+        member.body_span.is_some()
+            && differing.iter().any(|&index| {
+                member.sig.declared_params.get(index).copied().unwrap_or(false)
+                    && override_families::union_needs_scalar_coercion(&member.sig.params[index].1)
+            })
+    }) {
+        refuse(
+            std::slice::from_ref(member),
+            method_key,
+            "a declared union parameter with scalar members that would need PHP's union coercion of a boxed argument",
+        );
+        return false;
     }
     for member in members {
         if member.impl_class.as_deref() == Some(member.class_name.as_str()) {
@@ -134,11 +211,14 @@ fn unify_family(
         // A placeholder takes the agreed type; a body keeps its own unless the shared return
         // became Mixed under it (objects of different classes already share one pointer ABI).
         if let Some(return_type) = &return_type {
-            if member.placeholder || return_widened {
+            if member.placeholder {
                 sig.return_type = return_type.clone();
+            } else if return_widened {
+                sig.return_type = override_families::boxed_member_return(return_type, &member.sig.return_type);
             }
         }
     }
+    true
 }
 
 /// Returns the declared scalar parameters and return a boxed body must coerce itself.

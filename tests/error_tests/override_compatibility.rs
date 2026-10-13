@@ -243,3 +243,58 @@ fn test_error_family_override_parameter_still_contravariant() {
         r#"Cannot narrow parameter $a when overriding method: C::f (expects string, parent accepts int)"#,
     );
 }
+
+/// Review r45 H1 (b06): the family boxes `string` -> `string|array`, but only re-applies PHP's
+/// coercion for plain scalars; the union override would see `12345` as an int.
+#[test]
+fn test_error_family_param_widened_string_to_union() {
+    expect_error(
+        r#"<?php class P { public function f(string $x) { var_dump($x); } } class D extends P { public function f(string|array $x) { var_dump($x); } }"#,
+        r#"Cannot widen parameter representation when overriding method: D::f parameter $x (the parent passes string, the override expects the union string|array"#,
+    );
+}
+
+/// Review r45 H1 (b07): `bool` -> `bool|int` (PHP coerces `"a"` to `true`).
+#[test]
+fn test_error_family_param_widened_bool_to_union() {
+    expect_error(
+        r#"<?php class P { public function f(bool $x) { var_dump($x); } } class D extends P { public function f(bool|int $x) { var_dump($x); } }"#,
+        r#"Cannot widen parameter representation when overriding method: D::f parameter $x"#,
+    );
+}
+
+/// Review r45 H1 (b10): `int` -> `int|float` (PHP coerces `"3"` to `3`).
+#[test]
+fn test_error_family_param_widened_int_to_int_float() {
+    expect_error(
+        r#"<?php class A { public function f(int $x, string $y) { return 1; } } class B extends A { public function f(int|float $x, $y) { return 2; } }"#,
+        r#"Cannot widen parameter representation when overriding method: B::f parameter $x"#,
+    );
+}
+
+/// Review r45 H1 (b13): `float` -> `float|string` (PHP coerces `5` to `5.0`).
+#[test]
+fn test_error_family_param_widened_float_to_union() {
+    expect_error(
+        r#"<?php class P { public function f(float $x) { var_dump($x); } } class D extends P { public function f(float|string $x) { var_dump($x); } }"#,
+        r#"Cannot widen parameter representation when overriding method: D::f parameter $x"#,
+    );
+}
+
+/// Ronda 6: `int` -> `int|string` read a float argument uncoerced (PHP turns `2.0` into `2`).
+#[test]
+fn test_error_family_param_widened_int_to_int_string() {
+    expect_error(
+        r#"<?php class Base { public function f(int $x): string { return "B$x"; } } class Child extends Base { public function f(int|string $x): string { return "C$x"; } }"#,
+        r#"Cannot widen parameter representation when overriding method: Child::f parameter $x"#,
+    );
+}
+
+/// Ronda 6: a nullable scalar is a union too (`?string` keeps an int argument uncoerced).
+#[test]
+fn test_error_family_param_widened_string_to_nullable() {
+    expect_error(
+        r#"<?php class P { public function f(string $x) { return $x; } } class D extends P { public function f(?string $x) { return $x; } }"#,
+        r#"Cannot widen parameter representation when overriding method: D::f parameter $x"#,
+    );
+}

@@ -190,6 +190,53 @@ fn union_names(cover: &PhpType, ty: &PhpType) -> bool {
     }
 }
 
+/// Returns the boxed return a member shares with its family, as precise as its own return.
+///
+/// An already boxed return (`?static` resolved to the member's class, `int|string`) travels as it
+/// is. A raw one takes the family's boxed union with its own value in place of the members of the
+/// same representation: `static` under `static|false` stays the member's class (`C|false`), so a
+/// call through the member reads the properties only it declares. A plain `Mixed` agreement stays
+/// `Mixed`.
+pub(crate) fn boxed_member_return(agreed: &PhpType, own: &PhpType) -> PhpType {
+    if own.codegen_repr() == PhpType::Mixed {
+        return own.clone();
+    }
+    let PhpType::Union(cover) = agreed else {
+        return agreed.clone();
+    };
+    let mut refined: Vec<PhpType> = Vec::with_capacity(cover.len());
+    let mut placed = false;
+    for member in cover {
+        if same_abi(member, own) {
+            if !placed {
+                refined.push(own.clone());
+                placed = true;
+            }
+        } else {
+            refined.push(member.clone());
+        }
+    }
+    let refined = PhpType::Union(refined);
+    if placed && refined.codegen_repr() == PhpType::Mixed {
+        refined
+    } else {
+        agreed.clone()
+    }
+}
+
+/// Returns whether a declared parameter type is a union PHP would coerce a scalar argument into
+/// (`?string`, `string|array`, `int|float`): it names a scalar member, so a value outside the
+/// union is converted rather than passed as is.
+pub(crate) fn union_needs_scalar_coercion(ty: &PhpType) -> bool {
+    let PhpType::Union(members) = ty else {
+        return false;
+    };
+    ty.codegen_repr() == PhpType::Mixed
+        && members.iter().any(|member| {
+            matches!(member, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False)
+        })
+}
+
 /// Returns whether two types travel in the same physical representation.
 pub(crate) fn same_abi(left: &PhpType, right: &PhpType) -> bool {
     left.reference_payload_compatible(right) && right.reference_payload_compatible(left)

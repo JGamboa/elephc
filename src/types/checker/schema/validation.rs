@@ -1052,6 +1052,29 @@ fn validate_override_parameter_abi(
                     ),
                 ));
             }
+            // The family body re-applies PHP's coercion only for a plain scalar
+            // (`virtual_abi::body_contract`). A declared union with scalar members would receive
+            // the boxed argument uncoerced (`12345` stays an int under `string|array`), so a
+            // union override is only sound while the parent already passes that representation.
+            let child_ty = &child.param_types[index];
+            if child_declared
+                && crate::types::override_families::union_needs_scalar_coercion(child_ty)
+                && (!parent_declared
+                    || !crate::types::override_families::same_abi(child_ty, &parent.param_types[index]))
+            {
+                let parent_passes = if parent_declared {
+                    parent.param_types[index].to_string()
+                } else {
+                    "an untyped value".to_string()
+                };
+                return Err(widen_error(
+                    index,
+                    format!(
+                        "the parent passes {}, the override expects the union {} and elephc cannot apply PHP's union coercion to the boxed argument",
+                        parent_passes, child_ty
+                    ),
+                ));
+            }
             continue;
         }
         let parent_ty = &parent.param_types[index];
@@ -1377,7 +1400,9 @@ fn override_family_unifies(
             break;
         }
         if visibilities.get(&method_key) == Some(&Visibility::Private) {
-            return false;
+            // A private ancestor is not dispatched: `override_families::groups` roots the family
+            // below it, so the walk stops here as well.
+            break;
         }
         reached_declaration = true;
         if let Some(owner) = impls.get(&method_key) {

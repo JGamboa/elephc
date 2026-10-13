@@ -329,20 +329,6 @@ echo viaBase(new Base()), viaBase(new Child()), (new Child())->f(null), "\n";
     assert_eq!(out, "BfooCfooCnull\n");
 }
 
-/// Ronda 5: `int $x` widened to `int|string $x` is boxed and the child sees the int.
-#[test]
-fn test_family_override_int_param_widened_to_union() {
-    let out = compile_and_run(
-        r#"<?php
-class Base { public function f(int $x): string { return "B$x"; } }
-class Child extends Base { public function f(int|string $x): string { return "C" . gettype($x) . $x; } }
-function via(Base $b): string { return $b->f(7); }
-echo via(new Base()), via(new Child()), (new Child())->f("s"), "\n";
-"#,
-    );
-    assert_eq!(out, "B7Cinteger7Cstrings\n");
-}
-
 /// Ronda 5 (c07): `int|null` and `int|Twig` under `Node|int|null` are boxed into the family return.
 #[test]
 fn test_family_override_union_return_narrowed_to_tagged_scalar() {
@@ -387,4 +373,111 @@ via(new P()); via(new C());
 "#,
     );
     assert_eq!(out, "NULL\nstring(1) \"N\"\n");
+}
+
+/// Ronda 6 (H3, review c13/c16): `static|false` narrowed to `static`; the call through the
+/// subclass resolves `static` to the receiver, so a property only the subclass declares reads.
+#[test]
+fn test_family_static_return_narrowed_reads_subclass_property() {
+    let out = compile_and_run(
+        r#"<?php
+class M { public function f(): static|false { return false; } }
+class C extends M { public $extra = "X"; public function f(): static { return $this; } }
+class D extends C { public $more = "Y"; }
+echo (new C())->f()->extra, "\n";
+$c = new C(); $r = $c->f(); echo $r->extra, "\n";
+$d = new D(); echo $d->f()->more, $d->f()->extra, "\n";
+function via(M $m) { $r = $m->f(); echo $r === false ? "false" : get_class($r), "\n"; }
+via(new M()); via(new C()); via(new D());
+"#,
+    );
+    assert_eq!(out, "X\nX\nYX\nfalse\nC\nD\n");
+}
+
+/// Ronda 6 (H3, review c09): `?static` -> `static|null` -> `static` over three levels keeps each
+/// receiver's own class, so the leaf's own property reads.
+#[test]
+fn test_family_nullable_static_three_levels_reads_leaf_property() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $n = "A"; public function f(): ?static { return null; } }
+class B extends A { public $n = "B"; public $b = "b"; public function f(): static|null { return $this; } }
+class C extends B { public $n = "C"; public $only = "only"; public function f(): static { return $this; } }
+function via(A $a) { $r = $a->f(); echo $r === null ? "null" : get_class($r) . $r->n, "\n"; }
+via(new A()); via(new B()); via(new C());
+echo (new C())->f()->only, (new C())->f()->f()->only, (new B())->f()->b, "\n";
+function viaB(B $b) { $r = $b->f(); return $r?->n; }
+echo viaB(new B()), viaB(new C()), "\n";
+"#,
+    );
+    assert_eq!(out, "null\nBB\nCC\nonlyonlyb\nBC\n");
+}
+
+/// Ronda 6 (H4, review a22): a private ancestor method is not part of the family; P4 roots the
+/// family at the first public declaration, so the untyped override is boxed and dispatches.
+#[test]
+fn test_family_rooted_below_private_ancestor() {
+    let out = compile_and_run(
+        r#"<?php
+class A { private function f(int $x) { return "A"; } }
+class B extends A { public function f(int $x) { return "B" . gettype($x); } }
+class C extends B { public function f($x) { return "C" . gettype($x); } }
+function via(B $b) { return $b->f(4); }
+echo via(new B()), via(new C()), "\n";
+"#,
+    );
+    assert_eq!(out, "BintegerCinteger\n");
+}
+
+/// Ronda 6 (H2, review a21): a subclass implements an interface declaring a raw `int` return,
+/// but its family returns the boxed `int|string`; the interface call would read the box as an
+/// int, so it is refused at compile time.
+#[test]
+#[should_panic(expected = "cannot share one virtual call ABI: class C implements interface I whose h() returns int")]
+fn test_family_boxed_return_conflicts_with_interface_scalar_return() {
+    compile_and_run(
+        r#"<?php
+interface I { public function h(): int; }
+class P { public function h(): int|string { return "p"; } }
+class C extends P implements I { public function h(): int { return 41; } }
+class D extends C { public function h(): int { return 9; } }
+function viaI(I $i) { return $i->h() * 2; }
+echo viaI(new C()), " ", viaI(new D()), "\n";
+"#,
+    );
+}
+
+/// Ronda 6 (H2, review a13/a18): the same conflict with an object return narrowed from `?N`.
+#[test]
+#[should_panic(expected = "cannot share one virtual call ABI: class C implements interface I whose g() returns N")]
+fn test_family_boxed_return_conflicts_with_interface_object_return() {
+    compile_and_run(
+        r#"<?php
+class N { public $n = "N"; }
+interface I { public function g(): N; }
+abstract class A { abstract public function g(): ?N; }
+class C extends A implements I { public function g(): N { return new N(); } }
+class D extends A { public function g(): ?N { return null; } }
+function viaI(I $i) { return $i->g()->n; }
+function viaA(A $a) { $r = $a->g(); return $r === null ? "null" : $r->n; }
+echo viaI(new C()), viaA(new C()), viaA(new D()), "\n";
+"#,
+    );
+}
+
+/// Ronda 6 (H2 non-regression, review a12): an interface whose return matches the family's
+/// boxed return keeps dispatching.
+#[test]
+fn test_family_boxed_return_matching_interface_return() {
+    let out = compile_and_run(
+        r#"<?php
+class N { public $n = "N"; }
+interface I { public function g(): ?N; }
+class P implements I { public function g(): ?N { return null; } }
+class C extends P { public function g(): N { return new N(); } }
+function viaI(I $i) { $r = $i->g(); return $r === null ? "null" : $r->n; }
+echo viaI(new P()), viaI(new C()), "\n";
+"#,
+    );
+    assert_eq!(out, "nullN\n");
 }
