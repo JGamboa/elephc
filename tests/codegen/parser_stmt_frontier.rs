@@ -1,0 +1,164 @@
+//! Purpose:
+//! End-to-end coverage for statement-level parser constructs found on the Laravel frontier:
+//! attributes on global constants, destructuring in a `while` condition, statements that
+//! start with a literal, and `include`/`require` assigned to a static property.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests parser_stmt_frontier`.
+//!
+//! Key details:
+//! - Each test mirrors a probe in the external `probes/parser-stmt/` family and its PHP output.
+
+use crate::support::*;
+
+// --- Attributes on global constants (PHP 8.5) ---
+
+#[test]
+fn test_attribute_on_global_const_is_accepted() {
+    let out = compile_and_run(
+        r#"<?php
+#[Deprecated(message: 'use UUID_TYPE_RANDOM instead')]
+const UUID_TYPE_DCE = 4;
+
+#[Deprecated(message: 'use UUID_TYPE_TIME instead')]
+const UUID_TYPE_NAME = 1;
+
+#[MyMarker]
+#[Other(1, 2), Third]
+const PLAIN = 'plain';
+
+echo PLAIN, "\n";
+echo defined('UUID_TYPE_DCE') ? "defined\n" : "missing\n";
+"#,
+    );
+    assert_eq!(out, "plain\ndefined\n");
+}
+
+#[test]
+fn test_attribute_on_namespaced_const_is_accepted() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+#[\Deprecated]
+const OLD = 3;
+#[Marker]
+const NEW_ONE = 4;
+echo NEW_ONE + 1, "\n";
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn test_const_list_without_attributes_still_works() {
+    let out = compile_and_run("<?php const A = 7, B = A + 1; echo A + B, \"\\n\";");
+    assert_eq!(out, "15\n");
+}
+
+// --- Destructuring in a `while` condition (CarbonInterval:1006) ---
+
+#[test]
+fn test_while_condition_bracket_destructuring() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = [[1, 'a', true], [2, 'b', false], [3, 'c', true]];
+while ([$num, $letter, $flag] = array_shift($parts)) {
+    echo $num, $letter, $flag ? 'T' : 'F', "\n";
+}
+var_dump($num, $letter);
+echo count($parts), "\n";
+"#,
+    );
+    assert_eq!(out, "1aT\n2bF\n3cT\nNULL\nNULL\n0\n");
+}
+
+#[test]
+fn test_while_condition_keyed_and_list_destructuring() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = [['k' => 'x', 'v' => 10], ['k' => 'y', 'v' => 20]];
+while (['k' => $k, 'v' => $v] = array_shift($pairs)) {
+    echo "$k=$v\n";
+}
+$rows = [[5, [6, 7]]];
+while (list($p, list($q, $r)) = array_shift($rows)) {
+    echo $p * $q + $r, "\n";
+}
+var_dump($k, $r);
+"#,
+    );
+    assert_eq!(out, "x=10\ny=20\n37\nNULL\nNULL\n");
+}
+
+#[test]
+fn test_while_condition_destructuring_continue_and_break() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [[1, 2], [3, 4], [5, 6], [7, 8]];
+while ([$a, $b] = array_shift($items)) {
+    if ($a === 3) {
+        continue;
+    }
+    if ($a === 7) {
+        break;
+    }
+    echo $a + $b, "\n";
+}
+echo $a, count($items), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n11\n70\n");
+}
+
+#[test]
+fn test_while_plain_assignment_condition_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+$q = [3, 2, 1];
+while ($x = array_shift($q)) {
+    echo $x;
+}
+$i = 0;
+while ($i < 3) { $i++; }
+echo "|", $i, "\n";
+"#,
+    );
+    assert_eq!(out, "321|3\n");
+}
+
+#[test]
+fn test_while_condition_destructuring_in_static_method_with_switch() {
+    let out = compile_and_run(
+        r#"<?php
+class Parser
+{
+    public static function total(string $spec): int
+    {
+        preg_match_all('/(\d+)\h*([a-z]+)/i', $spec, $parts, PREG_SET_ORDER);
+        $sum = 0;
+        while ([$part, $value, $unit] = array_shift($parts)) {
+            switch ($unit) {
+                case 'h':
+                    $sum += (int) $value * 60;
+                    break;
+                default:
+                    $sum += (int) $value;
+                    break;
+            }
+        }
+        return $sum;
+    }
+}
+echo Parser::total('2h 5m 3s'), "\n";
+"#,
+    );
+    assert_eq!(out, "128\n");
+}
+
+#[test]
+fn test_while_condition_destructuring_alt_syntax() {
+    let out = compile_and_run(
+        "<?php $q = [[1, 2]]; while ([$a, $b] = array_shift($q)): echo $a + $b; endwhile; echo \"\\n\";",
+    );
+    assert_eq!(out, "3\n");
+}

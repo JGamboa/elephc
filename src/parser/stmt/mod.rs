@@ -42,7 +42,10 @@ pub(crate) use assign::{
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
-pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
+pub(crate) use assign::{
+    parse_destructuring_loop_condition, parse_destructuring_pattern_unpack,
+    starts_destructuring_assignment, starts_destructuring_pattern,
+};
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
 
@@ -54,12 +57,7 @@ pub(crate) use recovery::recover_to_statement_boundary;
 /// produce: the passes that collect top-level declarations, namespace symbol collection among
 /// them, only look at that level. Every other statement is appended unchanged.
 pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
-    let is_const_list = matches!(
-        &stmt.kind,
-        StmtKind::Synthetic(body)
-            if !body.is_empty()
-                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
-    );
+    let is_const_list = is_const_declaration_list(&stmt.kind);
     match stmt.kind {
         StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
         kind => stmts.push(Stmt { kind, ..stmt }),
@@ -101,28 +99,46 @@ fn attach_attributes_to_stmt(
     if stmt_kind_supports_attributes(&stmt.kind) {
         stmt.attributes = attributes;
         Ok(stmt)
+    } else if is_const_declaration_list(&stmt.kind) {
+        // PHP 8.5 accepts `#[A] const X = 1;` but rejects attributes on a list, at compile
+        // time, with this exact message.
+        Err(CompileError::new(
+            span,
+            "Cannot apply attributes to multiple constants at once",
+        ))
     } else {
         Err(CompileError::new(
             span,
             "Attributes are only allowed before declarations \
-             (class, interface, trait, enum, function)",
+             (class, interface, trait, enum, function, const)",
         ))
     }
 }
 
 /// Returns true if the given statement kind supports PHP 8 attribute groups.
 ///
-/// Only class-like declarations (class, interface, trait, enum, function, packed class)
-/// accept attribute groups per PHP syntax rules.
+/// Class-like declarations (class, interface, trait, enum, packed class), functions and —
+/// since PHP 8.5 — a single global `const` declaration accept attribute groups.
 fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
     matches!(
         kind,
-        StmtKind::ClassDecl { .. }
+        StmtKind::ConstDecl { .. }
+            | StmtKind::ClassDecl { .. }
             | StmtKind::InterfaceDecl { .. }
             | StmtKind::TraitDecl { .. }
             | StmtKind::EnumDecl { .. }
             | StmtKind::FunctionDecl { .. }
             | StmtKind::PackedClassDecl { .. }
+    )
+}
+
+/// Returns true for the `Synthetic` group `const A = 1, B = 2;` parses to.
+fn is_const_declaration_list(kind: &StmtKind) -> bool {
+    matches!(
+        kind,
+        StmtKind::Synthetic(body)
+            if !body.is_empty()
+                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
     )
 }
 

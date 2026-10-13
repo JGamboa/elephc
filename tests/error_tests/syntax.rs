@@ -882,3 +882,30 @@ fn test_error_class_constant_name_after_comma() {
     }
     expect_error("<?php class C { const FIRST = 1; const ; }", "Expected class constant name after 'const'");
 }
+
+/// Verifies PHP 8.5's rejection of attributes on a multi-constant declaration list.
+#[test]
+fn test_error_attribute_on_const_list_is_rejected() {
+    expect_error(
+        "<?php #[Foo] const A = 1, B = 2; echo A;",
+        "Cannot apply attributes to multiple constants at once",
+    );
+}
+
+/// Verifies a non-declaration statement after attributes is still rejected (const is now allowed).
+#[test]
+fn test_error_attribute_on_return_is_rejected() {
+    expect_error(
+        "<?php function f() { #[Foo] return 1; } echo f();",
+        "Attributes are only allowed before declarations",
+    );
+}
+
+/// Verifies a destructuring `while` condition that is not the whole condition fails clearly.
+#[test]
+fn test_error_while_destructuring_must_be_whole_condition() {
+    expect_error(
+        "<?php $q = []; while ([$a] = array_shift($q) or false) { echo $a; }",
+        "must be the whole condition",
+    );
+}
