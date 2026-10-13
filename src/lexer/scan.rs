@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Multi-character operators and PHP opening tags must be recognized before shorter prefixes.
+//! - Keywords touched by `\` inside a qualified name are emitted as identifiers (PHP 8 T_NAME_QUALIFIED).
 
 use super::cursor::Cursor;
 use super::literals;
@@ -58,6 +59,9 @@ pub(super) fn scan_tokens_in_source(
         tokens.push(spanned(Token::OpenTag, span));
     }
 
+    // `cursor.remaining().len()` right after a `\` token, so the next word can tell whether
+    // the separator touches it (PHP 8 lexes `A\Default\X` as one T_NAME_QUALIFIED token).
+    let mut backslash_end: Option<usize> = None;
     loop {
         skip_whitespace_and_comments(&mut cursor);
 
@@ -79,6 +83,7 @@ pub(super) fn scan_tokens_in_source(
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
             tokens.extend(string_tokens);
+            backslash_end = None;
         } else if cursor.remaining().starts_with("<<<") {
             // Heredoc/nowdoc — may contain interpolation ($var) for heredoc
             cursor.advance(); // consume first <
@@ -86,14 +91,22 @@ pub(super) fn scan_tokens_in_source(
             cursor.advance(); // consume third <
             let heredoc_tokens = literals::scan_heredoc(&mut cursor)?;
             tokens.extend(heredoc_tokens);
+            backslash_end = None;
         } else {
             let starts_word = cursor.peek().is_some_and(literals::is_ident_start);
             let remaining_before = cursor.remaining();
-            let token = scan_token(&mut cursor)?;
+            let touches_backslash = backslash_end == Some(remaining_before.len());
+            let mut token = scan_token(&mut cursor)?;
             let end = cursor.span();
             let span = crate::span::Span::with_end_from(span, end);
+            let consumed_len = remaining_before.len() - cursor.remaining().len();
+            if starts_word
+                && keyword_is_name_segment(&token, touches_backslash, cursor.remaining())
+            {
+                token = Token::Identifier(remaining_before[..consumed_len].to_string());
+            }
+            backslash_end = matches!(token, Token::Backslash).then(|| cursor.remaining().len());
             let metadata = if starts_word && !matches!(token, Token::Identifier(_)) {
-                let consumed_len = remaining_before.len() - cursor.remaining().len();
                 let source_spelling = &remaining_before[..consumed_len];
                 if token.canonical_word_spelling() == Some(source_spelling) {
                     TokenMetadata::new(span)
@@ -108,6 +121,69 @@ pub(super) fn scan_tokens_in_source(
     }
 
     Ok(tokens)
+}
+
+/// Returns whether a just-scanned keyword token is really a segment of a PHP 8 qualified name.
+///
+/// PHP 8 lexes `A\Default\X` and `\Default\X` as single T_NAME_QUALIFIED /
+/// T_NAME_FULLY_QUALIFIED tokens, so any reserved word is a plain segment when a `\` touches
+/// it inside the name: either a separator immediately before it, or a separator immediately
+/// after it that is itself followed by a name character. A lone keyword (`new Default`,
+/// `use A\{Default}`, `Default\ X`) stays reserved.
+///
+/// Exceptions kept as their dedicated tokens:
+/// - `namespace\X` as the first segment is PHP's T_NAME_RELATIVE, not a name segment.
+/// - A final segment after `\` that is a literal, predefined, or magic constant (`\true`,
+///   `\PHP_EOL`, `A\PHP_EOL`) keeps its token; the parser already accepts those spellings.
+fn keyword_is_name_segment(token: &Token, touches_backslash: bool, rest: &str) -> bool {
+    if matches!(token, Token::Identifier(_)) || token.canonical_word_spelling().is_none() {
+        return false;
+    }
+    let mut after = rest.chars();
+    let followed_by_segment =
+        after.next() == Some('\\') && after.next().is_some_and(literals::is_ident_start);
+    if followed_by_segment {
+        return touches_backslash || !matches!(token, Token::Namespace);
+    }
+    touches_backslash && !is_constant_word_token(token)
+}
+
+/// Returns whether a word token denotes a literal, predefined, or magic constant.
+fn is_constant_word_token(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::True
+            | Token::False
+            | Token::Null
+            | Token::Inf
+            | Token::Nan
+            | Token::PhpIntMax
+            | Token::PhpIntMin
+            | Token::PhpFloatMax
+            | Token::PhpFloatMin
+            | Token::PhpFloatEpsilon
+            | Token::MPi
+            | Token::ME
+            | Token::MSqrt2
+            | Token::MPi2
+            | Token::MPi4
+            | Token::MLog2e
+            | Token::MLog10e
+            | Token::Stdin
+            | Token::Stdout
+            | Token::Stderr
+            | Token::PhpEol
+            | Token::PhpOs
+            | Token::DirectorySeparator
+            | Token::DunderDir
+            | Token::DunderFile
+            | Token::DunderLine
+            | Token::DunderFunction
+            | Token::DunderClass
+            | Token::DunderMethod
+            | Token::DunderNamespace
+            | Token::DunderTrait
+    )
 }
 
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute

@@ -933,3 +933,17 @@ fn test_error_static_var_list_trailing_comma() {
         "Expected variable after 'static'",
     );
 }
+
+/// Verifies that a lone reserved keyword stays reserved where PHP 8 rejects it: the keyword
+/// is a name segment only when a `\` touches it inside a qualified name (T_NAME_QUALIFIED).
+#[test]
+fn test_error_lone_keyword_is_not_a_name_segment() {
+    expect_error("<?php use A\\{Default};", "Expected imported name inside group use declaration");
+    expect_error("<?php use A\\{List\\X, Match};", "Expected imported name inside group use declaration");
+    expect_error("<?php use A\\ Default;", "Expected identifier after '\\' in imported name");
+    expect_error("<?php use Default\\{X};", "Expected imported name after 'use'");
+    expect_error("<?php new Default;", "Expected class name after 'new'");
+    expect_error("<?php class Default {}", "Expected class name after 'class'");
+    expect_error("<?php function f(Default $x) {}", "Expected parameter variable");
+    expect_error("<?php echo Default\\ X;", "Unexpected token: Default");
+}
