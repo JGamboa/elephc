@@ -466,23 +466,9 @@ if ($type instanceof ReflectionUnionType) {
     assert_eq!(out, "choice:2:Choice:static");
 }
 
-/// Verifies a child override may covariantly narrow `static|false` to `static`.
-#[test]
-fn test_late_static_union_override_can_narrow_to_static() {
-    let out = compile_and_run(
-        r#"<?php
-class MaybeCloneable {
-    public function duplicate(): static|false { return false; }
-}
-final class AlwaysCloneable extends MaybeCloneable {
-    public function duplicate(): static { return $this; }
-    public function label(): string { return "clone"; }
-}
-echo (new AlwaysCloneable())->duplicate()->label();
-"#,
-    );
-    assert_eq!(out, "clone");
-}
+// `static|false` narrowed to `static` in a class override is refused until P10 (the boxed and
+// object return representations differ, and a call through the parent miscompiled); see
+// `tests/error_tests/override_compatibility.rs::test_error_override_late_static_union_narrowed_to_static`.
 
 /// Verifies that a `parent` return type resolves to the parent class and exposes its methods.
 #[test]

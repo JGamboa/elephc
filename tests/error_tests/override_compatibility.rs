@@ -252,3 +252,50 @@ fn test_error_override_class_relative_default_counts_as_changed() {
         r#"Cannot change the default value of parameter $u when overriding method: Child::f"#,
     );
 }
+
+/// Review ronda 3 (c07): `int|null` under a boxed `Node|int|null` crashed (SIGSEGV).
+#[test]
+fn test_error_override_union_return_narrowed_to_tagged_scalar() {
+    expect_error(
+        r#"<?php class Node { public function find(): Node|int|null { return 4; } } class Leaf extends Node { public function find(): int|null { return 9; } }"#,
+        r#"Cannot override method Leaf::find with union return type int|null: it changes the physical return representation of the parent's Node|int|null (not yet supported until P10)"#,
+    );
+}
+
+/// Review ronda 3 (c10): `false` under `Node|false` printed NULL.
+#[test]
+fn test_error_override_union_return_narrowed_to_false() {
+    expect_error(
+        r#"<?php class Node { public function find(): Node|false { return false; } } class Leaf extends Node { public function find(): false { return false; } }"#,
+        r#"Cannot override method Leaf::find with union return type false: it changes the physical return representation"#,
+    );
+}
+
+/// `static` under a static `static|false` is read with the boxed layout through `static::`.
+#[test]
+fn test_error_static_override_union_return_narrowed_to_static() {
+    expect_error(
+        r#"<?php class P { public static function make(): static|false { return false; } } class C extends P { public static function make(): static { return new static(); } }"#,
+        r#"Cannot override static method C::make with union return type C: it changes the physical return representation"#,
+    );
+}
+
+/// Review ronda 3 (d2): the override redefines `X`, so `self::X` is a changed default.
+#[test]
+fn test_error_override_redefined_self_constant_default() {
+    expect_error(
+        r#"<?php class B { const X = "b"; public function f(string $v = self::X) { return $v; } } class C extends B { const X = "c"; public function f(string $v = self::X) { return "c" . $v; } }"#,
+        r#"Cannot change the default value of parameter $v when overriding method: C::f"#,
+    );
+}
+
+/// Formerly `test_late_static_union_override_can_narrow_to_static` (codegen): the direct call
+/// worked, but `$m->duplicate()` through `MaybeCloneable` read the object word as a boxed value
+/// (TypeError in `get_class()` on laravel/main), so the narrowing is refused until P10.
+#[test]
+fn test_error_override_late_static_union_narrowed_to_static() {
+    expect_error(
+        r#"<?php class MaybeCloneable { public function duplicate(): static|false { return false; } } final class AlwaysCloneable extends MaybeCloneable { public function duplicate(): static { return $this; } public function label(): string { return "clone"; } } echo (new AlwaysCloneable())->duplicate()->label();"#,
+        r#"Cannot override method AlwaysCloneable::duplicate with union return type AlwaysCloneable: it changes the physical return representation"#,
+    );
+}

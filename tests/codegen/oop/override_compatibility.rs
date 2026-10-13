@@ -181,3 +181,47 @@ echo viaBaseSpread(new Child()), "\n";
     );
     assert_eq!(out, "B1:[[1],[2]] C1:[[1],[2]]\nC2:{\"lists\":[3]}\nC3:[]\nC4:{\"arrays\":[5]}\nC5:[[6],[7]]\n");
 }
+
+/// Review ronda 3 (d4): `= self::X` on parent and override naming the same parent constant is the same default (the `Application::handle(..., $type = self::MAIN_REQUEST)` shape).
+#[test]
+fn test_override_keeps_inherited_self_constant_default() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class P { const X = 'p'; abstract public function f(string $v = self::X); }
+class C extends P { public function f(string $v = self::X) { return "c" . $v; } }
+function via(P $b) { echo $b->f(), "\n"; }
+via(new C());
+echo (new C)->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "cp\ncp\n");
+}
+
+/// Review ronda 3 (d7): `= self::MAIN` resolving to the interface constant from both sides.
+#[test]
+fn test_interface_impl_keeps_interface_self_constant_default() {
+    let out = compile_and_run(
+        r#"<?php
+interface HK { const MAIN = 1; public function handle(int $type = self::MAIN, bool $c = true); }
+class App implements HK { public function handle(int $type = self::MAIN, bool $c = true) { return $type; } }
+function via(HK $h) { echo $h->handle(), "\n"; }
+via(new App()); echo (new App)->handle(), "\n";
+"#,
+    );
+    assert_eq!(out, "1\n1\n");
+}
+
+/// Review ronda 3 (c11): union covariance that keeps the boxed representation still dispatches through the parent.
+#[test]
+fn test_override_union_return_keeping_boxed_representation() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { public $n = "N"; public function find(): Node|string { return "s"; } }
+class Twig extends Node { public $n = "T"; public function find(): Twig|string { return $this; } }
+class Leaf extends Node { public $n = "L"; public function find(): Leaf|string { return "q"; } }
+function via(Node $x) { $r = $x->find(); var_dump(is_object($r) ? $r->n : $r); }
+via(new Node()); via(new Twig()); via(new Leaf());
+"#,
+    );
+    assert_eq!(out, "string(1) \"s\"\nstring(1) \"T\"\nstring(1) \"q\"\n");
+}

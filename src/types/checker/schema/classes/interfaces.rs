@@ -22,7 +22,8 @@ use super::super::validation::{
     attribute_names_include_return_type_will_change, declaration_is_source,
     declared_return_type_compatible,
     is_pdo_exception_get_code_contract, late_static_return_compatible,
-    validate_signature_compatibility,
+    relative_defaults_name_same_value, validate_signature_compatibility_with_defaults,
+    DefaultScope,
 };
 use super::state::ClassBuildState;
 
@@ -298,7 +299,27 @@ fn validate_static_interface_method(
         .methods
         .iter()
         .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
-    validate_signature_compatibility(
+    let contract_scope = interface_info
+        .static_method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(interface_name);
+    let implementation_owner = state.static_method_declaring_classes.get(method_name).cloned();
+    let same_relative_default = |parent_default: &crate::parser::ast::Expr,
+                                 child_default: &crate::parser::ast::Expr| {
+        let child_scope = match implementation_owner.as_deref() {
+            Some(owner) if owner != class.name => DefaultScope::Registered(owner),
+            _ => DefaultScope::Flattened(class),
+        };
+        relative_defaults_name_same_value(
+            checker,
+            parent_default,
+            &DefaultScope::Registered(contract_scope),
+            child_default,
+            &child_scope,
+        )
+    };
+    validate_signature_compatibility_with_defaults(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
@@ -317,6 +338,7 @@ fn validate_static_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        &same_relative_default
     )?;
     let return_type_will_change = !interface_info
         .static_method_declaring_interfaces
@@ -571,7 +593,27 @@ fn validate_interface_method(
         .methods
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
-    validate_signature_compatibility(
+    let contract_scope = interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(interface_name);
+    let implementation_owner = state.method_declaring_classes.get(method_name).cloned();
+    let same_relative_default = |parent_default: &crate::parser::ast::Expr,
+                                 child_default: &crate::parser::ast::Expr| {
+        let child_scope = match implementation_owner.as_deref() {
+            Some(owner) if owner != class.name => DefaultScope::Registered(owner),
+            _ => DefaultScope::Flattened(class),
+        };
+        relative_defaults_name_same_value(
+            checker,
+            parent_default,
+            &DefaultScope::Registered(contract_scope),
+            child_default,
+            &child_scope,
+        )
+    };
+    validate_signature_compatibility_with_defaults(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
@@ -590,6 +632,7 @@ fn validate_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        &same_relative_default
     )?;
     // `#[\ReturnTypeWillChange]` relaxes only an internal interface's tentative return type.
     let return_type_will_change = !interface_info

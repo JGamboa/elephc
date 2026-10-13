@@ -10,7 +10,9 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, TypeExpr, Visibility};
+use crate::parser::ast::{
+    Attribute, ClassMethod, Expr, ExprKind, StaticReceiver, StmtKind, TypeExpr, Visibility,
+};
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -458,6 +460,7 @@ impl SourceVisibleShape {
 /// injected contracts are synthesized after the `func_args` pass and can never carry its hidden
 /// collector or actual-count parameter, so comparing those slots against such a contract would
 /// report an ABI difference the source never declared.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -467,6 +470,35 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
     compare_generated_abi: bool,
+) -> Result<(), CompileError> {
+    validate_signature_compatibility_with_defaults(
+        span,
+        owner_name,
+        method_name,
+        child_sig,
+        parent_sig,
+        kind,
+        context,
+        compare_generated_abi,
+        &|_, _| false,
+    )
+}
+
+/// [`validate_signature_compatibility`] with a resolver that decides whether a parent and child
+/// default spelled with `self::`/`parent::` name the same constant value in their own scopes.
+/// Without a declaring-class context (interface-to-interface checks) such defaults count as
+/// changed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_signature_compatibility_with_defaults(
+    span: crate::span::Span,
+    owner_name: &str,
+    method_name: &str,
+    child_sig: &FunctionSig,
+    parent_sig: &FunctionSig,
+    kind: &str,
+    context: &str,
+    compare_generated_abi: bool,
+    same_relative_default: &dyn Fn(&Expr, &Expr) -> bool,
 ) -> Result<(), CompileError> {
     // The hidden variadic that collects surplus positional arguments for
     // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
@@ -591,7 +623,7 @@ pub(crate) fn validate_signature_compatibility(
         .defaults
         .iter()
         .zip(&child.defaults)
-        .position(|pair| matches!(pair, (Some(parent_default), Some(child_default)) if parent_default != child_default || default_is_class_relative(child_default)))
+        .position(|pair| matches!(pair, (Some(parent_default), Some(child_default)) if !inherited_default_unchanged(parent_default, child_default, same_relative_default)))
     {
         return Err(CompileError::new(
             span,
@@ -714,6 +746,7 @@ pub(crate) fn validate_override_signature(
     parent_late_static_return: Option<&TypeExpr>,
     is_static: bool,
     parent_declaration_is_source: bool,
+    parent_owner: Option<&str>,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let class_name = class.name.as_str();
@@ -721,7 +754,18 @@ pub(crate) fn validate_override_signature(
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
     }
-    validate_signature_compatibility(
+    let same_relative_default = |parent_default: &Expr, child_default: &Expr| {
+        parent_owner.is_some_and(|owner| {
+            relative_defaults_name_same_value(
+                checker,
+                parent_default,
+                &DefaultScope::Registered(owner),
+                child_default,
+                &DefaultScope::Flattened(class),
+            )
+        })
+    };
+    validate_signature_compatibility_with_defaults(
         method.span,
         class_name,
         &method.name,
@@ -730,6 +774,7 @@ pub(crate) fn validate_override_signature(
         kind,
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
+        &same_relative_default,
     )?;
     // Compiler-injected overrides are written against their builtin parents' real ABI.
     if method.span.line != 0 {
@@ -818,6 +863,26 @@ pub(crate) fn validate_override_signature(
             &format!(
                 "Cannot override {} {}::{}: {} (not yet supported until P10)",
                 kind, class_name, method.name, detail
+            ),
+        ));
+    }
+    // A union return narrowed by the override is only sound while both sides share one physical
+    // return representation: the parent's caller reads the result with the parent's layout and no
+    // adapter re-boxes it (until P10, the per-family ABI). `int|null` (tagged scalar) or `false`
+    // under a boxed `Node|int|null`/`Node|false` would be read as the wrong word.
+    if parent_sig.declared_return
+        && return_compatible
+        && (matches!(parent_sig.return_type, PhpType::Union(_))
+            || matches!(child_sig.return_type, PhpType::Union(_)))
+        && !child_sig
+            .return_type
+            .reference_payload_compatible(&parent_sig.return_type)
+    {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot override {} {}::{} with union return type {}: it changes the physical return representation of the parent's {} (not yet supported until P10)",
+                kind, class_name, method.name, child_sig.return_type, parent_sig.return_type
             ),
         ));
     }
@@ -993,6 +1058,135 @@ fn validate_override_parameter_abi(
         }
     }
     Ok(())
+}
+
+/// Returns whether an override's default denotes the inherited default's value.
+///
+/// Plain defaults compare structurally. A default spelled with `self::`/`parent::` on either side
+/// is compared after resolving those constants in each side's own scope, so `self::X` declared
+/// only on the parent (or inherited from an interface) matches, a redefined `X` does not, and
+/// `static::` never does.
+fn inherited_default_unchanged(
+    parent_default: &Expr,
+    child_default: &Expr,
+    same_relative_default: &dyn Fn(&Expr, &Expr) -> bool,
+) -> bool {
+    if default_is_class_relative(parent_default) || default_is_class_relative(child_default) {
+        same_relative_default(parent_default, child_default)
+    } else {
+        parent_default == child_default
+    }
+}
+
+/// The class-like scope a `self::`/`parent::` default is resolved in.
+pub(crate) enum DefaultScope<'a> {
+    /// The class being built (not registered in the checker yet).
+    Flattened(&'a crate::types::traits::FlattenedClass),
+    /// An already registered class or interface, by name.
+    Registered(&'a str),
+}
+
+/// Returns whether two defaults that use `self::`/`parent::` evaluate to the same constant values
+/// once each is resolved in its own declaring scope (`self::X` declared only on the parent, or
+/// inherited from an interface, names the same constant from both sides). `static::` is late
+/// bound and never compares equal; anything the resolver does not understand counts as changed.
+pub(crate) fn relative_defaults_name_same_value(
+    checker: &Checker,
+    parent_default: &Expr,
+    parent_scope: &DefaultScope<'_>,
+    child_default: &Expr,
+    child_scope: &DefaultScope<'_>,
+) -> bool {
+    match (
+        canonical_default(checker, parent_default, parent_scope, 0),
+        canonical_default(checker, child_default, child_scope, 0),
+    ) {
+        (Some(parent), Some(child)) => parent == child,
+        _ => false,
+    }
+}
+
+/// Replaces each `self::X`/`parent::X` in a default by the constant's value as seen from `scope`.
+fn canonical_default(
+    checker: &Checker,
+    expr: &Expr,
+    scope: &DefaultScope<'_>,
+    depth: usize,
+) -> Option<Expr> {
+    if depth > 8 {
+        return None;
+    }
+    let kind = match &expr.kind {
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let value = match receiver {
+                StaticReceiver::Self_ => scoped_constant_value(checker, scope, name)?,
+                StaticReceiver::Parent => {
+                    let parent = match scope {
+                        DefaultScope::Flattened(class) => class.extends.clone()?,
+                        DefaultScope::Registered(owner) => {
+                            checker.classes.get(*owner)?.parent.clone()?
+                        }
+                    };
+                    scoped_constant_value(checker, &DefaultScope::Registered(&parent), name)?
+                }
+                _ => return None,
+            };
+            // A constant's own value may refer to its declaring class again; such values were
+            // already resolved lexically when the declaring class was registered.
+            return canonical_default(checker, &value, scope, depth + 1);
+        }
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(canonical_default(checker, left, scope, depth)?),
+            op: op.clone(),
+            right: Box::new(canonical_default(checker, right, scope, depth)?),
+        },
+        ExprKind::Negate(inner) => {
+            ExprKind::Negate(Box::new(canonical_default(checker, inner, scope, depth)?))
+        }
+        ExprKind::Not(inner) => {
+            ExprKind::Not(Box::new(canonical_default(checker, inner, scope, depth)?))
+        }
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .iter()
+                .map(|item| canonical_default(checker, item, scope, depth))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        _ if default_is_class_relative(expr) => return None,
+        other => other.clone(),
+    };
+    Some(Expr::new(kind, expr.span))
+}
+
+/// Looks up constant `name` as `self::name` sees it from `scope`: own constants first, then the
+/// parent chain and implemented interfaces (registered metadata already includes inherited ones).
+fn scoped_constant_value(checker: &Checker, scope: &DefaultScope<'_>, name: &str) -> Option<Expr> {
+    match scope {
+        DefaultScope::Flattened(class) => {
+            if let Some(constant) = class.constants.iter().find(|constant| constant.name == name) {
+                return Some(constant.value.clone());
+            }
+            class
+                .extends
+                .as_deref()
+                .and_then(|parent| scoped_constant_value(checker, &DefaultScope::Registered(parent), name))
+                .or_else(|| {
+                    class.implements.iter().find_map(|iface| {
+                        scoped_constant_value(checker, &DefaultScope::Registered(iface), name)
+                    })
+                })
+        }
+        DefaultScope::Registered(owner) => checker
+            .classes
+            .get(*owner)
+            .and_then(|info| info.constants.get(name).cloned())
+            .or_else(|| {
+                checker
+                    .interfaces
+                    .get(*owner)
+                    .and_then(|info| info.constants.get(name).cloned())
+            }),
+    }
 }
 
 /// Returns whether a default names its declaring class relatively (`self::X`, `static::X`,
