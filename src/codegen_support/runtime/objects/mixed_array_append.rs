@@ -273,3 +273,28 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return after the value has been consumed or released
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// `$mixed[] = $v` on an object dispatches through the dense `offsetSet` table with a boxed
+    /// null offset, and refuses a non-ArrayAccess object, on every supported target.
+    #[test]
+    fn object_receivers_dispatch_offset_set_with_a_null_offset() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_mixed_array_append(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_mixed_array_append_object:"), "{name}");
+            assert!(asm.contains("_class_offsetset_ptrs"), "{name}");
+            assert!(asm.contains("__rt_throw_object_not_array"), "{name}");
+            let null_tag = if name == "linux-x86_64" { "mov rax, 8" } else { "mov x0, #8" };
+            assert!(asm.contains(null_tag), "{name}");
+            for symbol in SPL_CONTAINER_CLASS_IDS {
+                assert!(asm.contains(symbol), "{name}: {symbol}");
+            }
+        }
+    }
+}
