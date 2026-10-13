@@ -2,7 +2,8 @@
 //! Keeps the checker's view of a dispatched method's return type consistent across overrides.
 //!
 //! Called from:
-//! - `Checker::type_check_methods_until_stable` after every method-body pass.
+//! - `check_types_impl`, once every class is registered and before any body is inferred.
+//! - `Checker::type_check_methods_until_stable` before the first and after every method pass.
 //! - `check_types_on_compiler_stack` after the final `propagate_abstract_return_types`.
 //!
 //! Key details:
@@ -23,37 +24,72 @@ use crate::types::PhpType;
 
 impl Checker {
     /// Applies the family return rule to every instance and static override family.
-    pub(super) fn unify_override_family_returns(&mut self) {
-        for is_static in [false, true] {
-            for (method_key, members) in override_families::collect(&self.classes, is_static) {
-                let Some(agreed) = family_return(&members) else {
+    pub(in crate::types::checker) fn unify_override_family_returns(&mut self) {
+        // The hierarchy is fixed once bodies are being checked; only the signatures move.
+        let groups = match self.override_family_groups.take() {
+            Some(groups) => groups,
+            None => override_families::groups(&self.classes),
+        };
+        for group in &groups {
+            let key = |class_name: &String| {
+                (class_name.clone(), group.method_key.clone(), group.is_static)
+            };
+            let widened_here = group
+                .class_names()
+                .any(|class_name| self.override_family_returns.contains_key(&key(class_name)));
+            if !widened_here && group.returns_agree(&self.classes) {
+                continue;
+            }
+            // A widened member is judged by its body's own latest type, not by the widening.
+            let mut members = group.members(&self.classes);
+            for member in &mut members {
+                if let Some((_, own)) = self.override_family_returns.get(&key(&member.class_name)) {
+                    member.sig.return_type = own.clone();
+                }
+            }
+            let Some(agreed) = family_return(&members) else {
+                continue;
+            };
+            for member in &members {
+                let sig = &member.sig;
+                let member_key = key(&member.class_name);
+                let return_type = if member.placeholder {
+                    agreed.clone()
+                } else if !sig.declared_return
+                    && !override_families::same_abi(&sig.return_type, &agreed)
+                    && !sig.by_ref_return
+                    && !sig.is_generator
+                    && !carries_object(&sig.return_type)
+                {
+                    self.override_family_returns
+                        .insert(member_key, (agreed.clone(), sig.return_type.clone()));
+                    agreed.clone()
+                } else if self.override_family_returns.remove(&member_key).is_some() {
+                    // The family agrees again: the body's own type stands.
+                    sig.return_type.clone()
+                } else {
                     continue;
                 };
-                for member in &members {
-                    let sig = &member.sig;
-                    let return_type = if member.placeholder {
-                        agreed.clone()
-                    } else if !sig.declared_return
-                        && !override_families::same_abi(&sig.return_type, &agreed)
-                        && !sig.by_ref_return
-                        && !sig.is_generator
-                    {
-                        self.override_family_returns.insert(
-                            (member.class_name.clone(), method_key.clone(), is_static),
-                            agreed.clone(),
-                        );
-                        agreed.clone()
-                    } else {
-                        continue;
-                    };
-                    if let Some(sig) = self.classes.get_mut(&member.class_name).and_then(|info| {
-                        override_families::methods_mut(info, is_static).get_mut(&method_key)
-                    }) {
-                        sig.return_type = return_type;
-                    }
+                if let Some(sig) = self.classes.get_mut(&member.class_name).and_then(|info| {
+                    override_families::methods_mut(info, group.is_static).get_mut(&group.method_key)
+                }) {
+                    sig.return_type = return_type;
                 }
             }
         }
+        self.override_family_groups = Some(groups);
+    }
+}
+
+/// Returns whether `ty` names an object, which a caller may pass to a parameter of that class.
+///
+/// Widening such a return to `?A` or `mixed` would make the checker refuse `needA($a->obj())`,
+/// which compiled before; the shared call ABI is boxed in EIR lowering regardless.
+fn carries_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members.iter().any(carries_object),
+        _ => false,
     }
 }
 

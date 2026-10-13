@@ -61,7 +61,8 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     // Runs on the NORMALIZED signatures: untyped parameters are already boxed there, and that is
     // the representation a virtual call site and the overriding body must agree on.
-    super::virtual_abi::unify_override_family_abis(&mut module.class_infos);
+    module.family_body_contracts =
+        super::virtual_abi::unify_override_family_abis(&mut module.class_infos);
     module.interface_infos = check_result.interfaces.clone();
     for interface in module.interface_infos.values_mut() {
         for signature in interface.methods.values_mut()

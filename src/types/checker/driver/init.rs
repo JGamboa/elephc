@@ -64,6 +64,7 @@ impl Checker {
             param_specialization_seen: HashSet::new(),
             interface_method_boxed_params: HashSet::new(),
             override_family_returns: HashMap::new(),
+            override_family_groups: None,
             requested_instantiations: Vec::new(),
             generic_call_sites: HashMap::new(),
             class_templates: Vec::new(),

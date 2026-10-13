@@ -135,7 +135,11 @@ pub(crate) struct Checker {
     /// Inferred method returns an override family widened, keyed by (class, method, is_static).
     /// A later body pass keeps the widened type instead of narrowing it back mid-pass, so a
     /// sibling method returning the call never re-infers from the narrower one.
-    pub override_family_returns: HashMap<(String, String, bool), PhpType>,
+    /// The value is `(widened type, the body's own latest inferred type)`; the second lets the
+    /// family drop the widening once its bodies agree again.
+    pub override_family_returns: HashMap<(String, String, bool), (PhpType, PhpType)>,
+    /// Override families, computed once the class hierarchy is final.
+    pub override_family_groups: Option<Vec<crate::types::override_families::FamilyGroup>>,
     /// Every generic instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The checker instantiates into `fn_decls`/`functions` so the CALL type-checks, but

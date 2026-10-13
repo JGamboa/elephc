@@ -380,6 +380,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// from the body. Only a declared boundary carries PHP's coercive-mode verification
     /// (TypeError on a non-coercible runtime value); an inferred return must never throw.
     pub return_type_is_declared: bool,
+    /// The declared scalar return of a method body its override family boxed into a Mixed call
+    /// ABI: a `return` first coerces to it, exactly as the unboxed body would, then boxes.
+    pub boxed_return_contract: Option<PhpType>,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
@@ -535,6 +538,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_type,
             return_php_type,
             return_type_is_declared: false,
+            boxed_return_contract: None,
             by_ref_return: false,
             in_main,
             all_global_var_names,

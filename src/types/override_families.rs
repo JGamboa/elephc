@@ -29,71 +29,125 @@ pub(crate) struct FamilyMember {
     pub sig: FunctionSig,
     /// Abstract here, with no declared return to stand for.
     pub placeholder: bool,
-    /// Declaration span of the body this member dispatches to; `None` for an abstract member.
+    /// The class whose body this member dispatches to; `None` for an abstract member.
+    pub impl_class: Option<String>,
+    /// Declaration span of that body; `None` for an abstract member.
     pub body_span: Option<Span>,
 }
 
-/// Returns every override family with more than one member, keyed by method, in stable order.
+/// The shape of one override family: which classes share the dispatched method.
+///
+/// It depends only on the class hierarchy, never on signatures, so the checker computes it once
+/// and re-reads the signatures on every method pass.
+#[derive(Clone)]
+pub(crate) struct FamilyGroup {
+    pub method_key: String,
+    pub is_static: bool,
+    /// `(class, implementing class, body span)` per member, sorted by class name.
+    members: Vec<(String, Option<String>, Option<Span>)>,
+}
+
+impl FamilyGroup {
+    /// Returns whether every member already returns in one representation.
+    pub(crate) fn returns_agree(&self, classes: &HashMap<String, ClassInfo>) -> bool {
+        let mut returns = self.members.iter().filter_map(|(class_name, impl_class, _)| {
+            let sig = classes.get(class_name)?.lookup(self.is_static, &self.method_key)?;
+            (impl_class.is_some() || sig.declared_return).then_some(&sig.return_type)
+        });
+        let Some(first) = returns.next() else {
+            return true;
+        };
+        returns.all(|ty| same_abi(ty, first))
+    }
+
+    /// Returns the member class names.
+    pub(crate) fn class_names(&self) -> impl Iterator<Item = &String> {
+        self.members.iter().map(|(class_name, _, _)| class_name)
+    }
+
+    /// Reads every member's current signature.
+    pub(crate) fn members(&self, classes: &HashMap<String, ClassInfo>) -> Vec<FamilyMember> {
+        self.members
+            .iter()
+            .filter_map(|(class_name, impl_class, body_span)| {
+                let sig = classes.get(class_name)?.lookup(self.is_static, &self.method_key)?.clone();
+                Some(FamilyMember {
+                    class_name: class_name.clone(),
+                    placeholder: impl_class.is_none() && !sig.declared_return,
+                    impl_class: impl_class.clone(),
+                    body_span: *body_span,
+                    sig,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Signature lookup on the instance or static table.
+trait MethodTable {
+    fn lookup(&self, is_static: bool, method_key: &str) -> Option<&FunctionSig>;
+}
+
+impl MethodTable for ClassInfo {
+    fn lookup(&self, is_static: bool, method_key: &str) -> Option<&FunctionSig> {
+        methods(self, is_static).get(method_key)
+    }
+}
+
+/// Returns every instance and static override family with more than one member, in stable order.
 ///
 /// A family reaching a builtin or synthetic body is left out: that body keeps its fixed contract.
-pub(crate) fn collect(
-    classes: &HashMap<String, ClassInfo>,
-    is_static: bool,
-) -> Vec<(String, Vec<FamilyMember>)> {
-    let mut families: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    for (class_name, info) in classes {
-        for method_key in methods(info, is_static).keys() {
-            if !is_dispatched(info, method_key, is_static) {
+pub(crate) fn groups(classes: &HashMap<String, ClassInfo>) -> Vec<FamilyGroup> {
+    let mut result = Vec::new();
+    for is_static in [false, true] {
+        let mut families: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+        for (class_name, info) in classes {
+            for method_key in methods(info, is_static).keys() {
+                if !is_dispatched(info, method_key, is_static) {
+                    continue;
+                }
+                let mut root = class_name.clone();
+                while let Some(parent) = classes.get(&root).and_then(|info| info.parent.clone()) {
+                    match classes.get(&parent) {
+                        Some(parent_info)
+                            if methods(parent_info, is_static).contains_key(method_key)
+                                && is_dispatched(parent_info, method_key, is_static) =>
+                        {
+                            root = parent;
+                        }
+                        _ => break,
+                    }
+                }
+                families
+                    .entry((root, method_key.clone()))
+                    .or_default()
+                    .push(class_name.clone());
+            }
+        }
+        'family: for ((_, method_key), mut names) in families {
+            if names.len() < 2 {
                 continue;
             }
-            let mut root = class_name.clone();
-            while let Some(parent) = classes.get(&root).and_then(|info| info.parent.clone()) {
-                match classes.get(&parent) {
-                    Some(parent_info)
-                        if methods(parent_info, is_static).contains_key(method_key)
-                            && is_dispatched(parent_info, method_key, is_static) =>
-                    {
-                        root = parent;
-                    }
-                    _ => break,
-                }
+            names.sort();
+            let mut members = Vec::with_capacity(names.len());
+            for class_name in names {
+                let info = &classes[&class_name];
+                let impl_class = if is_static {
+                    info.static_method_impl_classes.get(&method_key)
+                } else {
+                    info.method_impl_classes.get(&method_key)
+                };
+                let body_span = match impl_class {
+                    Some(owner) => match source_decl_span(classes, owner, &method_key, is_static) {
+                        Some(span) => Some(span),
+                        None => continue 'family,
+                    },
+                    None => None,
+                };
+                members.push((class_name, impl_class.cloned(), body_span));
             }
-            families
-                .entry((root, method_key.clone()))
-                .or_default()
-                .push(class_name.clone());
+            result.push(FamilyGroup { method_key, is_static, members });
         }
-    }
-    let mut result = Vec::new();
-    'family: for ((_, method_key), mut names) in families {
-        if names.len() < 2 {
-            continue;
-        }
-        names.sort();
-        let mut members = Vec::with_capacity(names.len());
-        for class_name in names {
-            let info = &classes[&class_name];
-            let sig = methods(info, is_static)[&method_key].clone();
-            let impl_class = if is_static {
-                info.static_method_impl_classes.get(&method_key)
-            } else {
-                info.method_impl_classes.get(&method_key)
-            };
-            let body_span = match impl_class {
-                Some(owner) => match source_decl_span(classes, owner, &method_key, is_static) {
-                    Some(span) => Some(span),
-                    None => continue 'family,
-                },
-                None => None,
-            };
-            members.push(FamilyMember {
-                class_name,
-                placeholder: impl_class.is_none() && !sig.declared_return,
-                sig,
-                body_span,
-            });
-        }
-        result.push((method_key, members));
     }
     result
 }

@@ -144,35 +144,19 @@ foreach ([new Sq(2), new Ci(1)] as $s) { echo $s->describe(), "\n"; var_dump($s-
     assert_eq!(out, "Sq=4\nfloat(4)\nCi=3\nfloat(3)\n");
 }
 
-/// A declared `float` override cannot be boxed without losing its int-to-float coercion, so a
-/// family that would need it is refused at compile time instead of miscompiled.
+/// A declared `float` return boxed by its family still coerces the int it returns.
 #[test]
-fn test_family_needing_to_box_declared_float_is_refused() {
-    let dir = make_cli_test_dir("elephc_override_family_float");
-    let php_path = dir.join("main.php");
-    std::fs::write(
-        &php_path,
+fn test_family_boxed_declared_float_return_still_coerces() {
+    let out = compile_and_run(
         r#"<?php
 abstract class A { abstract public function f(): mixed; }
 class B extends A { public function f(): string { return "b"; } }
 class C extends A { public function f(): float { return 5; } }
 function go(A $a) { var_dump($a->f()); }
-go(new B()); go(new C());
+go(new B()); go(new C()); var_dump((new C())->f());
 "#,
-    )
-    .unwrap();
-    let output = elephc_cli_command(&dir)
-        .arg("--emit-asm")
-        .arg(&php_path)
-        .output()
-        .expect("failed to run elephc CLI");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "expected a refusal, stderr={stderr}");
-    assert!(
-        stderr.contains("cannot dispatch them through one virtual call ABI"),
-        "unexpected error: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(out, "string(1) \"b\"\nfloat(5)\nfloat(5)\n");
 }
 
 /// A `static` override boxed into its parent's `static|false` call ABI still chains on the object.
@@ -191,4 +175,113 @@ echo (new A())->dup()->label(), "\n";
 "#,
     );
     assert_eq!(out, "bool(true)\nbool(false)\nclone\n");
+}
+
+/// A declared `string` parameter boxed by its family still receives the coerced string, while
+/// an untyped sibling receives the int unchanged.
+#[test]
+fn test_family_boxed_declared_string_param_coerces_on_entry() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function f(string $v) { var_dump($v); return strlen($v); } }
+class B extends A { public function f($v) { var_dump($v); return "b"; } }
+function go(A $a) { var_dump($a->f(12345)); }
+go(new A); go(new B);
+"#,
+    );
+    assert_eq!(out, "string(5) \"12345\"\nint(5)\nint(12345)\nstring(1) \"b\"\n");
+}
+
+/// Declared `int` and `bool` parameters boxed by their family coerce like a typed call.
+#[test]
+fn test_family_boxed_int_and_bool_params_coerce_on_entry() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class A { abstract public function f(int $v); }
+class B extends A { public function f(int $v) { var_dump($v); return $v + 1; } }
+class C extends A { public function f($v) { var_dump($v); return "c"; } }
+class P { public function g(bool $v) { var_dump($v); return 1; } }
+class Q extends P { public function g($v) { var_dump($v); return "q"; } }
+function go(A $a) { var_dump($a->f("7")); var_dump($a->f(true)); }
+function gp(P $p) { var_dump($p->g(2)); }
+go(new B); go(new C); gp(new P); gp(new Q);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(7)\nint(8)\nint(1)\nint(2)\nstring(1) \"7\"\nstring(1) \"c\"\nbool(true)\nstring(1) \"c\"\n\
+         bool(true)\nint(1)\nint(2)\nstring(1) \"q\"\n"
+    );
+}
+
+/// A boxed declared `int` parameter rejects a non-numeric string with PHP's TypeError.
+#[test]
+fn test_family_boxed_int_param_throws_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class A { abstract public function f(int $v); }
+class B extends A { public function f(int $v) { return $v + 1; } }
+class C extends A { public function f($v) { return "c"; } }
+function go(A $a, $x) { try { var_dump($a->f($x)); } catch (TypeError $e) { echo substr($e->getMessage(), 0, 52), "\n"; } }
+foreach (["5", "abc", 2.0, null] as $x) { go(new B, $x); }
+go(new C, "abc");
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(6)\nB::f(): Argument #1 ($v) must be of type int, string\nint(3)\n\
+         B::f(): Argument #1 ($v) must be of type int, null g\nstring(1) \"c\"\n"
+    );
+}
+
+/// Declared scalar returns boxed by their family coerce first, through the parent and directly.
+#[test]
+fn test_family_boxed_declared_scalar_returns_coerce() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class A { abstract public function f($v); }
+class B extends A { public function f($v): string { return $v * 2; } }
+class C extends A { public function f($v) { return [$v]; } }
+class D extends A { public function f($v): bool { return $v; } }
+class E extends A { public function f($v): int { return $v > 1; } }
+function go(A $a) { var_dump($a->f(3)); }
+go(new B); go(new C); go(new D); go(new E);
+$b = new B; var_dump($b->f(5));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"6\"\narray(1) {\n  [0]=>\n  int(3)\n}\nbool(true)\nint(1)\nstring(2) \"10\"\n"
+    );
+}
+
+/// Regression: a caller passing an object-returning family call to a typed parameter compiles,
+/// as it did before override families shared a call ABI.
+#[test]
+fn test_object_return_family_keeps_caller_type() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function obj() { return new A; } public function n() { return "A"; } }
+class B extends A { public function obj() { return null; } }
+function needA(A $a) { return $a->n(); }
+echo needA((new A)->obj()), "\n";
+$x = (new B)->obj(); var_dump($x);
+"#,
+    );
+    assert_eq!(out, "A\nNULL\n");
+}
+
+/// A free function returning a family call is inferred from the shared return, not from the
+/// root's own body (it is checked before any method body).
+#[test]
+fn test_free_function_returning_family_call() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function m($v) { return $v + 0; } }
+class B extends A { public function m($v) { return "s$v"; } }
+function go(A $c) { return $c->m(1); }
+echo go(new B), " ", go(new A), "\n";
+"#,
+    );
+    assert_eq!(out, "s1 1\n");
 }
