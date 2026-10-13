@@ -154,6 +154,10 @@ fn apply_static_method(
                 .get(&method_key),
             true,
             parent_is_source,
+            state
+                .static_method_declaring_classes
+                .get(&method_key)
+                .map(String::as_str),
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
@@ -291,6 +295,7 @@ fn apply_instance_method(
                 state.late_static_method_returns.get(&method_key),
                 false,
                 parent_is_source,
+                inherited_declaring_class.as_deref(),
             )?;
         }
     } else if has_override_attribute(method)

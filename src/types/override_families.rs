@@ -154,18 +154,87 @@ pub(crate) fn groups(classes: &HashMap<String, ClassInfo>) -> Vec<FamilyGroup> {
 
 /// Returns the return type every caller can share, or `None` when no member has a body yet.
 ///
-/// Implementations that agree on one representation keep their type, anything else is `Mixed`.
+/// Implementations that agree on one representation keep their type. Otherwise the family
+/// travels boxed: when one member's own return is already a boxed type naming every other
+/// member's value (`?N` over an override returning `N`, `static|false` over `static`), that type
+/// is shared, so callers keep its precise PHP type (property reads, `=== null` narrowing) instead
+/// of an untyped `mixed`; anything else is `Mixed`.
 pub(crate) fn agreed_return(members: &[FamilyMember]) -> Option<PhpType> {
-    let mut concrete = members
+    let concrete: Vec<&PhpType> = members
         .iter()
         .filter(|member| !member.placeholder)
-        .map(|member| &member.sig.return_type);
-    let first = concrete.next()?;
-    if concrete.all(|ty| same_abi(ty, first)) {
-        Some(first.clone())
-    } else {
-        Some(PhpType::Mixed)
+        .map(|member| &member.sig.return_type)
+        .collect();
+    let first = *concrete.first()?;
+    if concrete.iter().all(|ty| same_abi(ty, first)) {
+        return Some(first.clone());
     }
+    let boxed_cover = concrete.iter().find(|candidate| {
+        matches!(candidate, PhpType::Union(_))
+            && candidate.codegen_repr() == PhpType::Mixed
+            && concrete.iter().all(|ty| union_names(candidate, ty))
+    });
+    Some(boxed_cover.map_or(PhpType::Mixed, |ty| (*ty).clone()))
+}
+
+/// Returns whether every value of `ty` is one of the union `cover`'s members in the same
+/// representation (objects of any class share one pointer representation).
+fn union_names(cover: &PhpType, ty: &PhpType) -> bool {
+    let PhpType::Union(members) = cover else {
+        return false;
+    };
+    let member_of = |ty: &PhpType| members.iter().any(|member| same_abi(member, ty));
+    match ty {
+        PhpType::Union(tys) => tys.iter().all(member_of),
+        other => member_of(other),
+    }
+}
+
+/// Returns the boxed return a member shares with its family, as precise as its own return.
+///
+/// An already boxed return (`?static` resolved to the member's class, `int|string`) travels as it
+/// is. A raw one takes the family's boxed union with its own value in place of the members of the
+/// same representation: `static` under `static|false` stays the member's class (`C|false`), so a
+/// call through the member reads the properties only it declares. A plain `Mixed` agreement stays
+/// `Mixed`.
+pub(crate) fn boxed_member_return(agreed: &PhpType, own: &PhpType) -> PhpType {
+    if own.codegen_repr() == PhpType::Mixed {
+        return own.clone();
+    }
+    let PhpType::Union(cover) = agreed else {
+        return agreed.clone();
+    };
+    let mut refined: Vec<PhpType> = Vec::with_capacity(cover.len());
+    let mut placed = false;
+    for member in cover {
+        if same_abi(member, own) {
+            if !placed {
+                refined.push(own.clone());
+                placed = true;
+            }
+        } else {
+            refined.push(member.clone());
+        }
+    }
+    let refined = PhpType::Union(refined);
+    if placed && refined.codegen_repr() == PhpType::Mixed {
+        refined
+    } else {
+        agreed.clone()
+    }
+}
+
+/// Returns whether a declared parameter type is a union PHP would coerce a scalar argument into
+/// (`?string`, `string|array`, `int|float`): it names a scalar member, so a value outside the
+/// union is converted rather than passed as is.
+pub(crate) fn union_needs_scalar_coercion(ty: &PhpType) -> bool {
+    let PhpType::Union(members) = ty else {
+        return false;
+    };
+    ty.codegen_repr() == PhpType::Mixed
+        && members.iter().any(|member| {
+            matches!(member, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False)
+        })
 }
 
 /// Returns whether two types travel in the same physical representation.
