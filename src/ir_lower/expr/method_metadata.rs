@@ -229,6 +229,7 @@ pub(super) fn method_call_result_type_for_receiver_type(
     let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
             .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
+            .map(|bound| late_static_result_within_abi(bound, &return_ty))
             .unwrap_or(return_ty)
     } else {
         return_ty
@@ -282,6 +283,19 @@ pub(super) fn instance_method_late_static_return_for_ir(
         .get(normalized)
         .and_then(|interface_info| interface_info.late_static_method_returns.get(method_key))
         .cloned()
+}
+
+/// Keeps a late-static result type only while it travels in the signature's call ABI.
+///
+/// An override family can box a `static` return into the Mixed call ABI its siblings share
+/// (`crate::ir_lower::program::virtual_abi`); the body then hands back a Mixed cell, and typing
+/// the call as the bound object class would read that cell as an object pointer.
+pub(super) fn late_static_result_within_abi(bound: PhpType, nominal: &PhpType) -> PhpType {
+    if nominal.codegen_repr() == PhpType::Mixed && bound.codegen_repr() != PhpType::Mixed {
+        nominal.clone()
+    } else {
+        bound
+    }
 }
 
 /// Binds preserved late-static return syntax to an EIR call-site receiver type.

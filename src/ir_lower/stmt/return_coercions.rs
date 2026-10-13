@@ -284,3 +284,45 @@ pub(super) fn coerce_to_string(
     }
 }
 
+
+/// Re-applies a declared scalar parameter's coercion inside a body its override family boxed.
+///
+/// The family's shared call ABI passes the parameter as Mixed, so the caller no longer converts
+/// it the way a call to the unboxed signature would. This applies the same conversion on entry:
+/// `int` with PHP's coercive verification (a non-numeric string, null or container throws
+/// `TypeError`), `string`, `float` and `bool` with the conversions a typed call site performs.
+/// The local keeps its Mixed storage, now holding the coerced value.
+pub(crate) fn coerce_boxed_family_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    declared: &PhpType,
+    type_error_prefix: &str,
+) {
+    let value = ctx.load_local(name, None);
+    let coerced = match declared.codegen_repr() {
+        PhpType::Int => {
+            let data = ctx.intern_string(type_error_prefix);
+            ctx.emit_value(
+                Op::ReturnBoundaryMixedToInt,
+                vec![value.value],
+                Some(Immediate::Data(data)),
+                PhpType::Int,
+                Op::ReturnBoundaryMixedToInt.default_effects(),
+                None,
+            )
+        }
+        PhpType::Float => coerce_to_float(ctx, value, None),
+        PhpType::Str => coerce_to_string(ctx, value, None),
+        PhpType::Bool => ctx.emit_value(
+            Op::IsTruthy,
+            vec![value.value],
+            None,
+            PhpType::Bool,
+            Op::IsTruthy.default_effects(),
+            None,
+        ),
+        _ => return,
+    };
+    let boxed = ctx.box_value_as_mixed(coerced, PhpType::Mixed, None);
+    ctx.store_local(name, boxed, PhpType::Mixed, None);
+}

@@ -93,12 +93,38 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
         terminate_return(ctx, None);
         return;
     }
+    // A family-boxed body coerces to its DECLARED scalar return first, as the unboxed body
+    // did, and only then boxes the result into the family's Mixed call ABI.
+    let boxed_contract = ctx.boxed_return_contract.clone();
+    let saved_return = boxed_contract.as_ref().map(|declared| {
+        let saved = (ctx.return_type, ctx.return_php_type.clone());
+        ctx.return_type = crate::ir_lower::context::return_ir_type(declared);
+        ctx.return_php_type = declared.clone();
+        saved
+    });
     let value = if let Some(value_expr) = value_expr {
         lower_return_expr(ctx, value_expr)
     } else {
         emit_null_value(ctx, Some(span))
     };
-    let value = coerce_to_return_type(ctx, value, Some(span));
+    let mut value = coerce_to_return_type(ctx, value, Some(span));
+    if let (Some(declared), Some((return_type, return_php_type))) = (boxed_contract, saved_return) {
+        // `int` and `bool` share one storage word, so the coercion above keeps a `bool` value's
+        // PHP type; relabel it, or the box would tag `true` instead of `1`.
+        if ctx.builder.value_php_type(value.value).codegen_repr() != declared.codegen_repr() {
+            value = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(ctx.return_type)),
+                declared.clone(),
+                Op::Cast.default_effects(),
+                Some(span),
+            );
+        }
+        ctx.return_type = return_type;
+        ctx.return_php_type = return_php_type;
+        value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
+    }
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);

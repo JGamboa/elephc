@@ -47,6 +47,17 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
             "return_boundary_mixed_to_int without a TypeError message prefix".to_string(),
         ));
     };
+    // The same verification guards a family-boxed `int` PARAMETER on method entry
+    // (`ir_lower::stmt::coerce_boxed_family_param`), whose PHP message says "given".
+    let is_argument = ctx
+        .module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .is_some_and(|prefix| prefix.contains("(): Argument #"));
+    let word = |ty: &str| -> String {
+        format!("{} {}", ty, if is_argument { "given" } else { "returned" })
+    };
     let (prefix_label, prefix_len) = ctx.intern_string_data(data_id)?;
     let done = ctx.next_label("ret_boundary_int_done");
     let l_float_fail = ctx.next_label("ret_boundary_int_float_fail");
@@ -67,7 +78,7 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
         emit_float_result_fits_i64_or_jump(ctx, &l_float_fail);
         abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&l_float_fail);
-        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "float returned");
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("float"));
         ctx.emitter.label(&done);
         return store_if_result(ctx, inst);
     }
@@ -98,7 +109,7 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     emit_mixed_tag_branch(ctx, tag_reg, 9, &l_resource);
     emit_mixed_tag_branch(ctx, tag_reg, 10, &l_callable);
     // Any other tag is an object-like value; each arm throws and never falls through.
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "object returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("object"));
     // int / bool: the payload is already the integer value.
     ctx.emitter.label(&l_scalar);
     emit_move_reg(ctx, tag_reg, lo_reg);
@@ -110,7 +121,7 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     emit_float_result_fits_i64_or_jump(ctx, &l_float_fail);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&l_float_fail);
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "float returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("float"));
     // string: move the payload ptr/len into the string-result regs, then coerce strictly.
     ctx.emitter.label(&l_string);
     let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
@@ -121,16 +132,16 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&string_invalid);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "string returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("string"));
     // Non-coercible types throw a TypeError naming the runtime type, like PHP.
     ctx.emitter.label(&l_null);
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "null returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("null"));
     ctx.emitter.label(&l_array);
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "array returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("array"));
     ctx.emitter.label(&l_resource);
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "resource returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("resource"));
     ctx.emitter.label(&l_callable);
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "Closure returned");
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("Closure"));
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }

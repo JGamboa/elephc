@@ -382,6 +382,9 @@ pub(super) fn check_types_impl(
         }
     }
     checker.box_untyped_interface_method_params();
+    // Before any function body is inferred: `function go(A $a) { return $a->m(); }` is typed
+    // from the family return its overrides can share, not from one override's declaration.
+    checker.unify_override_family_returns();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,

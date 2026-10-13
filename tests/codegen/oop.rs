@@ -41,6 +41,8 @@ mod attributes;
 mod constants;
 #[path = "oop/abstract_properties.rs"]
 mod abstract_properties;
+#[path = "oop/override_family_abi.rs"]
+mod override_family_abi;
 #[path = "oop/property_hooks.rs"]
 mod property_hooks;
 #[path = "oop/datetime.rs"]

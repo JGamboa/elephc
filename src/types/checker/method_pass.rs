@@ -103,6 +103,10 @@ impl Checker {
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
+        // Families whose declarations already disagree are widened before the first pass, so a
+        // caller checked in that pass types the shared call correctly and a hierarchy that needs
+        // no re-inference still stabilizes in one pass.
+        self.unify_override_family_returns();
         loop {
             let classes_before_pass = self.classes.clone();
             let mut pass_errors = Vec::new();
@@ -278,6 +282,9 @@ impl Checker {
                 }
             }
 
+            // A caller typed through an abstract or overridden method must see the return every
+            // override can share before the next pass re-infers from it.
+            self.unify_override_family_returns();
             let stabilized = self.classes == classes_before_pass;
             let out_of_passes = method_passes_remaining == 0;
             if stabilized || out_of_passes {
@@ -493,6 +500,23 @@ impl Checker {
             inferred_return
         };
         let method_key = php_symbol_key(&method.name);
+        // An override family already widened this inferred return; re-inferring the body's own
+        // narrower type would let a sibling later in this pass type a call from it.
+        let effective_return = match self.override_family_returns.get_mut(&(
+            class.name.clone(),
+            method_key.clone(),
+            method.is_static,
+        )) {
+            Some((widened, own)) if method.return_type.is_none() => {
+                *own = effective_return.clone();
+                if super::override_returns::covers(widened, &effective_return) {
+                    widened.clone()
+                } else {
+                    effective_return
+                }
+            }
+            _ => effective_return,
+        };
         // A subclass copies the method signature before body inference runs. Calls through
         // that subclass must use the implementing method's return ABI, or a boxed result can
         // be read as a scalar even though both names dispatch to the same body.
