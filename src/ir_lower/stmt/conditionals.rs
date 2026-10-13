@@ -162,9 +162,10 @@ fn lower_if_chain(
 /// skipped edge's slot with the stored representation: `var_dump($b)` printed a raw integer
 /// where PHP prints `NULL`. Each edge now starts from the split's types and ends in a deferred
 /// tail. When the edges agree, the merge simply takes their types; when they disagree only in
-/// array storage the tails are reconciled exactly as an `if` statement's arms are; a null local
-/// one edge turned into an array takes the array (its null slot reads back as PHP null). Any
-/// other disagreement is joined as boxed `mixed`: each edge boxes its value at its tail.
+/// array storage the tails are reconciled exactly as an `if` statement's arms are. Any other
+/// disagreement (including null against an array: adopting the array left the skipped edge's
+/// null word typed as an array, so `=== null`, `is_array` and `$a[] = v` misread it) is joined
+/// as boxed `mixed`: each edge boxes its own value at its tail.
 pub(crate) struct LazyBranchJoin {
     merge: BlockId,
     split_types: TypeEnv,
@@ -232,19 +233,6 @@ impl LazyBranchJoin {
             if reprs.iter().all(is_array) {
                 needs_array_join = true;
                 continue;
-            }
-            let arrays = reprs.iter().filter(|ty| is_array(ty)).count();
-            let nulls = reprs
-                .iter()
-                .filter(|ty| matches!(ty, Some(PhpType::Void)))
-                .count();
-            if arrays > 0 && arrays + nulls == reprs.len() {
-                if let Some(array_ty) = types.iter().flatten().find(|ty| {
-                    matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-                }) {
-                    adopted.insert(name.clone(), (*array_ty).clone());
-                    continue;
-                }
             }
             // Any other disagreement (null and int, int and float, an object and a boxed
             // `mixed`, ...) is joined as boxed `mixed`: every edge boxes its own value before it

@@ -273,3 +273,46 @@ fn test_conditional_operand_retypes_local_on_one_edge() {
         "NULL\nfloat(2.5)\nNULL\nNULL\ni|int(2)\nint(0)\nstring(1) \"x\"\nobject\nrhs\n"
     );
 }
+
+/// Verifies a lazy operand of a `while`/`for`/`do` condition that retypes a local keeps the value
+/// across iterations (review P2c H1: the short edge re-boxed the entry `null` over the back edge's
+/// value) and that a null-typed `!$x` in such a condition is not folded (H2).
+#[test]
+fn test_loop_condition_lazy_operand_retypes_local() {
+    let out = compile_and_run(
+        r#"<?php
+        function a() { $x = null; $i = 0; while ($i < 3 && ($x = 10)) { $i++; } var_dump($x); echo $x + 1, "\n"; }
+        function e() { $x = null; for ($i = 0; $i < 3 && ($x = 10); $i++) {} var_dump($x); }
+        function g() { $x = null; $i = 0; do { $i++; } while ($i < 3 && ($x = 10)); var_dump($x); }
+        function t() { $x = null; $i = 0; while ($i < 3 ? ($x = 10) : false) { $i++; } var_dump($x); }
+        function n() { $x = null; $i = 0; while ($i < 3 && ($x ?? $x = 10)) { $i++; } var_dump($x); }
+        function z() { $x = 5; $i = 0; while ($i < 3 && ($x = null) === null) { $i++; } var_dump($x); }
+        function c() { $x = null; $i = 0; while ($i++ < 6 && !$x && ($x = $i) < 3) { } var_dump($i, $x); }
+        a(); e(); g(); t(); n(); z(); c();
+        "#,
+    );
+    assert_eq!(
+        out,
+        "int(10)\n11\nint(10)\nint(10)\nint(10)\nint(10)\nNULL\nint(2)\nint(1)\n"
+    );
+}
+
+/// Verifies `$a = null; $c && $a = [1];` leaves a real PHP null on the skipped edge (review P2c
+/// H3: the join adopted the array, so `=== null`, `is_array` and `$a[] = v` misread the null word)
+/// and that a function returning such a local keeps the null.
+#[test]
+fn test_lazy_null_to_array_join_keeps_php_null() {
+    let out = compile_and_run(
+        r#"<?php
+        function t1($c) { $a = null; $c && $a = [1]; var_dump($a === null, is_array($a), gettype($a)); $a[] = 2; var_dump(count($a)); }
+        function t2($c) { $a = null; $c || $a = ['k' => 'v']; var_dump(isset($a), gettype($a)); $a['z'] = 1; var_dump(count($a)); }
+        function t5($c) { $x = null; $c && $x = 5; return $x; }
+        t1(false); t1(true); t2(true); t2(false);
+        var_dump(t5(true), t5(false));
+        "#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nstring(4) \"NULL\"\nint(1)\nbool(false)\nbool(true)\nstring(5) \"array\"\nint(2)\nbool(false)\nstring(4) \"NULL\"\nint(1)\nbool(true)\nstring(5) \"array\"\nint(2)\nint(5)\nNULL\n"
+    );
+}

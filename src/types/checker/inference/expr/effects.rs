@@ -184,11 +184,11 @@ impl Checker {
                 if branch_retypes_existing_local(env, &then_env, guard_var.as_deref())
                     || branch_retypes_existing_local(env, &else_env, guard_var.as_deref())
                 {
-                    let defined_before =
-                        env.keys().cloned().collect::<std::collections::HashSet<_>>();
+                    let before = env.clone();
                     let then_ty = self.infer_type_with_assignment_effects(then_expr, env)?;
                     let else_ty = self.infer_type_with_assignment_effects(else_expr, env)?;
-                    env.retain(|name, _| defined_before.contains(name));
+                    env.retain(|name, _| before.contains_key(name));
+                    widen_lazy_edge_disagreements(env, &[&then_env, &else_env]);
                     return Ok(merge_match_arm_result_type(self, then_ty, else_ty));
                 }
                 merge_array_storage_effects(env, &else_env);
@@ -761,10 +761,39 @@ impl Checker {
             merge_array_storage_effects(env, &branch_env);
             return Ok(ty);
         }
-        let defined_before = env.keys().cloned().collect::<std::collections::HashSet<_>>();
+        let before = env.clone();
         let ty = self.infer_type_with_assignment_effects(operand, env)?;
-        env.retain(|name, _| defined_before.contains(name));
+        env.retain(|name, _| before.contains_key(name));
+        widen_lazy_edge_disagreements(env, &[&before, &branch_env]);
         Ok(ty)
+    }
+}
+
+/// After a lazily evaluated region was re-checked on the real environment, types a local the
+/// edges leave with DIFFERENT representations as `mixed`, which is what EIR lowering's
+/// `LazyBranchJoin` boxes it to. Keeping the store's own type (`int` for `$x = null; $c && $x =
+/// 5;`) let a caller-visible type claim `int` for a value that may be PHP null: `return $x;`
+/// returned `int(0)` instead of `NULL`. Array-only disagreements keep the joined array type.
+fn widen_lazy_edge_disagreements(env: &mut TypeEnv, edges: &[&TypeEnv]) {
+    let names = env.keys().cloned().collect::<Vec<_>>();
+    for name in names {
+        if Checker::narrowed_place_key_is_property(&name) {
+            continue;
+        }
+        let reprs = edges
+            .iter()
+            .filter_map(|edge| edge.get(&name).map(PhpType::codegen_repr))
+            .collect::<Vec<_>>();
+        if reprs.len() < 2 || reprs.windows(2).all(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        if reprs
+            .iter()
+            .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+        {
+            continue;
+        }
+        env.insert(name, PhpType::Mixed);
     }
 }
 
