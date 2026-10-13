@@ -442,11 +442,18 @@ fn parse_expr_bp_inner(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp && !is_assignment_expression_target(&lhs) {
+            // A place directly before an assignment operator is always its target, whatever
+            // operator encloses it: PHP reads `a ?: $o->p = v`, `a || $x[k] = v`, `!$x = f()`
+            // and `$a + $b = 3` as `a ?: ($o->p = v)` and so on. `call()[k]` is a place too,
+            // written on a temporary, and a `?->` chain is one PHP refuses to write.
+            let is_place = is_assignment_expression_target(&lhs)
+                || super::assignment_targets::is_call_dimension_place(&lhs)
+                || is_nullsafe_place(&lhs);
+            if l_bp < min_bp && !is_place {
                 break;
             }
 
-            if !is_assignment_expression_target(&lhs) {
+            if !is_place {
                 if super::assignment_targets::is_dynamic_class_member_read(&lhs) {
                     return Err(CompileError::new(
                         lhs.span,
@@ -455,10 +462,30 @@ fn parse_expr_bp_inner(
                 }
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
+            super::assignment_targets::reject_nullsafe_write(&lhs, lhs.span)?;
 
             let span = tokens[*pos].1.span;
             *pos += 1;
+            if matches!(op, AssignmentOperator::Assign)
+                && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+            {
+                // `$x = &$y` as an operand (`$ok || $ref = &$items[0]`). The source is a
+                // variable chain, so it binds tighter than any operator that may follow it.
+                *pos += 1;
+                let source = parse_expr_bp(tokens, pos, REFERENCE_SOURCE_BP)?;
+                let span = span.merge(source.span);
+                lhs = super::assignment_targets::reference_assignment_expr(lhs, source, span)?;
+                continue;
+            }
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            if super::assignment_targets::is_call_dimension_place(&lhs) {
+                let span = span.merge(rhs.span);
+                if !matches!(op, AssignmentOperator::Assign) {
+                    return Err(CompileError::new(span, CALL_DIMENSION_UPDATE_ERROR));
+                }
+                lhs = super::assignment_targets::call_dimension_assignment_expr(lhs, rhs, span)?;
+                continue;
+            }
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
@@ -677,6 +704,27 @@ fn parse_object_member(
             "Expected property or method name after '->'"
         },
     ))
+}
+
+/// Binding power for the source of `= &source`: above every binary operator, so only the
+/// variable chain (`$a`, `$o->p`, `$a[k]`, `f()`) is taken.
+const REFERENCE_SOURCE_BP: u8 = 40;
+
+/// Diagnostic for a compound or `??=` update of one dimension of a call result.
+pub(crate) const CALL_DIMENSION_UPDATE_ERROR: &str =
+    "Compound assignment to a dimension of a call result (`f()[k] += v`) is not supported; assign the result to a variable first";
+
+/// True for a write place that goes through `?->`, which is reported with PHP's diagnostic
+/// instead of the generic invalid-target one.
+fn is_nullsafe_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::NullsafePropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => {
+            is_nullsafe_place(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => is_nullsafe_place(array),
+        _ => false,
+    }
 }
 
 /// Represents the specific assignment operator encountered during parsing.
