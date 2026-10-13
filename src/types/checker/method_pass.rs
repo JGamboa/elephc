@@ -278,6 +278,9 @@ impl Checker {
                 }
             }
 
+            // A caller typed through an abstract or overridden method must see the return every
+            // override can share before the next pass re-infers from it.
+            self.unify_override_family_returns();
             let stabilized = self.classes == classes_before_pass;
             let out_of_passes = method_passes_remaining == 0;
             if stabilized || out_of_passes {
@@ -493,6 +496,21 @@ impl Checker {
             inferred_return
         };
         let method_key = php_symbol_key(&method.name);
+        // An override family already widened this inferred return; re-inferring the body's own
+        // narrower type would let a sibling later in this pass type a call from it.
+        let effective_return = match self.override_family_returns.get(&(
+            class.name.clone(),
+            method_key.clone(),
+            method.is_static,
+        )) {
+            Some(widened)
+                if method.return_type.is_none()
+                    && super::override_returns::covers(widened, &effective_return) =>
+            {
+                widened.clone()
+            }
+            _ => effective_return,
+        };
         // A subclass copies the method signature before body inference runs. Calls through
         // that subclass must use the implementing method's return ABI, or a boxed result can
         // be read as a scalar even though both names dispatch to the same body.

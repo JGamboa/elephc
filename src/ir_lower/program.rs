@@ -27,6 +27,7 @@ use crate::parser::ast::{
 use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 mod metadata;
+mod virtual_abi;
 mod runtime_features;
 mod eval_aot;
 /// Read by `builtin_datetime`, which decides whether a module's eval fragments can reach the

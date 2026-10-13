@@ -17,6 +17,9 @@ mod array_keys;
 /// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
 /// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
 pub mod dynamic_params;
+/// Override families of dispatched methods; shared so the checker's return types and the EIR
+/// virtual call ABI cannot disagree about one family.
+pub(crate) mod override_families;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
 /// Call argument planning: named, positional, and spread semantics.

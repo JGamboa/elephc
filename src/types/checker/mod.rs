@@ -36,6 +36,7 @@ mod generic_variance;
 mod inference;
 mod loop_storage;
 mod method_pass;
+mod override_returns;
 mod mixed_storage_scan;
 mod packed_counter;
 pub(crate) mod null_probe;
@@ -131,6 +132,10 @@ pub(crate) struct Checker {
     pub param_specialization_seen: HashSet<(String, usize)>,
     /// Untyped interface positions whose implementation uses a stable boxed ABI.
     pub interface_method_boxed_params: HashSet<(String, usize)>,
+    /// Inferred method returns an override family widened, keyed by (class, method, is_static).
+    /// A later body pass keeps the widened type instead of narrowing it back mid-pass, so a
+    /// sibling method returning the call never re-infers from the narrower one.
+    pub override_family_returns: HashMap<(String, String, bool), PhpType>,
     /// Every generic instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The checker instantiates into `fn_decls`/`functions` so the CALL type-checks, but
@@ -1220,6 +1225,9 @@ fn check_types_on_compiler_stack(
     checker.verify_class_type_argument_bounds(&generics.class_type_argument_bounds)?;
 
     propagate_abstract_return_types(&mut checker);
+    // The last-writer propagation above is kept for families that reach a builtin body; source
+    // families get the agreed (or boxed) return every override can share.
+    checker.unify_override_family_returns();
     apply_reference_property_promotions(&mut checker);
     clone_override_storage::widen_clone_override_property_storage(&mut checker);
     clone_override_storage::widen_property_unset_storage(&mut checker);
