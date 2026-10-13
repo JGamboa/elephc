@@ -66,18 +66,23 @@ fn reject_reserved_name(errors: &mut Vec<CompileError>, span: Span, name: &Name)
     }
 }
 
-/// Returns true for the call the parser itself synthesizes for PHP's `$class::NAME` /
-/// `$class::$prop` (`crate::parser::expr::pratt::parse_dynamic_class_member_read`).
+/// Returns true for the call the parser itself synthesizes for PHP's `$class::NAME`,
+/// `$class::$prop` and `$class::method(...)` (`crate::parser::expr::pratt::parse_dynamic_class_member_read`).
 ///
 /// The source was plain PHP, so the reserved-name rule must not fire on it. A hand-written call
-/// of the identical two-argument shape is indistinguishable after parsing and is accepted too;
+/// of the identical shape (literal member name second) is indistinguishable after parsing and is accepted too;
 /// it has exactly the semantics of the PHP construct it spells.
 fn is_dynamic_class_member_desugar(name: &Name, args: &[Expr]) -> bool {
     let bare = name.parts.last().map(String::as_str).unwrap_or_default();
-    matches!(
-        bare,
-        "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property"
-    ) && matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }])
+    match bare {
+        "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property" => {
+            matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }])
+        }
+        "__elephc_dynamic_static_call" => {
+            matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }, ..])
+        }
+        _ => false,
+    }
 }
 
 /// Audits a statement list in order.

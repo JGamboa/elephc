@@ -391,18 +391,19 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code.
         //
-        // Plus two parser desugar targets, `__elephc_dynamic_class_constant` and
-        // `__elephc_dynamic_static_property` (`$class::NAME` / `$class::$prop`), expanded in
+        // Plus three parser desugar targets, `__elephc_dynamic_class_constant`,
+        // `__elephc_dynamic_static_property` and `__elephc_dynamic_static_call`
+        // (`$class::NAME` / `$class::$prop` / `$class::m()`), expanded in
         // `ir_lower` and never reachable from eval.
-        assert_eq!(eval_internal, 113);
+        assert_eq!(eval_internal, 114);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest,
-        // plus the two `__elephc_dynamic_*` `$class::X` desugar targets.
-        assert_eq!(aot_registry, 739);
+        // plus the three `__elephc_dynamic_*` `$class::X` desugar targets.
+        assert_eq!(aot_registry, 740);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -454,9 +455,9 @@ mod tests {
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
-        // call from AOT code and have no eval execution route of their own; and the two
+        // call from AOT code and have no eval execution route of their own; and the three
         // `__elephc_dynamic_*` `$class::X` desugar targets, which ir_lower expands inline.
-        assert_eq!(unsupported, 466);
+        assert_eq!(unsupported, 467);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

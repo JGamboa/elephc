@@ -166,12 +166,24 @@ fn parse_expr_bp_inner(
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     reject_named_args_in_dynamic_call(&dynamic_args, span)?;
-                    let mut call_args =
-                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
+                    // A literal method name dispatches on the receiver's runtime class like
+                    // `$cls::NAME` (`__elephc_dynamic_static_call`, expanded in ir_lower), so
+                    // `$obj::staticMethod()` resolves statics and late static binding. A
+                    // variable method name keeps the generic callable-array path.
+                    let primitive = if matches!(member.kind, ExprKind::StringLiteral(_)) {
+                        "__elephc_dynamic_static_call"
+                    } else {
+                        "call_user_func"
+                    };
+                    let mut call_args = if primitive == "call_user_func" {
+                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)]
+                    } else {
+                        vec![lhs, member]
+                    };
                     call_args.extend(dynamic_args);
                     lhs = Expr::new(
                         ExprKind::FunctionCall {
-                            name: crate::names::Name::unqualified("call_user_func"),
+                            name: crate::names::Name::unqualified(primitive),
                             args: call_args,
                         },
                         span,

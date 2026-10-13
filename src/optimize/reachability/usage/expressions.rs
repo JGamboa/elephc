@@ -299,6 +299,18 @@ impl Scanner<'_> {
             "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property" => {
                 self.literal_class_or_hazard(first)
             }
+            // `$class::m()` dispatches over every class declaring `m`, static or instance.
+            "__elephc_dynamic_static_call" => {
+                self.literal_class_or_hazard(first);
+                match args.get(1).map(|arg| &arg.kind) {
+                    Some(ExprKind::StringLiteral(method)) => {
+                        let method = php_symbol_key(method);
+                        self.usage.wildcard_methods.insert((method.clone(), true));
+                        self.usage.wildcard_methods.insert((method, false));
+                    }
+                    _ => self.usage.hazards.dynamic_method = true,
+                }
+            }
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
             "eval" => {
                 self.usage.hazards.dynamic_function = true;

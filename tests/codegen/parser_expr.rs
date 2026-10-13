@@ -84,3 +84,77 @@ fn test_mixed_receiver_subscript_string_miss_warns() {
     assert_eq!(output.stdout, "|end");
     assert!(output.stderr.contains("Uninitialized string offset 7"), "{}", output.stderr);
 }
+
+/// Verifies `$receiver::method()` dispatches on the receiver's runtime class: statics resolve
+/// with late static binding, `$this::inst()` runs on `$this`, an instance method from outside
+/// throws PHP's "cannot be called statically" Error, and an unknown method is a catchable Error.
+#[test]
+fn test_dynamic_receiver_static_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+        class A {
+            public static function hi($x) { return "A:$x"; }
+            public static function who() { return static::class; }
+            public static function log($m): void { echo "log:$m\n"; }
+            public function inst() { return 'inst:' . static::class; }
+            public function viaThis() { return $this::inst() . '/' . $this::who(); }
+        }
+        class B extends A { public static function hi($x) { return "B:$x"; } }
+        function m(mixed $r) { return $r::hi('m') . '/' . $r::who(); }
+        $a = new A; $b = new B; $c = 'b';
+        echo $a::hi(1), '|', $b::hi(2), '|', $c::hi(3), '|', $b::who(), "\n";
+        echo m($b), '|', m('A'), '|', $b->viaThis(), "\n";
+        var_dump($b::log('x'));
+        try { $a::inst(); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        try { $a::nope(); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "A:1|B:2|B:3|B\nB:m/B|A:m/A|inst:B/B\nlog:x\nNULL\n\
+         Error: Non-static method A::inst() cannot be called statically\n\
+         Call to undefined method A::nope()\n"
+    );
+}
+
+/// Verifies the variable-method-name form (`$cls::$m()`) keeps its existing callable path.
+#[test]
+fn test_dynamic_receiver_variable_method_name_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+        class A { public static function hi() { return 'hi'; } }
+        $c = 'A'; $m = 'hi';
+        echo $c::$m(), "\n";
+        "#,
+    );
+    assert_eq!(out, "hi\n");
+}
+
+/// Verifies a by-reference parameter reached through `$receiver::method()` is refused at compile
+/// time instead of silently passing a copy.
+#[test]
+fn test_dynamic_receiver_static_call_by_ref_is_refused() {
+    let error = compile_cli_file_with_flags_expect_failure(
+        r#"<?php
+        class A { public static function bump(&$n) { $n++; } }
+        $b = new A; $n = 1;
+        $b::bump($n); echo $n;
+        "#,
+        &[],
+    );
+    assert!(error.contains("takes a by-reference parameter"), "{error}");
+}
+
+/// Verifies `--strict-php` accepts `$obj::method()` although it desugars to an internal call.
+#[test]
+fn test_dynamic_receiver_static_call_is_accepted_by_strict_php() {
+    let out = compile_cli_file_and_run_with_flags(
+        r#"<?php
+        class Shell { public static function v() { return 'v1'; } }
+        function v($shell) { return $shell::v(); }
+        echo v(new Shell()), v('Shell');
+        "#,
+        &["--strict-php"],
+    );
+    assert_eq!(out, "v1v1");
+}
