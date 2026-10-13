@@ -69,6 +69,8 @@ fn check_source_with_defines_and_options(
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
     // so a `(object)` cast has the helper it is lowered to and a program that declares that
     // helper's own name is rejected here rather than reaching the checker as a duplicate.
@@ -100,6 +102,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
+    let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
