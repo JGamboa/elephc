@@ -409,29 +409,49 @@ fn test_dynamic_static_call_by_ref_candidate_is_arm_local() {
     assert_eq!(out, "uid:a|img:b|E\n");
 }
 
-/// Verifies Carbon's `$instance::setLastErrors()` shape: a private static inherited from a
-/// trait-using parent, whose `static::$prop` is not redeclared, runs on the shared storage; a
-/// private static that needs `static::class` throws in its arm instead of answering wrongly.
+/// Verifies an inherited private static whose body depends on late static binding in any
+/// form (`static::`, `new static`, `instanceof static`, a forwarding `self::`/`parent::` call,
+/// even Carbon's `static::$lastErrors = ...`) throws in its arm instead of binding `static` to
+/// the declaring class; a body free of it runs normally.
 #[test]
 fn test_dynamic_static_call_inherited_private_late_static() {
     let out = compile_and_run(
         r#"<?php
-        trait Creator {
-          protected static $lastErrors = '';
-          public static function createFromFormat($v) { $instance = new static(); $instance::setLastErrors($v); return $instance; }
-          private static function setLastErrors($e): void { static::$lastErrors = $e; }
-          public static function getLastErrors() { return static::$lastErrors; }
+        class A0 { public static function who() { return static::class; } }
+        class P extends A0 {
+          protected static $last = '';
+          public static function run(string $m) { $o = new static(); try { return $o::$m(); } catch (\Error $e) { return 'E'; } }
+          public static function a() { $o = new static(); try { return $o::viaSelf(); } catch (\Error $e) { return 'E'; } }
+          public static function b() { $o = new static(); try { return $o::viaParent(); } catch (\Error $e) { return 'E'; } }
+          public static function c() { $o = new static(); try { return $o::viaInstanceof(); } catch (\Error $e) { return 'E'; } }
+          public static function d() { $o = new static(); try { return $o::viaProp(); } catch (\Error $e) { return 'E'; } }
+          public static function e() { $o = new static(); try { return $o::plain(); } catch (\Error $e) { return 'E'; } }
+          private static function viaSelf() { return self::helper(); }
+          private static function helper() { return static::class; }
+          private static function viaParent() { return parent::who(); }
+          private static function viaInstanceof() { $o = new K; return $o instanceof static ? 'y' : 'n'; }
+          private static function viaProp() { static::$last = 'x'; return 'set'; }
+          private static function plain() { return 'plain'; }
         }
-        class Carbon { use Creator; }
-        class SupportCarbon extends Carbon {}
-        echo get_class(SupportCarbon::createFromFormat('x')), SupportCarbon::getLastErrors(), Carbon::getLastErrors(), "\n";
-        class P { protected static $log = ''; public static function make($v) { $o = new static(); $o::rec($v); return $o; }
-          private static function rec($v): void { static::$log .= static::class . $v; } }
         class K extends P {}
-        try { K::make('a'); echo "no error\n"; } catch (\Error $e) { echo "E\n"; }
+        echo K::a(), K::b(), K::c(), K::d(), K::e(), "\n";
         "#,
     );
-    assert_eq!(out, "SupportCarbonxx\nE\n");
+    assert_eq!(out, "EEEEplain\n");
+}
+
+/// Verifies a non-literal spread that may fill a by-reference parameter throws in that arm.
+#[test]
+fn test_dynamic_static_call_spread_into_by_ref_throws() {
+    let out = compile_and_run(
+        r#"<?php
+        class Img { public static function f($s, &$t = null) { $t = "T"; return "img:$s"; } }
+        $c = "Img"; $a = ["s", "orig"];
+        try { echo $c::f(...$a); } catch (\Error $e) { echo 'E'; }
+        echo $a[1], "\n";
+        "#,
+    );
+    assert_eq!(out, "Eorig\n");
 }
 
 /// Verifies `unset($class::$prop[...])` is refused at compile time.

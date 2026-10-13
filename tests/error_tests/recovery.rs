@@ -529,3 +529,18 @@ fn test_parser_recovery_unclosed_delimiter_stops_at_statement_end() {
         assert!(messages.iter().all(|m| !m.contains("Expected '}'") && !m.contains("RBrace")), "{:?}", messages);
     }
 }
+
+/// Verifies a builtin by-reference parameter rejects a `$class::$prop[k]` / `$class::K[k]`
+/// argument (it would write into a temporary), like a call-result argument.
+#[test]
+fn test_error_dynamic_member_to_builtin_by_ref_parameter_is_rejected() {
+    let head = "<?php class C { public static $p = ['n' => 1, 'a' => [1, 2, 3]]; const K = ['a' => [1]]; } $c = 'C';";
+    for body in [
+        "settype($c::$p['n'], 'string');",
+        "array_splice($c::$p['a'], 0, 1);",
+        "array_splice($c::K['a'], 0, 1);",
+        "$o = new C; settype($o::$p['n'], 'string');",
+    ] {
+        expect_error(&format!("{head} {body}"), "Writing a static property through a dynamic class");
+    }
+}

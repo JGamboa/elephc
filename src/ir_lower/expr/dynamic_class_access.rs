@@ -282,6 +282,7 @@ fn lower_dynamic_static_call(
 
     let method_key = php_symbol_key(method);
     let passed_args = call_args.len();
+    let first_spread = call_args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)));
     let mut candidates: Vec<MethodCandidate> = ctx
         .classes
         .iter()
@@ -316,10 +317,12 @@ fn lower_dynamic_static_call(
                 .flatten();
             // A by-reference parameter only matters when this call site passes that argument:
             // the checker saw the by-value primitive, so the write-back cannot happen.
+            // A non-literal spread may fill every parameter from its position on.
+            let reached = first_spread.map_or(passed_args, |_| usize::MAX);
             let by_ref_unsupported = sig
                 .ref_params
                 .iter()
-                .take(passed_args)
+                .take(reached)
                 .any(|by_ref| *by_ref)
                 .then(|| {
                     format!(
@@ -742,9 +745,8 @@ fn flatten_literal_spreads(args: &[Expr]) -> Vec<Expr> {
 }
 
 /// Returns why calling the private static `declaring::method_key()` on the declaring class
-/// (instead of with `static` bound to a subclass) could differ from PHP, or `None` when it
-/// cannot: every `static::` use in its body is a static property that no subclass of
-/// `declaring` redeclares, so `static::$p` and `declaring::$p` name the same storage.
+/// (instead of with `static` bound to the receiver's subclass) could differ from PHP, or `None`
+/// when its body provably never observes the called class (`lsb_taint`, a typed AST walk).
 fn inherited_private_late_static_blocker(
     ctx: &LoweringContext<'_, '_>,
     declaring: &str,
@@ -752,47 +754,9 @@ fn inherited_private_late_static_blocker(
 ) -> Option<String> {
     let info = ctx.classes.get(declaring)?;
     let decl = info.method_decls.iter().find(|decl| php_symbol_key(&decl.name) == method_key)?;
-    let body = format!("{:?}", decl.body);
-    let blocked = || {
-        Some(format!(
-            "elephc: calling private static method {declaring}::{method_key}() through a subclass with `$class::{method_key}()` is not supported because its late static binding would differ"
-        ))
-    };
-    if body.contains("get_called_class") {
-        return blocked();
-    }
-    // Every late-static node carries `receiver: Static` in its Debug form (`static::class`
-    // ends right after it, without a trailing field).
-    const MARKER: &str = "receiver: Static";
-    let mut rest = body.as_str();
-    while let Some(index) = rest.find(MARKER) {
-        let before = rest[..index].trim_end();
-        let node = before.strip_suffix('{').map(str::trim_end).unwrap_or(before);
-        let is_property = [
-            "StaticPropertyAccess",
-            "StaticPropertyAssign",
-            "StaticPropertyArrayPush",
-            "StaticPropertyArrayAssign",
-        ]
-        .iter()
-        .any(|kind| node.ends_with(kind));
-        let after = &rest[index + MARKER.len()..];
-        let property = after
-            .strip_prefix(", property: \"")
-            .and_then(|tail| tail.split('"').next());
-        let (true, Some(property)) = (is_property, property) else {
-            return blocked();
-        };
-        let base = info.static_property_declaring_classes.get(property);
-        let redeclared = ctx.classes.iter().any(|(other, other_info)| {
-            other != declaring
-                && super::property_access::class_extends_class(ctx, other, declaring)
-                && other_info.static_property_declaring_classes.get(property) != base
-        });
-        if redeclared {
-            return blocked();
-        }
-        rest = after;
-    }
-    None
+    super::lsb_taint::body_uses_late_static_binding(&decl.body).then(|| {
+        format!(
+            "elephc: calling private static method {declaring}::{method_key}() through a subclass with `$class::{method_key}()` is not supported because it depends on late static binding"
+        )
+    })
 }
