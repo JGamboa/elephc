@@ -17,15 +17,23 @@
 //!   `__destruct` timing differ from PHP for a program that DEPENDS on collection (drops every
 //!   other reference to a key and then observes the map). Every program that does not rely on
 //!   collection behaves as in PHP: `offsetGet/offsetSet/offsetExists/offsetUnset`, `count()`,
-//!   insertion-ordered iteration with the key objects as keys, the `TypeError` for a non-object
-//!   key, the `Error` for a missing key and for `$map[] = ...`. Keys are identified by
+//!   LIVE insertion-ordered iteration (entries added during a `foreach` are visited, removed ones
+//!   skipped), the `TypeError` for a non-object (or `null`) key, the `Error` for a missing key,
+//!   and the `Exception` from `serialize()`/`unserialize()`. Keys are identified by
 //!   `spl_object_id`, which cannot be reused while the map keeps the object alive.
+//!   Known differences: `var_dump()`/`print_r()` show the private bookkeeping properties (elephc
+//!   does not honour `__debugInfo`), `$map[] = v` is a backend error rather than PHP's
+//!   `Error: Cannot append to WeakMap`, and the class has `__serialize`/`__unserialize` methods.
 //! - `ErrorException` supports `severity` / `getSeverity()`. Its `$filename` and `$line`
-//!   parameters accept only `null`: elephc's `getFile()` / `getLine()` are compiler intrinsics
-//!   that read a per-module path and the `new` line, so honouring a caller-supplied file or line
-//!   needs a backend change. The parameters are typed with an internal marker interface no value
-//!   can satisfy, which turns a non-null argument into a compile-time type error naming
-//!   `__ElephcUnsupportedErrorExceptionFileOrLine` instead of a silently wrong `getLine()`.
+//!   parameters accept only `null`, because elephc's `getFile()` is a per-module constant and
+//!   `getLine()` cannot be set from PHP. They are typed with an internal marker interface no value
+//!   satisfies, and the checker reports a non-null argument as "not supported yet"
+//!   (`call_validation::require_compatible_arg_type`). This does NOT make `getLine()` correct:
+//!   like every Throwable whose class declares its own constructor, an `ErrorException` currently
+//!   reports line 0 (pending, frente P14).
+//! - Injection: `WeakMap` whenever the program names it or introspects/constructs classes
+//!   dynamically; `ErrorException` only when the program NAMES it (class position or string
+//!   literal), so plain introspection does not pull in an Exception subclass.
 //! - A user declaration of either global class name is rejected, as PHP rejects it.
 
 use std::sync::OnceLock;
@@ -38,8 +46,12 @@ use crate::parser::ast::{Program, Stmt, StmtKind};
 const WEAKMAP_SRC: &str = r##"<?php
 final class WeakMap implements ArrayAccess, Countable, IteratorAggregate
 {
+    // id => key object, id => value, id => insertion sequence, sequence => id (holes after unset).
     private array $__elephc_keys = [];
     private array $__elephc_values = [];
+    private array $__elephc_slots = [];
+    private array $__elephc_order = [];
+    private int $__elephc_next = 0;
 
     private static function __elephc_id(mixed $object): int
     {
@@ -61,10 +73,12 @@ final class WeakMap implements ArrayAccess, Countable, IteratorAggregate
 
     public function offsetSet(mixed $object, mixed $value): void
     {
-        if ($object === null) {
-            throw new Error("Cannot append to WeakMap");
-        }
         $__elephc_id = self::__elephc_id($object);
+        if (!array_key_exists($__elephc_id, $this->__elephc_keys)) {
+            $this->__elephc_slots[$__elephc_id] = $this->__elephc_next;
+            $this->__elephc_order[$this->__elephc_next] = $__elephc_id;
+            $this->__elephc_next = $this->__elephc_next + 1;
+        }
         $this->__elephc_keys[$__elephc_id] = $object;
         $this->__elephc_values[$__elephc_id] = $value;
     }
@@ -78,12 +92,21 @@ final class WeakMap implements ArrayAccess, Countable, IteratorAggregate
     public function offsetUnset(mixed $object): void
     {
         $__elephc_id = self::__elephc_id($object);
+        if (!array_key_exists($__elephc_id, $this->__elephc_keys)) {
+            return;
+        }
         $__elephc_keys = $this->__elephc_keys;
         $__elephc_values = $this->__elephc_values;
+        $__elephc_slots = $this->__elephc_slots;
+        $__elephc_order = $this->__elephc_order;
+        unset($__elephc_order[$__elephc_slots[$__elephc_id]]);
         unset($__elephc_keys[$__elephc_id]);
         unset($__elephc_values[$__elephc_id]);
+        unset($__elephc_slots[$__elephc_id]);
         $this->__elephc_keys = $__elephc_keys;
         $this->__elephc_values = $__elephc_values;
+        $this->__elephc_slots = $__elephc_slots;
+        $this->__elephc_order = $__elephc_order;
     }
 
     public function count(): int
@@ -91,14 +114,35 @@ final class WeakMap implements ArrayAccess, Countable, IteratorAggregate
         return count($this->__elephc_keys);
     }
 
+    // Walks the LIVE insertion order, as PHP's WeakMap iterator does: an entry added during the
+    // loop is visited, an entry removed before the cursor reaches it is skipped.
     public function getIterator(): Iterator
     {
-        foreach ($this->__elephc_keys as $__elephc_id => $__elephc_key) {
-            yield $__elephc_key => $this->__elephc_values[$__elephc_id];
+        $__elephc_cursor = 0;
+        while ($__elephc_cursor < $this->__elephc_next) {
+            if (isset($this->__elephc_order[$__elephc_cursor])) {
+                $__elephc_id = $this->__elephc_order[$__elephc_cursor];
+                yield $this->__elephc_keys[$__elephc_id] => $this->__elephc_values[$__elephc_id];
+            }
+            $__elephc_cursor = $__elephc_cursor + 1;
         }
+    }
+
+    public function __serialize(): array
+    {
+        throw new Exception("Serialization of 'WeakMap' is not allowed");
+    }
+
+    public function __unserialize(array $data): void
+    {
+        $_elephc_unused = $data;
+        throw new Exception("Unserialization of 'WeakMap' is not allowed");
     }
 }
 "##;
+
+/// Internal interface typing ErrorException's `$filename`/`$line`; no value implements it.
+pub(crate) const ERROR_EXCEPTION_FILE_LINE_MARKER: &str = "__ElephcUnsupportedErrorExceptionFileOrLine";
 
 /// The PHP form of the `ErrorException` declaration and its file/line marker.
 const ERROR_EXCEPTION_SRC: &str = r##"<?php
@@ -136,6 +180,8 @@ class ErrorException extends Exception
 /// One injectable class: its PHP name, its PHP form and its parsed-template cache.
 struct NativeClass {
     name: &'static str,
+    /// Whether introspection / dynamic `new` alone injects the class (see the module header).
+    on_introspection: bool,
     source: &'static str,
     parsed: &'static OnceLock<Program>,
 }
@@ -145,9 +191,15 @@ static ERROR_EXCEPTION_PARSED: OnceLock<Program> = OnceLock::new();
 
 /// Every class this prelude can inject, in injection order.
 const NATIVE_CLASSES: &[NativeClass] = &[
-    NativeClass { name: "WeakMap", source: WEAKMAP_SRC, parsed: &WEAKMAP_PARSED },
+    NativeClass {
+        name: "WeakMap",
+        on_introspection: true,
+        source: WEAKMAP_SRC,
+        parsed: &WEAKMAP_PARSED,
+    },
     NativeClass {
         name: "ErrorException",
+        on_introspection: false,
         source: ERROR_EXCEPTION_SRC,
         parsed: &ERROR_EXCEPTION_PARSED,
     },
@@ -171,8 +223,9 @@ fn parsed(class: &NativeClass) -> Program {
 /// Returns the names of the classes this prelude would inject into `program`.
 ///
 /// A class is wanted when the program names it in a class position or a string literal
-/// (`class_exists('WeakMap')`), or when it enumerates or constructs classes dynamically
-/// (`get_declared_classes()`, `new $c`), the same over-approximation the SPL gate uses.
+/// (`class_exists('WeakMap')`). `WeakMap` is also wanted when the program enumerates or
+/// constructs classes dynamically (`get_declared_classes()`, `new $c`), the SPL gate's
+/// over-approximation; `ErrorException` is not (`NativeClass::on_introspection`).
 pub fn wanted_classes(program: &[Stmt]) -> Vec<&'static str> {
     let usage = crate::prelude_prune::usage::collect(program);
     let dynamic = usage.introspects || usage.constructs_dynamic_class;
@@ -180,7 +233,8 @@ pub fn wanted_classes(program: &[Stmt]) -> Vec<&'static str> {
         .iter()
         .filter(|class| {
             let key = php_symbol_key(class.name);
-            dynamic || usage.classes.contains(&key) || usage.literals.contains(&key)
+            let named = usage.classes.contains(&key) || usage.literals.contains(&key);
+            named || (dynamic && class.on_introspection)
         })
         .map(|class| class.name)
         .collect()

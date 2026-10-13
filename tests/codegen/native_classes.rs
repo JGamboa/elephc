@@ -173,3 +173,68 @@ echo "\n";
     );
     assert_eq!(out, "1ReflectionNamedType,1ReflectionUnionType,\n");
 }
+
+/// Introspection alone must not break the link. `get_declared_classes()` or a literal
+/// `class_exists('ErrorException')` used to inject (or keep alive) an Exception subclass whose
+/// `parent::__construct` named a builtin constructor nobody emitted
+/// (`_method___Exception____u__u_construct` undefined).
+#[test]
+fn test_introspection_does_not_strand_the_exception_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class A {}
+echo get_declared_classes() ? "x" : "y";
+echo class_exists('WeakMap') ? 1 : 0, class_exists('ErrorException') ? 1 : 0, "\n";
+"#,
+    );
+    assert_eq!(out, "x11\n");
+}
+
+/// A user Exception subclass kept alive only by introspection (no `new`) links too: its
+/// `parent::__construct` now registers the builtin constructor as reachable.
+#[test]
+fn test_parent_constructor_of_introspected_exception_subclass_links() {
+    let out = compile_and_run(
+        r#"<?php
+class X extends Exception { public function __construct() { parent::__construct("a"); } }
+echo class_exists('X') ? "hi" : "no", "\n";
+"#,
+    );
+    assert_eq!(out, "hi\n");
+}
+
+/// Iteration walks the LIVE insertion order like PHP: an entry added inside the loop is visited,
+/// one removed before the cursor reaches it is skipped, and a re-added key goes to the end.
+#[test]
+fn test_weakmap_iteration_sees_live_modifications() {
+    let out = compile_and_run(
+        r#"<?php
+$m = new WeakMap(); $a = new stdClass; $b = new stdClass; $c = new stdClass;
+$m[$a] = 1; $m[$b] = 2;
+foreach ($m as $k => $v) { echo $v, ","; if ($v === 1) { $m[$c] = 3; unset($m[$b]); } }
+echo "|", count($m), "|";
+unset($m[$a]); $m[$a] = 4;
+foreach ($m as $k => $v) { echo $v, ","; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1,3,|2|3,4,\n");
+}
+
+/// `serialize()`/`unserialize()` of a WeakMap throw PHP's exceptions, and a `null` key is the
+/// same `TypeError` as any other non-object key.
+#[test]
+fn test_weakmap_serialization_and_null_key_errors() {
+    let out = compile_and_run(
+        r#"<?php
+$m = new WeakMap(); $m[new stdClass] = 1;
+try { echo serialize($m); } catch (Exception $e) { echo $e->getMessage(), "|"; }
+try { unserialize('O:7:"WeakMap":0:{}'); } catch (Exception $e) { echo $e->getMessage(), "|"; }
+try { $m[null] = 1; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Serialization of 'WeakMap' is not allowed|Unserialization of 'WeakMap' is not allowed|WeakMap key must be an object\n"
+    );
+}

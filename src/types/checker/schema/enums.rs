@@ -166,6 +166,8 @@ pub(crate) fn build_enum_info(
         None => None,
     };
 
+    validate_enum_marker_interfaces(name, implements, resolved_backing.is_some(), span, checker)?;
+
     let mut seen_case_names = HashSet::new();
     let mut seen_int_values = HashSet::new();
     let mut seen_string_values = HashSet::new();
@@ -662,4 +664,47 @@ fn enum_interface_closure(
         interfaces.push(name);
     }
     interfaces
+}
+
+/// Rejects the enum declarations PHP refuses around its implicit marker interfaces.
+///
+/// `UnitEnum` (and, for a backed enum, `BackedEnum`) is already implemented implicitly, so naming
+/// it is `Enum E cannot implement previously implemented interface X`; a pure enum reaching
+/// `BackedEnum` (directly or through a derived interface) is `Non-backed enum E cannot implement
+/// interface BackedEnum`. Messages match PHP 8.5.
+fn validate_enum_marker_interfaces(
+    name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    use crate::types::checker::builtin_native_interfaces::{BACKED_ENUM, UNIT_ENUM};
+    for interface in implements {
+        let interface = interface.as_str().trim_start_matches('\\');
+        let key = php_symbol_key(interface);
+        let implicit = key == php_symbol_key(UNIT_ENUM)
+            || (is_backed && key == php_symbol_key(BACKED_ENUM));
+        if implicit {
+            let spelled = if key == php_symbol_key(UNIT_ENUM) { UNIT_ENUM } else { BACKED_ENUM };
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Enum {} cannot implement previously implemented interface {}",
+                    name, spelled
+                ),
+            ));
+        }
+        if !is_backed
+            && checker.interfaces.contains_key(BACKED_ENUM)
+            && (key == php_symbol_key(BACKED_ENUM)
+                || checker.interface_extends_interface(interface, BACKED_ENUM))
+        {
+            return Err(CompileError::new(
+                span,
+                &format!("Non-backed enum {} cannot implement interface BackedEnum", name),
+            ));
+        }
+    }
+    Ok(())
 }

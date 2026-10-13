@@ -59,8 +59,20 @@ pub(crate) fn inject_builtin_native_interfaces(
             skip.push(builtin_name);
             continue;
         }
+        let span = interface_map
+            .iter()
+            .filter(|(name, _)| php_symbol_key(name) == builtin_key)
+            .map(|(_, info)| info.span)
+            .chain(
+                class_map
+                    .iter()
+                    .filter(|(name, _)| php_symbol_key(name) == builtin_key)
+                    .map(|(_, class)| class.span),
+            )
+            .next()
+            .unwrap_or_else(crate::span::Span::dummy);
         return Err(CompileError::new(
-            crate::span::Span::dummy(),
+            span,
             &format!("Cannot redeclare built-in interface: {}", builtin_name),
         ));
     }
@@ -145,16 +157,22 @@ fn reject_non_enum_unit_enum(
     names.sort();
     for name in names {
         let class = &class_map[name];
-        for interface in [UNIT_ENUM, BACKED_ENUM] {
-            if class_implements(class_map, interface_map, class, interface) {
-                return Err(CompileError::new(
-                    class.span,
-                    &format!(
-                        "Non-enum class {} cannot implement interface {}",
-                        class.name, interface
-                    ),
-                ));
-            }
+        if class_implements(class_map, interface_map, class, UNIT_ENUM) {
+            // php names BackedEnum when the class lists it itself, UnitEnum otherwise (its
+            // interface table reaches UnitEnum first through any derived interface).
+            let named = if class
+                .implements
+                .iter()
+                .any(|i| php_symbol_key(i) == php_symbol_key(BACKED_ENUM))
+            {
+                BACKED_ENUM
+            } else {
+                UNIT_ENUM
+            };
+            return Err(CompileError::new(
+                class.span,
+                &format!("Non-enum class {} cannot implement interface {}", class.name, named),
+            ));
         }
     }
     Ok(())

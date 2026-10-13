@@ -113,6 +113,35 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                         push_builtin_spl_metadata_methods(&mut methods, module, class_name);
                     }
                 }
+                // `parent::__construct(...)` inside a class that extends a builtin Throwable. A
+                // `new Child` reaches the builtin constructor through the ObjectNew arm, but a
+                // child class kept alive only by introspection (`class_exists('Child')`) has its
+                // methods emitted with no `new` anywhere, and its body still names the parent.
+                Op::StaticMethodCall => {
+                    let Some((receiver, method_name)) =
+                        string_data_name(module, inst).and_then(|name| name.rsplit_once("::"))
+                    else {
+                        continue;
+                    };
+                    let method_key = php_method_key(method_name);
+                    let class_name = if receiver.eq_ignore_ascii_case("parent") {
+                        function
+                            .name
+                            .rsplit_once("::")
+                            .and_then(|(owner, _)| module.class_infos.get(owner))
+                            .and_then(|info| info.parent.as_deref())
+                    } else {
+                        Some(receiver.trim_start_matches('\\'))
+                    };
+                    if let Some(class_name) = class_name {
+                        push_supported_builtin_spl_method_for_receiver(
+                            &mut methods,
+                            module,
+                            class_name,
+                            &method_key,
+                        );
+                    }
+                }
                 Op::MethodCall | Op::NullsafeMethodCall => {
                     let Some(receiver) = inst.operands.first().copied() else {
                         continue;
