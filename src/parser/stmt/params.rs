@@ -313,6 +313,16 @@ pub(crate) fn parse_type_param_list(
 /// Checks for nullable/union types, pointer/buffer generics, and that the token sequence
 /// ultimately resolves to a variable token (possibly after `&` or `...` markers).
 pub(crate) fn looks_like_typed_param(tokens: &[SpannedToken], pos: usize) -> bool {
+    // `\self` / `\parent` / `\static` is meant as a type; claim it so `parse_type_expr`
+    // reports PHP's "invalid class name" instead of a generic parameter error.
+    if matches!(tokens.get(pos), Some((Token::Backslash, _)))
+        && matches!(
+            tokens.get(pos + 1),
+            Some((Token::Self_ | Token::Parent | Token::Static, _))
+        )
+    {
+        return true;
+    }
     let mut probe = pos;
     match parse_type_expr(tokens, &mut probe, tokens[pos].1.span) {
         Ok(_) => {

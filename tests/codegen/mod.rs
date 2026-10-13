@@ -106,3 +106,4 @@ mod locals_retype;
 mod stack_guard;
 mod zval;
 mod parser_stmt_frontier;
+mod parser_names;

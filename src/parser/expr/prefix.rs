@@ -52,6 +52,22 @@ pub(super) fn parse_prefix(
     // (#1307). The fully qualified spelling names the same global constant, so it parses as the
     // bare token. The few that stay constant references keep their fully qualified kind, so a
     // namespace-local constant of the same name can never shadow them.
+    // `\static::class` / `\self::class` / `\parent::class` resolve like the unqualified fetch
+    // in PHP 8; any other fully qualified use of those words is rejected by `parse_name`.
+    if tokens[*pos].0 == Token::Backslash
+        && matches!(
+            tokens.get(*pos + 1),
+            Some((Token::Self_ | Token::Parent | Token::Static, _))
+        )
+        && matches!(tokens.get(*pos + 2), Some((Token::DoubleColon, _)))
+        && matches!(tokens.get(*pos + 3), Some((Token::Class, _)))
+    {
+        *pos += 1;
+        let mut expr = parse_prefix(tokens, pos)?;
+        expr.span = Span::with_end_from(span, expr.span);
+        return Ok(expr);
+    }
+
     if tokens[*pos].0 == Token::Backslash {
         if let Some((next, metadata)) = tokens.get(*pos + 1) {
             let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
