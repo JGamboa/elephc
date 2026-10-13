@@ -255,3 +255,24 @@ fn test_require_assigned_to_local_still_works() {
     );
     assert_eq!(out, "42\n");
 }
+
+// --- `static $a = …, $b = …;` (symfony/polyfill-uuid Uuid.php:432) ---
+
+#[test]
+fn test_static_var_declaration_list() {
+    let out = compile_and_run(
+        r#"<?php
+function tick(int $step): string
+{
+    static $total = 100, $calls = 0, $label = 'n';
+    $calls++;
+    $total = $total + $step;
+    return $label . $calls . '=' . $total;
+}
+echo tick(1), ' ', tick(5), ' ', tick(10), "\n";
+function single(): int { static $n = 0; return ++$n; }
+echo single(), single(), "\n";
+"#,
+    );
+    assert_eq!(out, "n1=101 n2=106 n3=116\n12\n");
+}

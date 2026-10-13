@@ -924,3 +924,12 @@ fn test_error_include_value_on_unsupported_static_targets() {
         expect_error(src, "include/require as the value of this assignment is not supported yet");
     }
 }
+
+/// Verifies a trailing comma in a `static` declaration list is rejected like PHP.
+#[test]
+fn test_error_static_var_list_trailing_comma() {
+    expect_error(
+        "<?php function f() { static $a = 1, ; return $a; } echo f();",
+        "Expected variable after 'static'",
+    );
+}
