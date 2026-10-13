@@ -776,6 +776,12 @@ pub(crate) fn validate_override_signature(
         parent_declaration_is_source && method.span.line != 0,
         &same_relative_default,
     )?;
+    // The override family ABI (`crate::types::override_families`, applied by
+    // `ir_lower::program::virtual_abi`) boxes by-value positions and returns whose representation
+    // differs inside a source family and re-applies PHP's coercion in each body, so those
+    // differences need no refusal here; everything it does not unify still does.
+    let family_abi = method.span.line != 0
+        && override_family_unifies(checker, class, &method.name, &method.visibility, is_static);
     // Compiler-injected overrides are written against their builtin parents' real ABI.
     if method.span.line != 0 {
         validate_override_parameter_abi(
@@ -786,6 +792,7 @@ pub(crate) fn validate_override_signature(
             &child_sig,
             parent_sig,
             method.span,
+            family_abi,
         )?;
     }
     // `#[\ReturnTypeWillChange]` only relaxes PHP's tentative return types, which exist on
@@ -872,6 +879,7 @@ pub(crate) fn validate_override_signature(
     // under a boxed `Node|int|null`/`Node|false` would be read as the wrong word.
     if parent_sig.declared_return
         && return_compatible
+        && !(family_abi && family_boxes_return(&child_sig.return_type))
         && (matches!(parent_sig.return_type, PhpType::Union(_))
             || matches!(child_sig.return_type, PhpType::Union(_)))
         && !child_sig
@@ -1005,9 +1013,11 @@ fn validate_override_parameter_abi(
     child_sig: &FunctionSig,
     parent_sig: &FunctionSig,
     span: crate::span::Span,
+    family_abi: bool,
 ) -> Result<(), CompileError> {
     let child = SourceVisibleShape::of(child_sig);
     let parent = SourceVisibleShape::of(parent_sig);
+    let variadic_index = child.variadic.as_ref().map(|_| child.param_count.saturating_sub(1));
     let widen_error = |index: usize, detail: String| {
         CompileError::new(
             span,
@@ -1018,8 +1028,32 @@ fn validate_override_parameter_abi(
         )
     };
     for index in 0..child.param_count.min(parent.param_count) {
+        let by_ref = child.ref_params.get(index).copied().unwrap_or(false);
         let parent_declared = parent.declared_params.get(index).copied().unwrap_or(false);
         let child_declared = child.declared_params.get(index).copied().unwrap_or(false);
+        // A by-value, non-variadic position is boxed by the family ABI when it differs. PHP's
+        // own rule still applies: a declared override parameter must accept what the parent's
+        // declared type accepts (the representation rule below used to catch `int` -> `string`).
+        if family_abi && !by_ref && Some(index) != variadic_index {
+            if parent_declared
+                && child_declared
+                && !checker.type_accepts(&child.param_types[index], &parent.param_types[index])
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Cannot narrow parameter ${} when overriding {}: {}::{} (expects {}, parent accepts {})",
+                        child.param_names[index],
+                        kind,
+                        class_name,
+                        method_name,
+                        child.param_types[index],
+                        parent.param_types[index]
+                    ),
+                ));
+            }
+            continue;
+        }
         let parent_ty = &parent.param_types[index];
         let child_ty = &child.param_types[index];
         if parent_declared && !child_declared {
@@ -1306,4 +1340,80 @@ fn default_is_class_relative(default: &Expr) -> bool {
     ["receiver: Self_", "receiver: Static ", "receiver: Static,", "receiver: Parent"]
         .iter()
         .any(|marker| debug.contains(marker))
+}
+
+/// Returns whether an override belongs to a source override family that
+/// `ir_lower::program::virtual_abi` unifies, mirroring `crate::types::override_families`:
+/// a slot-dispatched (non-private, non-magic, non-generic) method whose every declaring ancestor
+/// is a user-source class. A family that reaches a builtin or compiler-injected body keeps that
+/// body's fixed contract and is not unified, so its overrides stay under the strict rules.
+fn override_family_unifies(
+    checker: &Checker,
+    class: &crate::types::traits::FlattenedClass,
+    method_name: &str,
+    visibility: &Visibility,
+    is_static: bool,
+) -> bool {
+    let method_key = php_symbol_key(method_name);
+    if method_key.starts_with("__") || method_key.contains('<') || *visibility == Visibility::Private {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = class.extends.clone();
+    let mut reached_declaration = false;
+    while let Some(ancestor) = cursor {
+        if !seen.insert(ancestor.clone()) {
+            return false;
+        }
+        let Some(info) = checker.classes.get(&ancestor) else {
+            return false;
+        };
+        let (table, impls, visibilities) = if is_static {
+            (&info.static_methods, &info.static_method_impl_classes, &info.static_method_visibilities)
+        } else {
+            (&info.methods, &info.method_impl_classes, &info.method_visibilities)
+        };
+        if !table.contains_key(&method_key) {
+            break;
+        }
+        if visibilities.get(&method_key) == Some(&Visibility::Private) {
+            return false;
+        }
+        reached_declaration = true;
+        if let Some(owner) = impls.get(&method_key) {
+            let source_body = checker.classes.get(owner).is_some_and(|owner_info| {
+                !owner_info.is_internal
+                    && owner_info.method_decls.iter().any(|decl| {
+                        decl.is_static == is_static
+                            && php_symbol_key(&decl.name) == method_key
+                            && decl.span.line != 0
+                    })
+            });
+            if !source_body {
+                return false;
+            }
+        } else if info.is_internal || info.declaration_span == crate::span::Span::dummy() {
+            // An abstract declaration on a builtin.
+            return false;
+        }
+        cursor = info.parent.clone();
+    }
+    reached_declaration
+}
+
+/// Returns whether the family ABI can box an override's narrower return into the family's shared
+/// `mixed` return: a boxed value already, a scalar (re-coerced by the body contract) or a tagged
+/// nullable int. Object and array returns narrowed out of a boxed union are not boxed by the
+/// family body yet (`?N` -> `N`, `array|false` -> `array` read the raw pointer), so they stay
+/// refused until P10.
+fn family_boxes_return(child_return: &PhpType) -> bool {
+    matches!(
+        child_return.codegen_repr(),
+        PhpType::Mixed
+            | PhpType::TaggedScalar
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+    )
 }

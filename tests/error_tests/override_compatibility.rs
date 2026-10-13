@@ -118,33 +118,6 @@ fn test_error_override_widens_object_param_to_nullable_default() {
     );
 }
 
-/// Review p42: int -> int|string crashed (exit 139).
-#[test]
-fn test_error_override_widens_int_param_to_union_default() {
-    expect_error(
-        r#"<?php class Base { public function f(int $x): string { return "B$x"; } } class Child extends Base { public function f(int|string $x): string { return "C$x"; } }"#,
-        r#"Cannot widen parameter representation when overriding method: Child::f parameter $x (the parent passes int, the override expects int|string"#,
-    );
-}
-
-/// Review p43: an untyped override parameter is typed later from call sites, so it cannot replace a declared one.
-#[test]
-fn test_error_override_drops_declared_param_type() {
-    expect_error(
-        r#"<?php class Base { public function f(int $x, array $o): string { return "B"; } } class Child extends Base { public function f($x, $o): string { return "C"; } }"#,
-        r#"Cannot widen parameter representation when overriding method: Child::f parameter $x (the parent passes int, the override drops the declared type"#,
-    );
-}
-
-/// Review p41 (pre-existing miscompile, printed `Cnull`): the representation rule covers every parameter, not only relaxed ones.
-#[test]
-fn test_error_override_widens_param_without_default() {
-    expect_error(
-        r#"<?php class Foo {} class Base { public function f(Foo $x): string { return "B"; } } class Child extends Base { public function f(?Foo $x): string { return "C"; } }"#,
-        r#"Cannot widen parameter representation when overriding method: Child::f parameter $x"#,
-    );
-}
-
 /// Review p24: an untyped RTWC override of a `mixed` builtin crashed (SIGSEGV).
 #[test]
 fn test_error_return_type_will_change_untyped_over_mixed_builtin() {
@@ -253,24 +226,6 @@ fn test_error_override_class_relative_default_counts_as_changed() {
     );
 }
 
-/// Review ronda 3 (c07): `int|null` under a boxed `Node|int|null` crashed (SIGSEGV).
-#[test]
-fn test_error_override_union_return_narrowed_to_tagged_scalar() {
-    expect_error(
-        r#"<?php class Node { public function find(): Node|int|null { return 4; } } class Leaf extends Node { public function find(): int|null { return 9; } }"#,
-        r#"Cannot override method Leaf::find with union return type int|null: it changes the physical return representation of the parent's Node|int|null (not yet supported until P10)"#,
-    );
-}
-
-/// Review ronda 3 (c10): `false` under `Node|false` printed NULL.
-#[test]
-fn test_error_override_union_return_narrowed_to_false() {
-    expect_error(
-        r#"<?php class Node { public function find(): Node|false { return false; } } class Leaf extends Node { public function find(): false { return false; } }"#,
-        r#"Cannot override method Leaf::find with union return type false: it changes the physical return representation"#,
-    );
-}
-
 /// `static` under a static `static|false` is read with the boxed layout through `static::`.
 #[test]
 fn test_error_static_override_union_return_narrowed_to_static() {
@@ -297,5 +252,23 @@ fn test_error_override_late_static_union_narrowed_to_static() {
     expect_error(
         r#"<?php class MaybeCloneable { public function duplicate(): static|false { return false; } } final class AlwaysCloneable extends MaybeCloneable { public function duplicate(): static { return $this; } public function label(): string { return "clone"; } } echo (new AlwaysCloneable())->duplicate()->label();"#,
         r#"Cannot override method AlwaysCloneable::duplicate with union return type AlwaysCloneable: it changes the physical return representation"#,
+    );
+}
+
+/// Inside an override family the representation is boxed, but PHP's contravariance still applies (review n12 compiled once the family exemption skipped the representation rule).
+#[test]
+fn test_error_family_override_parameter_still_contravariant() {
+    expect_error(
+        r#"<?php class P { public function f(int $a) { return 1; } } class C extends P { public function f(string $a) { return 2; } }"#,
+        r#"Cannot narrow parameter $a when overriding method: C::f (expects string, parent accepts int)"#,
+    );
+}
+
+/// The family ABI does not box an object narrowed out of `?N` yet (`$r->n` read garbage through the parent), so it stays refused until P10.
+#[test]
+fn test_error_family_override_object_return_narrowed_from_nullable() {
+    expect_error(
+        r#"<?php class N { public $n = "N"; } class P { public function f(): ?N { return null; } } class C extends P { public function f(): N { return new N(); } }"#,
+        r#"Cannot override method C::f with union return type N: it changes the physical return representation"#,
     );
 }

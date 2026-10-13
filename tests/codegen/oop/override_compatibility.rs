@@ -299,3 +299,76 @@ via(new App()); via(new MyApp()); viaA(new MyApp()); echo (new MyApp)->handle(),
     );
     assert_eq!(out, "a1\nm1\nm1\nm1\n");
 }
+
+/// Ronda 5 (P4 family ABI): an untyped override of `int $x` is boxed by the family and dispatches through the parent.
+#[test]
+fn test_family_override_untyped_param_of_declared_int() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function f(int $x): string { return "B$x"; } }
+class Child extends Base { public function f($x): string { return "C$x"; } }
+function viaBase(Base $b): string { return $b->f(7); }
+echo viaBase(new Base()), viaBase(new Child()), "\n";
+"#,
+    );
+    assert_eq!(out, "B7C7\n");
+}
+
+/// Ronda 5: `Foo $x` widened to `?Foo $x` is boxed by the family.
+#[test]
+fn test_family_override_nullable_object_param() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo { public $v = "foo"; }
+class Base { public function f(Foo $x): string { return "B" . $x->v; } }
+class Child extends Base { public function f(?Foo $x): string { return "C" . ($x === null ? "null" : $x->v); } }
+function viaBase(Base $b): string { return $b->f(new Foo()); }
+echo viaBase(new Base()), viaBase(new Child()), (new Child())->f(null), "\n";
+"#,
+    );
+    assert_eq!(out, "BfooCfooCnull\n");
+}
+
+/// Ronda 5: `int $x` widened to `int|string $x` is boxed and the child sees the int.
+#[test]
+fn test_family_override_int_param_widened_to_union() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function f(int $x): string { return "B$x"; } }
+class Child extends Base { public function f(int|string $x): string { return "C" . gettype($x) . $x; } }
+function via(Base $b): string { return $b->f(7); }
+echo via(new Base()), via(new Child()), (new Child())->f("s"), "\n";
+"#,
+    );
+    assert_eq!(out, "B7Cinteger7Cstrings\n");
+}
+
+/// Ronda 5 (c07): `int|null` and `int|Twig` under `Node|int|null` are boxed into the family return.
+#[test]
+fn test_family_override_union_return_narrowed_to_tagged_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { public $n = "N"; public function find(): Node|int|null { return 4; } }
+class Leaf extends Node { public $n = "L"; public function find(): int|null { return 9; } }
+class Twig extends Node { public function find(): int|Twig { return 5; } }
+function via(Node $x) { $r = $x->find(); var_dump(is_object($r) ? $r->n : $r); }
+via(new Node()); via(new Leaf()); via(new Twig());
+"#,
+    );
+    assert_eq!(out, "int(4)\nint(9)\nint(5)\n");
+}
+
+/// Ronda 5 (c10): `false` under `Node|false` keeps `bool(false)` through the family return.
+#[test]
+fn test_family_override_union_return_narrowed_to_false() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { public $n = "N"; public function find(): Node|false { return false; } }
+class Twig extends Node { public $n = "T"; public function find(): Twig|false { return $this; } }
+class Leaf extends Node { public $n = "L"; public function find(): false { return false; } }
+function via(Node $x) { $r = $x->find(); var_dump(is_object($r) ? $r->n : $r); }
+via(new Node()); via(new Twig()); via(new Leaf());
+"#,
+    );
+    assert_eq!(out, "bool(false)\nstring(1) \"T\"\nbool(false)\n");
+}
