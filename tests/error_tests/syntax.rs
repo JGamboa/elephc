@@ -799,9 +799,11 @@ fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
         r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
         "Unexpected token: Include",
     );
+    // `K::$s = include "f.php";` is supported as a statement (hoisted through a hidden
+    // local); in a `for` clause it is still rejected, since the clause is not a statement list.
     expect_error(
-        r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
-        "Unexpected token: Include",
+        r#"<?php class K { public static $s; } for (K::$s = include "f.php"; false; ) {} echo 1;"#,
+        "include/require is not supported in a for clause",
     );
     // The same rejection inside a clause, which is the case the review asked about.
     expect_error(
@@ -909,4 +911,16 @@ fn test_error_while_destructuring_must_be_whole_condition() {
         "<?php $q = []; while ([$a] = array_shift($q) or false) { echo $a; }",
         "must be the whole condition",
     );
+}
+
+/// Verifies include/require values on static-property targets the hoist cannot cover fail clearly.
+#[test]
+fn test_error_include_value_on_unsupported_static_targets() {
+    for src in [
+        r#"<?php class K { public static $s; } K::$s ??= require "f.php";"#,
+        r#"<?php class K { public static $s = ''; } K::$s .= include "f.php";"#,
+        r#"<?php class K { public static $s = []; } K::$s['k'] = require "f.php";"#,
+    ] {
+        expect_error(src, "include/require as the value of this assignment is not supported yet");
+    }
 }

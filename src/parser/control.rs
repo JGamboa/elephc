@@ -647,13 +647,13 @@ fn parse_for_clause(
 /// once the clause started going through the real statement parser.
 ///
 /// Only two shapes can reach it, which is why this is a match and not a tree walk.
-/// `ExprKind::IncludeValue` has exactly TWO construction sites, both calling
-/// `parser::stmt::simple::try_parse_value_include`: `parse_return`, whose `Return` is not on
-/// the clause allow-list, and `parse_simple_assign`, which builds a plain `StmtKind::Assign`
-/// and only for `AssignmentOperator::Assign`. That branch runs BEFORE
-/// `parse_assignment_value_expr`, so no typed, indexed, property or static-property
-/// assignment can carry one — `include` reaches those through the ordinary expression
-/// parser, which rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
+/// `ExprKind::IncludeValue` is only built by `parser::stmt::simple::try_parse_value_include`,
+/// called from `parse_return` (a `Return` is not on the clause allow-list),
+/// `parse_simple_assign` (a plain `StmtKind::Assign`, only for `AssignmentOperator::Assign`)
+/// and `assign::scoped_include` (a static-property assignment hoisted into a `Synthetic`
+/// whose first piece is such an `Assign`). No typed, indexed or instance-property assignment
+/// can carry one — `include` reaches those through the ordinary expression parser, which
+/// rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
 /// pins that invariant, and fails here if it ever changes.
 ///
 /// A closure body is deliberately NOT inspected. Its include is DEFERRED: it runs when the

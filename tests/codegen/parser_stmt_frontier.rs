@@ -203,3 +203,55 @@ echo "done\n";
         "str-lead\nnull-lead\ntrue-lead\nfalse-lead\nneg-lead\nbang-lead\nconst-lead\nmagic-lead\ndone\n"
     );
 }
+
+// --- `include`/`require` assigned to a static property (polyfill-intl-idn Idn.php:261) ---
+
+#[test]
+fn test_require_assigned_to_static_property() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+class Holder
+{
+    public static $data;
+    public static $other;
+    public static $list = [];
+
+    public static function load(): void
+    {
+        self::$data = require __DIR__ . '/data.php';
+        static::$other = include 'data.php';
+        Holder::$list[] = require_once __DIR__ . '/once.php';
+        self::$list[] = include __DIR__ . '/data.php';
+    }
+}
+Holder::load();
+echo Holder::$data['a'], Holder::$data['b'], "\n";
+echo Holder::$other['b'], "\n";
+echo Holder::$list[0], "|", Holder::$list[1]['a'], "\n";
+"#,
+            ),
+            ("data.php", "<?php\nreturn ['a' => 'alpha', 'b' => 'beta'];\n"),
+            ("once.php", "<?php\nreturn 'first';\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "alphabeta\nbeta\nfirst|alpha\n"
+    );
+}
+
+#[test]
+fn test_require_assigned_to_local_still_works() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\n$v = require 'v.php';\necho $v * 2, \"\\n\";\n"),
+            ("v.php", "<?php\nreturn 21;\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42\n");
+}
