@@ -550,12 +550,24 @@ pub(crate) fn validate_signature_compatibility(
         }
     }
 
-    // PHP lets an override make a required parameter optional (the child accepts every call the
-    // parent accepts), but never the reverse. The physical parameter count is unchanged, and a
-    // call through the parent's static type always passes the parameter. That alone does not keep
-    // the slot ABI: a class override must also keep every parameter's physical representation
-    // (checked in `validate_override_signature`), or the parent's caller passes a word the child
-    // reads as another type.
+    // PHP lets an override make a required parameter optional, but elephc cannot dispatch it yet
+    // (until P10): a boxed `mixed` receiver that omits the argument only finds candidates whose
+    // whole family agrees on the default, so the call resolves to no method and raises a
+    // catchable `Error` instead of running the child. Refuse it rather than compile that.
+    if let Some(index) = parent
+        .has_defaults
+        .iter()
+        .zip(&child.has_defaults)
+        .position(|(&parent_optional, &child_optional)| !parent_optional && child_optional)
+    {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot make parameter ${} optional when {} {}: {}::{} (not yet supported until P10: dynamic dispatch cannot supply the override's default)",
+                child.param_names[index], context, kind, owner_name, method_name
+            ),
+        ));
+    }
     if parent
         .has_defaults
         .iter()
@@ -579,7 +591,7 @@ pub(crate) fn validate_signature_compatibility(
         .defaults
         .iter()
         .zip(&child.defaults)
-        .position(|pair| matches!(pair, (Some(parent_default), Some(child_default)) if parent_default != child_default))
+        .position(|pair| matches!(pair, (Some(parent_default), Some(child_default)) if parent_default != child_default || default_is_class_relative(child_default)))
     {
         return Err(CompileError::new(
             span,
@@ -916,7 +928,8 @@ fn union_self_return_compatible(
 ///
 /// A call through the parent's static type materializes every argument with the parent's
 /// signature and jumps to the child's vtable entry, and no adapter converts the words (frente
-/// P10). So every declared parameter must keep the parent's representation, an untyped child
+/// P10). So every declared parameter, by-reference ones included (the reference cell's payload
+/// is read with the child's layout), must keep the parent's representation, an untyped child
 /// parameter cannot replace a declared one (its type is only inferred later from call sites),
 /// and a renamed variadic must still accept the parent's element type.
 fn validate_override_parameter_abi(
@@ -940,9 +953,6 @@ fn validate_override_parameter_abi(
         )
     };
     for index in 0..child.param_count.min(parent.param_count) {
-        if child.ref_params.get(index).copied().unwrap_or(false) {
-            continue;
-        }
         let parent_declared = parent.declared_params.get(index).copied().unwrap_or(false);
         let child_declared = child.declared_params.get(index).copied().unwrap_or(false);
         let parent_ty = &parent.param_types[index];
@@ -983,4 +993,14 @@ fn validate_override_parameter_abi(
         }
     }
     Ok(())
+}
+
+/// Returns whether a default names its declaring class relatively (`self::X`, `static::X`,
+/// `parent::X`). Two such defaults can be spelled identically in parent and override yet resolve
+/// against different classes, so they never count as the same inherited default.
+fn default_is_class_relative(default: &Expr) -> bool {
+    let debug = format!("{:?}", default.kind);
+    ["receiver: Self_", "receiver: Static ", "receiver: Static,", "receiver: Parent"]
+        .iter()
+        .any(|marker| debug.contains(marker))
 }

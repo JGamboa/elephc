@@ -114,7 +114,7 @@ fn test_error_interface_static_nullable_static_vs_false() {
 fn test_error_override_widens_object_param_to_nullable_default() {
     expect_error(
         r#"<?php class Foo { public $v = "foo"; } class Base { public function f(Foo $x): string { return "B"; } } class Child extends Base { public function f(?Foo $x = null): string { return "C"; } }"#,
-        r#"Cannot widen parameter representation when overriding method: Child::f parameter $x (the parent passes Foo, the override expects Foo|null"#,
+        r#"Cannot make parameter $x optional when overriding method: Child::f (not yet supported until P10"#,
     );
 }
 
@@ -122,7 +122,7 @@ fn test_error_override_widens_object_param_to_nullable_default() {
 #[test]
 fn test_error_override_widens_int_param_to_union_default() {
     expect_error(
-        r#"<?php class Base { public function f(int $x): string { return "B$x"; } } class Child extends Base { public function f(int|string $x = 5): string { return "C$x"; } }"#,
+        r#"<?php class Base { public function f(int $x): string { return "B$x"; } } class Child extends Base { public function f(int|string $x): string { return "C$x"; } }"#,
         r#"Cannot widen parameter representation when overriding method: Child::f parameter $x (the parent passes int, the override expects int|string"#,
     );
 }
@@ -131,7 +131,7 @@ fn test_error_override_widens_int_param_to_union_default() {
 #[test]
 fn test_error_override_drops_declared_param_type() {
     expect_error(
-        r#"<?php class Base { public function f(int $x, array $o): string { return "B"; } } class Child extends Base { public function f($x = 1, $o = []): string { return "C"; } }"#,
+        r#"<?php class Base { public function f(int $x, array $o): string { return "B"; } } class Child extends Base { public function f($x, $o): string { return "C"; } }"#,
         r#"Cannot widen parameter representation when overriding method: Child::f parameter $x (the parent passes int, the override drops the declared type"#,
     );
 }
@@ -205,5 +205,50 @@ fn test_error_untyped_tostring_overridden_by_subclass_keeps_contract_error() {
     expect_error(
         r#"<?php class N implements Stringable { public function __toString() { return "n"; } } class M extends N { public function __toString() { return "m"; } }"#,
         r#"Cannot implement interface method N::__tostring without declaring a compatible return type"#,
+    );
+}
+
+/// Review ronda 2 (q12): a `mixed` receiver omitting the argument found no candidate and threw a catchable Error (printed `caught`); refused until P10.
+#[test]
+fn test_error_override_makes_required_parameter_optional() {
+    expect_error(
+        r#"<?php class Base { public function f(int $n, string $u): string { return "B$n$u"; } } class Child extends Base { public function f(int $n, string $u = "kg"): string { return "C$n$u"; } } function u($o) { return $o->f(5); } try { echo u(new Child()); } catch (Throwable $e) { echo "caught"; }"#,
+        r#"Cannot make parameter $u optional when overriding method: Child::f (not yet supported until P10"#,
+    );
+}
+
+/// Review ronda 2 (q07): same refusal for interface implementations.
+#[test]
+fn test_error_interface_impl_makes_required_parameter_optional() {
+    expect_error(
+        r#"<?php interface I { public function f(int $n, string $u); } class C implements I { public function f(int $n, string $u = "kg") { return "C$n$u"; } }"#,
+        r#"Cannot make parameter $u optional when implementing interface method: C::f"#,
+    );
+}
+
+/// Review ronda 2 (q06): and for static overrides.
+#[test]
+fn test_error_static_override_makes_required_parameter_optional() {
+    expect_error(
+        r#"<?php class Base { public static function f(int $n, string $u): string { return "B"; } } class Child extends Base { public static function f(int $n, string $u = "kg"): string { return "C"; } }"#,
+        r#"Cannot make parameter $u optional when overriding static method: Child::f"#,
+    );
+}
+
+/// Review ronda 2 (r03): a by-reference parameter keeps the parent's payload representation too (crashed with SIGSEGV).
+#[test]
+fn test_error_override_widens_by_reference_parameter() {
+    expect_error(
+        r#"<?php class Base { public function f(int &$x): string { return "B"; } } class Child extends Base { public function f(int|string &$x): string { return "C"; } }"#,
+        r#"Cannot widen parameter representation when overriding method: Child::f parameter $x (the parent passes int, the override expects int|string"#,
+    );
+}
+
+/// Review ronda 2 (q01): `self::X` spelled the same resolves against different classes, so it is a changed default (printed `Ca` instead of `Cb`).
+#[test]
+fn test_error_override_class_relative_default_counts_as_changed() {
+    expect_error(
+        r#"<?php class Base { const X = "a"; public function f(string $u = self::X): string { return "B$u"; } } class Child extends Base { const X = "b"; public function f(string $u = self::X): string { return "C$u"; } }"#,
+        r#"Cannot change the default value of parameter $u when overriding method: Child::f"#,
     );
 }

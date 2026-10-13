@@ -1,6 +1,6 @@
 //! Purpose:
 //! End-to-end coverage of PHP-compatible override and interface-implementation signatures
-//! (LSP): optional/required parameter changes, variadic renames, union covariance,
+//! (LSP): variadic renames, union covariance,
 //! `#[\ReturnTypeWillChange]` and the implicit `__toString(): string`.
 //!
 //! Called from:
@@ -12,26 +12,6 @@
 //! - Fixtures mirror `probes/lsp/` in the elephc-laravel workspace; expected output is PHP 8.5's.
 
 use super::*;
-
-/// An override may make a parent-required parameter optional; calls through the parent still pass it and calls through the child fill the child default.
-#[test]
-fn test_override_makes_required_parameter_optional() {
-    let out = compile_and_run(
-        r#"<?php
-class Base {
-    public function fmt(int $n, string $unit): string { return "base " . $n . $unit; }
-}
-class Child extends Base {
-    public function fmt(int $n, string $unit = "kg"): string { return "child " . $n . $unit; }
-}
-function viaBase(Base $b): string { return $b->fmt(3, "g"); }
-echo viaBase(new Base()), "\n";
-echo viaBase(new Child()), "\n";
-echo (new Child())->fmt(5), "\n";
-"#,
-    );
-    assert_eq!(out, "base 3g\nchild 3g\nchild 5kg\n");
-}
 
 /// An override may rename the variadic (`...$arrays` as `...$lists`); arguments still collect positionally through the parent.
 #[test]
@@ -179,36 +159,6 @@ var_dump(MyDate::createFromFormat("Y-m-d", ""));
 "#,
     );
     assert_eq!(out, "MyDate 2020-01-02\nNULL\n");
-}
-
-/// Review p45: required -> optional with the same declared type keeps the ABI and dispatches through the parent.
-#[test]
-fn test_override_optional_params_keeping_type_and_default_still_dispatch() {
-    let out = compile_and_run(
-        r#"<?php
-class Foo { public $v = "foo"; }
-class Base { public function f(int $n, Foo $x): string { return "B" . $n . $x->v; } }
-class Child extends Base { public function f(int $n = 3, Foo $x = new Foo()): string { return "C" . $n . $x->v; } }
-function viaBase(Base $b): string { return $b->f(1, new Foo()); }
-echo viaBase(new Base()), viaBase(new Child()), (new Child())->f(), "\n";
-"#,
-    );
-    assert_eq!(out, "B1fooC1fooC3foo\n");
-}
-
-/// Review p47: an interface implementation may widen to `?Foo = null`; interface dispatch boxes the argument.
-#[test]
-fn test_interface_impl_nullable_default_dispatches_through_interface() {
-    let out = compile_and_run(
-        r#"<?php
-class Foo { public $v = "foo"; }
-interface I { public function f(Foo $x): string; }
-class C implements I { public function f(?Foo $x = null): string { return "C" . ($x === null ? "null" : $x->v); } }
-function viaI(I $i): string { return $i->f(new Foo()); }
-echo viaI(new C()), (new C())->f(), "\n";
-"#,
-    );
-    assert_eq!(out, "CfooCnull\n");
 }
 
 /// Review p10: a renamed variadic with the same element type, called positionally, by name and with spreads.
