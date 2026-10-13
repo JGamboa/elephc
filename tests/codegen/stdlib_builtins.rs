@@ -14,6 +14,43 @@
 
 use crate::support::*;
 
+/// Parity with PHP 8.5.10 for the `get_debug_type_edge` probe.
+#[test]
+fn test_stdlib_get_debug_type_edge_matches_php() {
+    let source = r####"<?php
+enum Suit { case H; }
+enum B: string { case A = 'a'; }
+class P {}
+$f = fopen('php://memory', 'r');
+$vals = [null, false, 0, -1.5, NAN, "", [], new stdClass, fn() => 1, strlen(...), Suit::H, B::A, new ArrayObject([]), $f, new class extends P {}, new class {}];
+foreach ($vals as $v) { echo get_debug_type($v), "\n"; }
+fclose($f);
+echo get_debug_type($f), "\n";
+function g() { yield 1; }
+echo get_debug_type(g()), "|", get_debug_type(new DateTimeImmutable('@0')), "\n";
+"####;
+    let expected = r####"null
+bool
+int
+float
+float
+string
+array
+stdClass
+Closure
+Closure
+Suit
+B
+ArrayObject
+resource (stream)
+P@anonymous
+class@anonymous
+resource (closed)
+Generator|DateTimeImmutable
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
 /// Parity with PHP 8.5.10 for the `guarded_polyfill` probe.
 #[test]
 fn test_stdlib_guarded_polyfill_matches_php() {
@@ -27,6 +64,56 @@ if (!function_exists('random_bytes')) {
 echo get_debug_type(1), "|", strlen(random_bytes(3)), "\n";
 "####;
     let expected = r####"int|3
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Parity with PHP 8.5.10 for the `hbq_edge` probe.
+#[test]
+fn test_stdlib_hbq_edge_matches_php() {
+    let source = r####"<?php
+echo http_build_query(['a' => [1 => ['b' => null, 'c' => false]], 'e' => [], 'f' => '']), "\n";
+echo http_build_query([5 => 'x', 'k' => [3 => 'y']], 'n'), "\n";
+echo http_build_query(['a b' => 'c d~*', 'é' => '+'], '', '&amp;', PHP_QUERY_RFC3986), "\n";
+echo http_build_query(['a b' => 'c d~*'], '', '&', PHP_QUERY_RFC1738), "\n";
+echo http_build_query(['f' => 1e25, 'g' => -0.0, 'h' => 1/3, 'i' => 100.0, 'j' => 1e-7]), "\n";
+echo http_build_query(['x' => 1], 'pre', null, PHP_QUERY_RFC3986), "\n";
+echo http_build_query(['k[]' => 'v', 'a]b' => 1]), "\n";
+echo http_build_query([0 => [0 => 'z']], 'p_'), "\n";
+"####;
+    let expected = r####"a%5B1%5D%5Bc%5D=0&f=
+n5=x&k%5B3%5D=y
+a%20b=c%20d~%2A&amp;%C3%A9=%2B
+a+b=c+d%7E%2A
+f=1.0E%2B25&g=-0&h=0.33333333333333&i=100&j=1.0E-7
+x=1
+k%5B%5D=v&a%5Db=1
+p_0%5B0%5D=z
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Parity with PHP 8.5.10 for the `hbq_empty_nested` probe.
+#[test]
+fn test_stdlib_hbq_empty_nested_matches_php() {
+    let source = r####"<?php
+echo http_build_query(['a' => ['c' => 1], 'e' => []]), "\n";
+"####;
+    let expected = r####"a%5Bc%5D=1
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Parity with PHP 8.5.10 for the `hbq_object` probe.
+#[test]
+fn test_stdlib_hbq_object_matches_php() {
+    let source = r####"<?php
+$o = new stdClass; $o->a = 1; $o->n = null;
+echo http_build_query($o), "\n";
+echo http_build_query(['x' => $o]), "\n";
+"####;
+    let expected = r####"a=1
+x%5Ba%5D=1
 "####;
     assert_eq!(compile_and_run(source), expected);
 }
@@ -232,6 +319,29 @@ class@anonymous
     assert_eq!(compile_and_run(source), expected);
 }
 
+/// Parity with PHP 8.5.10 for the `preg_quote_delimiters` probe.
+#[test]
+fn test_stdlib_preg_quote_delimiters_matches_php() {
+    let source = r####"<?php
+echo preg_quote("a/b#c~d", "~"), "\n";
+echo preg_quote("a/b#c", "#"), "\n";
+echo bin2hex(preg_quote("x\0y", "\0")), "\n";
+echo preg_quote("a.b", "ab"), "\n";
+echo preg_quote("a.b", ""), "\n";
+echo preg_quote("x%y@z&w'q\"", "@"), "\n";
+echo preg_quote("ñ.é"), "\n";
+"####;
+    let expected = r####"a/b\#c\~d
+a/b\#c
+785c30303079
+\a\.b
+a\.b
+x%y\@z&w'q"
+ñ\.é
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
 /// Parity with PHP 8.5.10 for the `random_bytes` probe.
 #[test]
 fn test_stdlib_random_bytes_matches_php() {
@@ -249,6 +359,21 @@ bool(false)
 int(32)
 random_bytes(): Argument #1 ($length) must be greater than 0
 bool(true)
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Parity with PHP 8.5.10 for the `random_bytes_ns` probe.
+#[test]
+fn test_stdlib_random_bytes_ns_matches_php() {
+    let source = r####"<?php
+namespace App\Util;
+function tok(): string { return bin2hex(random_bytes(4)) . "|" . strspn("aab", "a") . "|" . \get_debug_type(1.0); }
+echo strlen(tok()), "\n";
+echo http_build_query(['a' => ['b' => 1]]), "\n";
+"####;
+    let expected = r####"16
+a%5Bb%5D=1
 "####;
     assert_eq!(compile_and_run(source), expected);
 }
@@ -308,6 +433,69 @@ foreach ($cases as $c) {
 "5 > 3 and 2 < 4""5 > 3 and 2 < 4""5 > 3 and 2 < 4"
 "t""t""t"
 "ab""ab""ab"
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Parity with PHP 8.5.10 for the `strip_tags_edge` probe.
+#[test]
+fn test_stdlib_strip_tags_edge_matches_php() {
+    let source = r####"<?php
+$c = ["a<b c='<x>'>d", "<<<b>>>", "a<?= '<b>' ?>b", "<a\nhref=1>x</a>", "<b>x</b >", "</ b>x", "<b\0>t</b>", "a <!-- x", "<b>a<!-- c -->b</b>",
+ "<sCrIpT>a</ScRiPt>", "x<br />y", "<p/>q", "&lt;b&gt;", "<a>b<?php c", "<'>x", "<\"a>\">x", "<b>\"</b>", "a<!--->b", "a<!---->b", "a<!-x>b"];
+foreach ($c as $s) {
+  echo json_encode([strip_tags($s), strip_tags($s, "<b><br><a>"), strip_tags($s, ["script", "p"])]), "\n";
+}
+echo strip_tags("<b>x</b>", null), strip_tags("<b>x</b>", []), strip_tags("<b>x</b>", ""), "\n";
+echo strip_tags("<b>x</b>", "b"), strip_tags("<b>x</b>", ["<b>"]), "\n";
+"####;
+    let expected = r####"["ad","a<b c='x'>d","ad"]
+["","<b>",""]
+["ab","ab","ab"]
+["x","<a\nhref=1>x<\/a>","x"]
+["x","<b>x<\/b >","x"]
+["x","x","x"]
+["t","<b>t<\/b>","t"]
+["a ","a ","a "]
+["ab","<b>ab<\/b>","ab"]
+["a","a","<sCrIpT>a<\/ScRiPt>"]
+["xy","x<br \/>y","xy"]
+["q","q","<p\/>q"]
+["&lt;b&gt;","&lt;b&gt;","&lt;b&gt;"]
+["b","<a>b","b"]
+["","",""]
+["x","x","x"]
+["\"","<b>\"<\/b>","\""]
+["ab","ab","ab"]
+["ab","ab","ab"]
+["ab","ab","ab"]
+xxx
+x<b>x</b>
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Parity with PHP 8.5.10 for the `strrchr_before_needle` probe.
+#[test]
+fn test_stdlib_strrchr_before_needle_matches_php() {
+    let source = r####"<?php
+var_dump(strrchr("a.b-c.d", ".-"), strrchr("abc", "cb"), strrchr("abc", ""), strrchr("a\0b", ""));
+var_dump(strrchr("", "a"), strrchr("aaa", "a"), strrchr("x/y/", "/"));
+var_dump(strrchr("user@host@x", "@", true), strrchr("abc", "z", true), strrchr("abc", "a", true));
+var_dump(version_compare("1.2", "1.2", "="), version_compare("1.2", "1.3", "="));
+"####;
+    let expected = r####"string(2) ".d"
+string(1) "c"
+bool(false)
+string(2) " b"
+bool(false)
+string(1) "a"
+string(1) "/"
+string(9) "user@host"
+bool(false)
+string(0) ""
+bool(true)
+bool(false)
 "####;
     assert_eq!(compile_and_run(source), expected);
 }
@@ -378,6 +566,41 @@ int(3)
     assert_eq!(compile_and_run(source), expected);
 }
 
+/// Parity with PHP 8.5.10 for the `substr_compare_edge` probe.
+#[test]
+fn test_stdlib_substr_compare_edge_matches_php() {
+    let source = r####"<?php
+$t = [["abcde","BC",1,2,true],["abcde","de",-2,null,false],["abcde","DE",-2,5,true],["abcde","abcdef",0,null,false],["abc","",3,null,false],
+ ["abc","x",-10,1,false],["abc","c",-1,null,false],["abc","ABC",0,null,true],["abcde","cd",2,10,false],["abc","",0,0,false],["ABC","abd",0,3,true],
+ ["abc","b",1,0,false],["héllo","HÉ",0,2,true],["abc","bcz",1,null,false]];
+foreach ($t as [$h,$n,$o,$l,$ci]) { var_dump(substr_compare($h,$n,$o,$l,$ci)); }
+foreach ([[ "abc","a",4,null],["abc","a",3,null],["","a",0,null],["abc","a",-4,null],["abc","a",1,-1]] as [$h,$n,$o,$l]) {
+  try { var_dump(substr_compare($h,$n,$o,$l)); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}
+"####;
+    let expected = r####"int(0)
+int(0)
+int(0)
+int(-1)
+int(0)
+int(-23)
+int(0)
+int(0)
+int(1)
+int(0)
+int(-1)
+int(0)
+int(0)
+int(-1)
+ValueError: substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+int(-1)
+int(-1)
+int(1)
+ValueError: substr_compare(): Argument #4 ($length) must be greater than or equal to 0
+"####;
+    assert_eq!(compile_and_run(source), expected);
+}
+
 /// Parity with PHP 8.5.10 for the `version_compare` probe.
 #[test]
 fn test_stdlib_version_compare_matches_php() {
@@ -402,6 +625,32 @@ bool(false)
 version_compare(): Argument #3 ($operator) must be a valid comparison operator
 "####;
     assert_eq!(compile_and_run(source), expected);
+}
+
+/// Vendor / PSR-4 classes pulled in by the autoloader see the prelude functions, both
+/// fully qualified and through the unqualified namespace fallback.
+#[test]
+fn test_stdlib_prelude_is_visible_to_autoloaded_psr4_classes() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            (
+                "src/Tok.php",
+                r#"<?php
+namespace App;
+class Tok {
+    public static function make(): string {
+        return \strlen(\random_bytes(4)) . "|" . strspn("aab", "a") . "|" . \get_debug_type(1.5)
+            . "|" . bin2hex(pack("n", 258)) . "|" . version_compare("1.2", "1.10");
+    }
+}
+"#,
+            ),
+            ("main.php", "<?php\necho App\\Tok::make(), \"\\n\";\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "4|2|float|0102|-1\n");
 }
 
 /// Code that references none of the prelude functions compiles and runs exactly as before.

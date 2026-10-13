@@ -8,11 +8,19 @@ function get_debug_type(mixed $value) {
     if (is_array($value)) { return "array"; }
     if (is_object($value)) {
         $name = get_class($value);
-        $at = strpos($name, "@anonymous");
-        if ($at !== false) {
-            return substr($name, 0, $at + 10);
+        if (strpos($name, "@anonymous") === false) {
+            return $name;
         }
-        return $name;
+        $parent = get_parent_class($value);
+        if ($parent !== false && $parent !== "") {
+            return $parent . "@anonymous";
+        }
+        foreach (get_declared_interfaces() as $iface) {
+            if ($iface !== "" && is_a($value, $iface)) {
+                return $iface . "@anonymous";
+            }
+        }
+        return "class@anonymous";
     }
     if (is_resource($value)) {
         $t = get_resource_type($value);

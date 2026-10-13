@@ -9,7 +9,9 @@ function preg_quote(string $str, ?string $delimiter = null) {
     ];
     if ($delimiter !== null && $delimiter !== "") {
         $d = substr($delimiter, 0, 1);
-        $map[$d] = "\\" . $d;
+        if ($d !== "\0") {
+            $map[$d] = "\\" . $d;
+        }
     }
     return strtr($str, $map);
 }

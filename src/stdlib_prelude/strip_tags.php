@@ -24,6 +24,7 @@ function __elephc_strip_tags_norm(string $tag) {
     return "<" . strtolower($name) . ">";
 }
 function strip_tags(string $string, $allowed_tags = null) {
+    $string = str_replace("\0", "", $string);
     $allowed = __elephc_strip_tags_allowed($allowed_tags);
     $hasAllowed = $allowed !== "";
     $n = strlen($string);
@@ -49,7 +50,7 @@ function strip_tags(string $string, $allowed_tags = null) {
             continue;
         }
         if ($next === "!" && substr($string, $i, 4) === "<!--") {
-            $ce = strpos($string, "-->", $i + 4);
+            $ce = strpos($string, "-->", $i + 2);
             if ($ce === false) { break; }
             $i = $ce + 3;
             continue;

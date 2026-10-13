@@ -489,13 +489,6 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     );
     timings.record_since("version-prelude", phase_started);
 
-    // Inject the PHP-written stdlib functions (`pack`, `unpack`, `strspn`, `version_compare`, …)
-    // the program actually references. Same placement rules as the version prelude.
-    crate::progress::phase("stdlib-prelude");
-    let phase_started = Instant::now();
-    let ast = crate::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory);
-    timings.record_since("stdlib-prelude", phase_started);
-
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {
@@ -551,6 +544,23 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         }
     };
     timings.record_since("object-cast-prelude", phase_started);
+
+    // Inject the PHP-written stdlib functions (`pack`, `unpack`, `strspn`, `version_compare`, ...)
+    // the program references. Runs AFTER `autoload::run` for the same reason as the object-cast
+    // prelude: vendor and PSR-4 class files only join the AST there, so a call to `\random_bytes`
+    // inside an autoloaded class was invisible to an earlier injection. The declarations are
+    // name-resolved on the way in because this position is past the pipeline's resolution pass.
+    crate::progress::phase("stdlib-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("stdlib-prelude", phase_started);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden

@@ -31,5 +31,6 @@ function substr_compare(string $haystack, string $needle, int $offset, ?int $len
         $d = ord($a[$i]) - ord($b[$i]);
         if ($d !== 0) { return $d; }
     }
-    return $la - $lb;
+    if ($la === $lb) { return 0; }
+    return $la < $lb ? -1 : 1;
 }

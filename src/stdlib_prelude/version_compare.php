@@ -107,7 +107,7 @@ function version_compare(string $version1, string $version2, ?string $operator =
     if ($op === "<=" || $op === "le") { return $r <= 0; }
     if ($op === ">" || $op === "gt") { return $r > 0; }
     if ($op === ">=" || $op === "ge") { return $r >= 0; }
-    if ($op === "==" || $op === "eq") { return $r === 0; }
+    if ($op === "==" || $op === "=" || $op === "eq") { return $r === 0; }
     if ($op === "!=" || $op === "<>" || $op === "ne") { return $r !== 0; }
     throw new ValueError('version_compare(): Argument #3 ($operator) must be a valid comparison operator');
 }

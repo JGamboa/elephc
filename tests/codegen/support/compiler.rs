@@ -339,7 +339,6 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::stdlib_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -347,6 +346,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // `(object)` cast that only appears in an autoloaded class file is still detected.
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
+    // Mirrors `pipeline::compile`: the stdlib prelude is injected AFTER autoloading so vendor and
+    // PSR-4 class files that call `pack()`, `random_bytes()`, ... are visible to its detector.
+    let resolved = elephc::stdlib_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("stdlib prelude injection failed");
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.

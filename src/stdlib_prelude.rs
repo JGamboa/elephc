@@ -5,8 +5,8 @@
 //! `random_bytes`, `pack` and `unpack`.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()`, after the version prelude and before name resolution, so a
-//!   namespaced caller still resolves to the injected global declaration.
+//! - `crate::pipeline::compile()`, AFTER `autoload::run` (so vendor/PSR-4 code is visible) and
+//!   after name resolution; the injected declarations are name-resolved on the way in.
 //!
 //! Key details:
 //! - These are declared PHP FUNCTIONS (like `zend_version`), not catalog builtins: written once
@@ -64,7 +64,7 @@ pub(crate) fn provides(name: &str) -> bool {
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
-) -> Program {
+) -> Result<Program, crate::errors::CompileError> {
     crate::compiler_stack::with_compiler_stack(|| inject_on_compiler_stack(program, inventory))
 }
 
@@ -72,7 +72,7 @@ pub fn inject_if_used(
 fn inject_on_compiler_stack(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
-) -> Program {
+) -> Result<Program, crate::errors::CompileError> {
     let mut combined: Program = Vec::new();
     for function in FUNCTIONS {
         if !crate::opcache_prelude::detect::program_references(&program, function.name)
@@ -87,11 +87,13 @@ fn inject_on_compiler_stack(
         combined.extend(declarations);
     }
     if combined.is_empty() {
-        return program;
+        return Ok(program);
     }
+    // Past the pipeline's name-resolution pass: resolve the declarations before splicing.
+    let mut combined = crate::name_resolver::resolve(combined)?;
     inventory.record_program("stdlib", &combined);
     combined.extend(program);
-    combined
+    Ok(combined)
 }
 
 #[cfg(test)]
@@ -112,7 +114,7 @@ mod tests {
 
     fn inject(program: Program) -> Program {
         let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-        inject_if_used(program, &mut inventory)
+        inject_if_used(program, &mut inventory).expect("stdlib prelude must inject")
     }
 
     /// Every embedded source tokenizes, parses, and declares the PHP name it is listed under.
