@@ -82,6 +82,7 @@ fn check_source_with_defines_and_options(
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::variable_variables::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
@@ -108,6 +109,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
+    let ast = elephc::variable_variables::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
         types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
@@ -289,6 +291,8 @@ mod warnings;
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
 mod reference_detach;
+#[path = "error_tests/variable_variables.rs"]
+mod variable_variables;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
 #[path = "error_tests/native_classes.rs"]

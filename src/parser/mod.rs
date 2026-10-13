@@ -19,6 +19,8 @@ pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 pub(crate) mod stmt;
+/// Variable-variable (`$$name`, `${expr}`) parsing into the frame-access shape.
+mod variable_variables;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 

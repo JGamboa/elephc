@@ -244,6 +244,7 @@ pub(super) fn parse_prefix(
             Ok(Expr::new(ExprKind::FloatLiteral(value), span))
         }
         Token::Variable(name) => parse_variable(tokens, pos, span, name.clone()),
+        Token::Dollar => crate::parser::variable_variables::parse_variable_variable(tokens, pos, span),
         Token::LParen => parse_group_or_cast(tokens, pos, span),
         Token::LBracket => parse_array_literal(tokens, pos, span),
         Token::Match => parse_match_expr(tokens, pos, span),

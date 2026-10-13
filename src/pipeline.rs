@@ -596,6 +596,20 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     };
     timings.record_since("func-args", phase_started);
 
+    // Lower variable variables (`$$name`, `${expr}`) into plain PHP over the frame's
+    // compile-time locals, before the AST optimizer and the checker see them.
+    crate::progress::phase("variable-variables");
+    let phase_started = Instant::now();
+    let ast = match crate::variable_variables::desugar(ast) {
+        Ok(desugared) => desugared,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("variable-variables", phase_started);
+
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of
     // already-declared, already-name-resolved top-level functions, so it cannot disturb the

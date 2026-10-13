@@ -525,3 +525,19 @@ fn test_float_separator_signed_exp() {
     let t = tokens("<?php 1e+1_0;");
     assert_eq!(t[1], Token::FloatLiteral(1e10));
 }
+
+/// Verifies `$$name` tokenizes as a variable-variable `Dollar` followed by the inner variable.
+#[test]
+fn test_variable_variable_tokens() {
+    let t = tokens("<?php $$name;");
+    assert_eq!(t[1], Token::Dollar);
+    assert_eq!(t[2], Token::Variable("name".into()));
+}
+
+/// Verifies `$$$name` and `${expr}` produce one `Dollar` per extra `$` and keep the brace.
+#[test]
+fn test_variable_variable_nested_and_braced_tokens() {
+    let t = tokens("<?php $$$n; ${'a'};");
+    assert_eq!(&t[1..4], &[Token::Dollar, Token::Dollar, Token::Variable("n".into())]);
+    assert_eq!(&t[5..7], &[Token::Dollar, Token::LBrace]);
+}
