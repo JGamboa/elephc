@@ -315,6 +315,8 @@ mod registry_arity;
 mod callables;
 #[path = "error_tests/never.rs"]
 mod never;
+#[path = "error_tests/override_compatibility.rs"]
+mod override_compatibility;
 #[path = "error_tests/spl_builtins.rs"]
 mod spl_builtins;
 #[path = "error_tests/misc.rs"]

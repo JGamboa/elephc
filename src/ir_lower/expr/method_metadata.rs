@@ -290,9 +290,13 @@ pub(super) fn instance_method_late_static_return_for_ir(
 /// An override family can box a `static` return into the Mixed call ABI its siblings share
 /// (`crate::ir_lower::program::virtual_abi`); the body then hands back a Mixed cell, and typing
 /// the call as the bound object class would read that cell as an object pointer.
+///
+/// The boxed type still names the receiver's own class in place of the declaring one
+/// (`static` under `static|false` called on a `D` is `D|false`), so properties only the
+/// receiver declares stay readable.
 pub(super) fn late_static_result_within_abi(bound: PhpType, nominal: &PhpType) -> PhpType {
     if nominal.codegen_repr() == PhpType::Mixed && bound.codegen_repr() != PhpType::Mixed {
-        nominal.clone()
+        crate::types::override_families::boxed_member_return(nominal, &bound)
     } else {
         bound
     }
