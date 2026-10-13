@@ -121,9 +121,7 @@ impl Checker {
             ExprKind::BinaryOp { left, op, right } => {
                 self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let mut right_env = env.clone();
-                    self.infer_type_with_assignment_effects(right, &mut right_env)?;
-                    merge_array_storage_effects(env, &right_env);
+                    self.infer_conditional_operand_with_effects(right, env)?;
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(right, env)?;
@@ -141,11 +139,7 @@ impl Checker {
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
-                    let mut default_env = env.clone();
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
-                    default_ty
+                    self.infer_conditional_operand_with_effects(default, env)?
                 };
                 Ok(null_coalesce_result_type(
                     self,
@@ -159,9 +153,7 @@ impl Checker {
                 if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?;
                 } else {
-                    let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
+                    self.infer_conditional_operand_with_effects(default, env)?;
                 }
                 // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
                 self.infer_type(expr, env)
@@ -176,6 +168,7 @@ impl Checker {
                 // and simple `$x->prop instanceof X` guards narrow the branch envs. A ternary is a
                 // single expression, so branch narrowing is write-invalidation-safe.
                 let guard = self.guard_narrowing(condition, env)?;
+                let guard_var = guard.as_ref().map(|guard| guard.var.clone());
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
                 if let Some(guard) = guard {
@@ -186,6 +179,18 @@ impl Checker {
                 merge_array_storage_effects(env, &then_env);
                 merge_array_storage_effects(&mut else_env, &then_env);
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                // A branch that RETYPES an existing local is re-checked on the real environment,
+                // as `infer_conditional_operand_with_effects` explains.
+                if branch_retypes_existing_local(env, &then_env, guard_var.as_deref())
+                    || branch_retypes_existing_local(env, &else_env, guard_var.as_deref())
+                {
+                    let before = env.clone();
+                    let then_ty = self.infer_type_with_assignment_effects(then_expr, env)?;
+                    let else_ty = self.infer_type_with_assignment_effects(else_expr, env)?;
+                    env.retain(|name, _| before.contains_key(name));
+                    widen_lazy_edge_disagreements(env, &[&then_env, &else_env]);
+                    return Ok(merge_match_arm_result_type(self, then_ty, else_ty));
+                }
                 merge_array_storage_effects(env, &else_env);
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
@@ -735,6 +740,73 @@ fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
 }
 
 /// Merges array layout conversions from a conditional expression arm into its outer environment.
+impl Checker {
+    /// Infers an operand PHP evaluates only conditionally: the right side of `&&` / `||`, the
+    /// default of `?:` and `??`.
+    ///
+    /// The operand is first checked on a copy of the environment, so a local it creates does not
+    /// become defined after the expression (reading it later stays `Undefined variable`, since
+    /// the operand may not have run). An operand that RETYPES a local that already exists
+    /// (`$b = null; $ok || $b = f();`) is re-checked on the real environment, exactly as an `if`
+    /// body is, so the local's binding is widened the way EIR lowering's lazy-edge join
+    /// (`LazyBranchJoin`) represents it; locals only the operand defines are removed again.
+    pub(crate) fn infer_conditional_operand_with_effects(
+        &mut self,
+        operand: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let mut branch_env = env.clone();
+        let ty = self.infer_type_with_assignment_effects(operand, &mut branch_env)?;
+        if !branch_retypes_existing_local(env, &branch_env, None) {
+            merge_array_storage_effects(env, &branch_env);
+            return Ok(ty);
+        }
+        let before = env.clone();
+        let ty = self.infer_type_with_assignment_effects(operand, env)?;
+        env.retain(|name, _| before.contains_key(name));
+        widen_lazy_edge_disagreements(env, &[&before, &branch_env]);
+        Ok(ty)
+    }
+}
+
+/// After a lazily evaluated region was re-checked on the real environment, types a local the
+/// edges leave with DIFFERENT representations as `mixed`, which is what EIR lowering's
+/// `LazyBranchJoin` boxes it to. Keeping the store's own type (`int` for `$x = null; $c && $x =
+/// 5;`) let a caller-visible type claim `int` for a value that may be PHP null: `return $x;`
+/// returned `int(0)` instead of `NULL`. Array-only disagreements keep the joined array type.
+fn widen_lazy_edge_disagreements(env: &mut TypeEnv, edges: &[&TypeEnv]) {
+    let names = env.keys().cloned().collect::<Vec<_>>();
+    for name in names {
+        if Checker::narrowed_place_key_is_property(&name) {
+            continue;
+        }
+        let reprs = edges
+            .iter()
+            .filter_map(|edge| edge.get(&name).map(PhpType::codegen_repr))
+            .collect::<Vec<_>>();
+        if reprs.len() < 2 || reprs.windows(2).all(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        if reprs
+            .iter()
+            .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+        {
+            continue;
+        }
+        env.insert(name, PhpType::Mixed);
+    }
+}
+
+/// True when a conditionally evaluated branch changed the type of a local that existed before
+/// it (a guard's own narrowing and property narrowing keys excluded).
+fn branch_retypes_existing_local(env: &TypeEnv, branch_env: &TypeEnv, guard_var: Option<&str>) -> bool {
+    branch_env.iter().any(|(name, branch_ty)| {
+        guard_var != Some(name.as_str())
+            && !Checker::narrowed_place_key_is_property(name)
+            && env.get(name).is_some_and(|ty| ty != branch_ty)
+    })
+}
+
 fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
     let converted = branch_env
         .iter()

@@ -10,7 +10,8 @@
 
 mod assignment_targets;
 pub(crate) use assignment_targets::{
-    append_assignment_expr, is_dynamic_class_member_read, reject_dynamic_member_write,
+    append_assignment_expr, call_dimension_assignment_expr, is_call_dimension_place,
+    is_dynamic_class_member_read, reject_dynamic_member_write, reject_nullsafe_write,
     DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
 };
 mod calls;

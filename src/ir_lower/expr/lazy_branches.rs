@@ -31,6 +31,7 @@ pub(super) fn lower_null_coalesce(
         .create_named_block("coalesce.default", Vec::new());
     let value_block = ctx.builder.create_named_block("coalesce.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
+    let join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
         then_target: default_block,
@@ -43,15 +44,17 @@ pub(super) fn lower_null_coalesce(
     // `PendingBranchValue`): the default arm's type is only known once it is lowered.
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     let default_value = lower_expr(ctx, default);
     let default_branch = park_pending_branch(ctx, default_value, Some(value));
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     // This arm only runs for a non-null value, so its null member does not join the merge.
     let value_branch = park_pending_branch(ctx, value, None).map(PendingBranchValue::excluding_null);
 
-    lower_two_way_pending_merge(ctx, default_branch, value_branch, merge, &split_initialized, expr.span)
+    lower_two_way_pending_merge(ctx, default_branch, value_branch, merge, &split_initialized, Some(join), expr.span)
 }
 
 /// Stores two parked lazy-branch values into a merge temp typed from both, joins the
@@ -62,16 +65,20 @@ pub(super) fn lower_two_way_pending_merge(
     second: Option<PendingBranchValue>,
     merge: BlockId,
     split_initialized: &HashSet<LocalSlotId>,
+    mut join: Option<crate::ir_lower::stmt::LazyBranchJoin>,
     span: Span,
 ) -> LoweredValue {
     let first_reachable = first.is_some();
     let second_reachable = second.is_some();
     let (temp_name, branches) =
-        store_pending_branches(ctx, first.into_iter().chain(second).collect(), merge, None, span);
+        store_pending_branches(ctx, first.into_iter().chain(second).collect(), merge, None, join.as_mut(), span);
     let mut stored = branches.iter().map(|branch| branch.initialized().clone());
     let first_initialized = if first_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
     let second_initialized = if second_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
-    ctx.builder.position_at_end(merge);
+    match join {
+        Some(join) => join.finish(ctx, span),
+        None => ctx.builder.position_at_end(merge),
+    }
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         split_initialized,
         first_initialized,
@@ -216,6 +223,7 @@ pub(super) fn lower_short_ternary(
     let merge = ctx
         .builder
         .create_named_block("short_ternary.merge", Vec::new());
+    let join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: value_block,
@@ -226,15 +234,17 @@ pub(super) fn lower_short_ternary(
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     // A null value is never truthy, so this arm's null member does not join the merge.
     let value_branch = park_pending_branch(ctx, value, None).map(PendingBranchValue::excluding_null);
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     let default_value = lower_expr(ctx, default);
     let default_branch = park_pending_branch(ctx, default_value, Some(value));
 
-    lower_two_way_pending_merge(ctx, value_branch, default_branch, merge, &split_initialized, expr.span)
+    lower_two_way_pending_merge(ctx, value_branch, default_branch, merge, &split_initialized, Some(join), expr.span)
 }
 
 /// Releases a lowered value that a lazy branch tested but did not forward.

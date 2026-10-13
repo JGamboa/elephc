@@ -27,6 +27,7 @@ pub(super) fn lower_ternary(
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
+    let mut join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: then_block,
@@ -37,10 +38,12 @@ pub(super) fn lower_ternary(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     let then_branch = lower_pending_branch(ctx, then_expr);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     let else_branch = lower_pending_branch(ctx, else_expr);
 
     let then_reachable = then_branch.is_some();
@@ -50,13 +53,14 @@ pub(super) fn lower_ternary(
         then_branch.into_iter().chain(else_branch).collect(),
         merge,
         Some(expr),
+        Some(&mut join),
         expr.span,
     );
     let mut stored = branches.iter().map(|branch| branch.initialized().clone());
     let then_initialized = if then_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
     let else_initialized = if else_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         then_initialized,

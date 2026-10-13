@@ -78,7 +78,7 @@ pub(super) fn lower_match(
             }
         }
     }
-    let (temp_name, _) = store_pending_branches(ctx, pending, merge, Some(expr), expr.span);
+    let (temp_name, _) = store_pending_branches(ctx, pending, merge, Some(expr), None, expr.span);
     ctx.builder.position_at_end(merge);
     // A matched subject is released here, as PHP releases the temporary, rather than at frame exit.
     if let Some(temp) = unhandled_subject.as_deref() {

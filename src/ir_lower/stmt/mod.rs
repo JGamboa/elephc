@@ -42,6 +42,7 @@ use crate::types::{PhpType, ThrowAccessKind};
 mod statement_basics;
 mod local_assignments;
 mod conditionals;
+pub(crate) use conditionals::LazyBranchJoin;
 mod loops;
 mod array_write_core;
 mod nested_array_writes;

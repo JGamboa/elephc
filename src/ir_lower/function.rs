@@ -2406,6 +2406,18 @@ fn direct_closure_return_expr_type(
         | ExprKind::ExprCall { .. }
         | ExprKind::Pipe { .. }
         | ExprKind::NullsafeDynamicMethodCall { .. } => return PhpType::Mixed,
+        // `return $o->p = v;`, `return $this['env'] = v;`, `return $list[] = v;`: a write to a
+        // place other than a plain local yields its value through a prelude or a result
+        // temporary, which the syntactic fallback below types as `Int`, so the closure
+        // returned a string or an object through an int slot and printed 0. The write's
+        // result is handed back boxed instead.
+        ExprKind::Assignment { target, result_target, prelude, .. }
+            if result_target.is_some()
+                || !prelude.is_empty()
+                || !matches!(target.kind, ExprKind::Variable(_)) =>
+        {
+            return PhpType::Mixed;
+        }
         _ => {}
     }
     // An array literal returned directly is stamped with this inferred type and its elements

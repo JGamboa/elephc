@@ -70,6 +70,9 @@ pub(super) struct PendingBranchValue {
     initialized: HashSet<LocalSlotId>,
     /// A tested-but-not-forwarded value (`?:`/`??` default arm) released after the store.
     discarded: Option<LoweredValue>,
+    /// Flow-sensitive local types at the end of the branch, restored before its store when a
+    /// [`crate::ir_lower::stmt::LazyBranchJoin`] reconciles the edges (see `store_pending_branches`).
+    types: crate::types::TypeEnv,
 }
 
 impl PendingBranchValue {
@@ -148,6 +151,7 @@ pub(super) fn park_pending_branch(
         merge_type,
         initialized: ctx.initialized_slots_snapshot(),
         discarded,
+        types: ctx.local_types_snapshot(),
     })
 }
 
@@ -181,11 +185,17 @@ pub(super) fn pending_branch_merge_type(branches: &[PendingBranchValue]) -> PhpT
 /// `array<array<int>>`), which the boxed merge turns into PHP `null` but an elementwise
 /// `ArrayToMixed` conversion would dereference. Scalar and object merges need no such guard and
 /// keep their exact lowered type.
+///
+/// With a `join`, each branch's own local types are restored before its store and the branch
+/// ends in the join's deferred tail instead of a direct branch to `merge`, so the join can
+/// reconcile locals a branch retyped AFTER the temp store; the caller then calls
+/// `LazyBranchJoin::finish`.
 pub(super) fn store_pending_branches(
     ctx: &mut LoweringContext<'_, '_>,
     mut branches: Vec<PendingBranchValue>,
     merge: BlockId,
     container_fallback: Option<&Expr>,
+    mut join: Option<&mut crate::ir_lower::stmt::LazyBranchJoin>,
     span: crate::span::Span,
 ) -> (String, Vec<PendingBranchValue>) {
     let mut result_type = pending_branch_merge_type(&branches);
@@ -198,12 +208,18 @@ pub(super) fn store_pending_branches(
     for branch in &mut branches {
         ctx.builder.position_at_end(branch.block);
         ctx.restore_initialized_slots(branch.initialized.clone());
+        if join.is_some() {
+            ctx.restore_local_types(branch.types.clone());
+        }
         store_value_into_temp(ctx, &temp_name, result_type.clone(), branch.value, span);
         if let Some(discarded) = branch.discarded {
             release_discarded_branch_value(ctx, discarded, span);
         }
         branch.initialized = ctx.initialized_slots_snapshot();
-        branch_to(ctx, merge);
+        match join.as_deref_mut() {
+            Some(join) => join.exit_edge(ctx),
+            None => branch_to(ctx, merge),
+        }
     }
     (temp_name, branches)
 }
@@ -370,6 +386,20 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // An assignment yields the stored value. The syntactic fallback answers `int` for it, so
+        // `$c ?: $o = new C` typed its merge temp as an integer and the backend refused to cast
+        // the object. A plain local store yields its value's type; a write with a prelude or a
+        // result temporary (a property, a dimension, an append) merges as boxed `mixed`.
+        ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+            if result_target.is_none()
+                && prelude.is_empty()
+                && matches!(target.kind, ExprKind::Variable(_))
+            {
+                materialized_expr_type_for_merge(ctx, value)
+            } else {
+                PhpType::Mixed
+            }
+        }
         _ if syntactic_merge_type_is_exact(expr) => fallback_expr_type(expr),
         _ => PhpType::Mixed,
     }
