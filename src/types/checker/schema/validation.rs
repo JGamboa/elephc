@@ -150,6 +150,124 @@ pub(crate) fn extract_deprecation(groups: &[crate::parser::ast::AttributeGroup])
     None
 }
 
+/// Gives an untyped `__toString()` PHP 8's implicit `: string` where a contract requires it.
+///
+/// PHP adds that declaration itself, so an untyped `__toString()` satisfies `Stringable` and a
+/// parent's `__toString(): string`. elephc applies it only to classes whose ancestry implements
+/// `Stringable` or inherits a declared `__toString()` return: those were rejected before
+/// ("without declaring a compatible return type"), while an unconstrained untyped `__toString()`
+/// keeps its inferred return and so cannot start failing body checks it passed before.
+/// Rewrites both the schema map and the flattened declarations, so signatures, body checking and
+/// lowering all see the same declared return.
+pub(crate) fn apply_implicit_tostring_return_types(
+    class_map: &mut std::collections::HashMap<String, crate::types::traits::FlattenedClass>,
+    flattened: &mut [crate::types::traits::FlattenedClass],
+    interface_map: &std::collections::HashMap<
+        String,
+        crate::types::checker::builtin_types::InterfaceDeclInfo,
+    >,
+) {
+    fn untyped_tostring(method: &ClassMethod) -> bool {
+        method.return_type.is_none()
+            && !method.by_ref_return
+            && !method.is_static
+            && php_symbol_key(&method.name) == "__tostring"
+    }
+    fn reaches_stringable(
+        interface: &str,
+        interface_map: &std::collections::HashMap<
+            String,
+            crate::types::checker::builtin_types::InterfaceDeclInfo,
+        >,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        let key = php_symbol_key(interface.trim_start_matches('\\'));
+        if key == "stringable" {
+            return true;
+        }
+        if !seen.insert(key) {
+            return false;
+        }
+        interface_map
+            .iter()
+            .find(|(name, _)| php_symbol_key(name) == php_symbol_key(interface))
+            .is_some_and(|(_, info)| {
+                info.extends
+                    .iter()
+                    .any(|parent| reaches_stringable(parent, interface_map, seen))
+            })
+    }
+    let needs_implicit: Vec<String> = class_map
+        .values()
+        .filter(|class| class.methods.iter().any(untyped_tostring))
+        .filter(|class| {
+            let mut seen_classes = std::collections::HashSet::new();
+            let mut seen_interfaces = std::collections::HashSet::new();
+            let mut current = Some(*class);
+            while let Some(ancestor) = current {
+                if !seen_classes.insert(ancestor.name.clone()) {
+                    break;
+                }
+                if ancestor
+                    .implements
+                    .iter()
+                    .any(|iface| reaches_stringable(iface, interface_map, &mut seen_interfaces))
+                {
+                    return true;
+                }
+                if ancestor.name != class.name
+                    && ancestor.methods.iter().any(|method| {
+                        php_symbol_key(&method.name) == "__tostring"
+                            && method.return_type.is_some()
+                    })
+                {
+                    return true;
+                }
+                current = ancestor
+                    .extends
+                    .as_deref()
+                    .and_then(|parent| class_map.get(parent));
+            }
+            false
+        })
+        .map(|class| class.name.clone())
+        .collect();
+    let declare = |methods: &mut [ClassMethod]| {
+        for method in methods.iter_mut().filter(|method| untyped_tostring(method)) {
+            method.return_type = Some(TypeExpr::Str);
+        }
+    };
+    for name in &needs_implicit {
+        if let Some(class) = class_map.get_mut(name) {
+            declare(&mut class.methods);
+        }
+        if let Some(class) = flattened.iter_mut().find(|class| &class.name == name) {
+            declare(&mut class.methods);
+        }
+    }
+}
+
+/// Returns whether a method carries PHP's `#[\ReturnTypeWillChange]` marker.
+pub(crate) fn has_return_type_will_change(groups: &[crate::parser::ast::AttributeGroup]) -> bool {
+    groups.iter().any(|group| {
+        group
+            .attributes
+            .iter()
+            .any(|attr| matches_global_builtin_attribute(attr, "ReturnTypeWillChange"))
+    })
+}
+
+/// Returns whether collected attribute names (see `collect_attribute_names`) carry
+/// `#[\ReturnTypeWillChange]`; used where only the class state's method metadata survives.
+pub(crate) fn attribute_names_include_return_type_will_change(names: Option<&Vec<String>>) -> bool {
+    names.is_some_and(|names| {
+        names.iter().any(|name| {
+            name.trim_start_matches('\\')
+                .eq_ignore_ascii_case("ReturnTypeWillChange")
+        })
+    })
+}
+
 /// Returns `true` if `attr` is a global builtin attribute matching `builtin` by name.
 /// Fully-qualified names must match exactly (case-insensitive); unqualified names
 /// match the last segment case-insensitively. Used to detect `#[\Deprecated]` and similar.
@@ -336,6 +454,26 @@ pub(crate) fn validate_signature_compatibility(
     let child = SourceVisibleShape::of(child_sig);
     let parent = SourceVisibleShape::of(parent_sig);
 
+    // PHP accepts trailing optional parameters added by an override, but elephc's method
+    // dispatch is fixed-arity: a call through the parent's type passes the parent's parameter
+    // count into the child's vtable slot, so nothing would supply the added defaults. Refuse it
+    // with its own diagnostic rather than reading an argument that was never passed.
+    if child.param_count > parent.param_count
+        && child.variadic.is_none()
+        && parent.variadic.is_none()
+        && child.has_defaults[parent.param_count..]
+            .iter()
+            .all(|has_default| *has_default)
+    {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot add optional parameters when {} {}: {}::{} (not yet supported: elephc dispatches overrides with the parent's parameter count and cannot supply the added defaults)",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
     if child.param_count != parent.param_count {
         return Err(CompileError::new(
             span,
@@ -375,7 +513,16 @@ pub(crate) fn validate_signature_compatibility(
         }
     }
 
-    if child.has_defaults != parent.has_defaults {
+    // PHP lets an override make a required parameter optional (the child accepts every call the
+    // parent accepts), but never the reverse. The physical parameter count is unchanged either
+    // way, so the shared vtable slot keeps one ABI; a call through the parent's static type always
+    // passes the parameter, and one through the child's type fills the child's own default.
+    if parent
+        .has_defaults
+        .iter()
+        .zip(&child.has_defaults)
+        .any(|(&parent_optional, &child_optional)| parent_optional && !child_optional)
+    {
         return Err(CompileError::new(
             span,
             &format!(
@@ -385,7 +532,9 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child.variadic != parent.variadic {
+    // Only the presence of a variadic is part of the contract. Its name is not: PHP accepts
+    // `...$arrays` overridden as `...$lists`, and positional arguments collect identically.
+    if child.variadic.is_some() != parent.variadic.is_some() {
         return Err(CompileError::new(
             span,
             &format!(
@@ -395,7 +544,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child.required_param_count() != parent.required_param_count() {
+    if child.required_param_count() > parent.required_param_count() {
         return Err(CompileError::new(
             span,
             &format!(
@@ -512,7 +661,11 @@ pub(crate) fn validate_override_signature(
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
     )?;
-    if parent_sig.declared_return && !child_sig.declared_return {
+    // `#[\ReturnTypeWillChange]` only relaxes PHP's tentative return types, which exist on
+    // internal (compiler-injected) parents. A source parent stays strict, as in PHP.
+    let return_type_will_change =
+        !parent_declaration_is_source && has_return_type_will_change(&method.attributes);
+    if parent_sig.declared_return && !child_sig.declared_return && !return_type_will_change {
         return Err(CompileError::new(
             method.span,
             &format!(
@@ -545,8 +698,33 @@ pub(crate) fn validate_override_signature(
             &class.implements,
             parent_sig,
             &child_sig,
+        ) || union_self_return_compatible(
+            checker,
+            class_name,
+            class.extends.as_deref(),
+            &class.implements,
+            parent_sig,
+            &child_sig,
         )
     });
+    if parent_sig.declared_return && !return_compatible && return_type_will_change {
+        // A class override shares the parent's vtable slot and its caller-visible return ABI,
+        // and no adapter re-boxes the result, so a relaxed return must keep the parent's
+        // physical representation. Anything else is refused rather than miscompiled.
+        if child_sig
+            .return_type
+            .reference_payload_compatible(&parent_sig.return_type)
+        {
+            return Ok(());
+        }
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot override {} {}::{} with #[\\ReturnTypeWillChange] return type {}: elephc cannot dispatch it through the parent's native return type {}",
+                kind, class_name, method.name, child_sig.return_type, parent_sig.return_type
+            ),
+        ));
+    }
     if parent_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             method.span,
@@ -594,4 +772,57 @@ fn covariant_self_return_compatible(
         }
         _ => false,
     }
+}
+
+/// Returns true when a union child return is covariant member by member, letting members that
+/// name the class under construction match through its declared parent and interfaces.
+///
+/// Covers PHP returns like `Node|bool` overridden as `Leaf|false`: `type_accepts` cannot see
+/// `Leaf` yet because the child is mid-construction. A class override shares the parent's vtable
+/// slot and return ABI, so the relaxed acceptance also requires an unchanged physical return
+/// representation (a scalar narrowed out of a boxed union would be read as the wrong word).
+fn union_self_return_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    parent_sig: &FunctionSig,
+    child_sig: &FunctionSig,
+) -> bool {
+    let child_members: Vec<&PhpType> = match &child_sig.return_type {
+        PhpType::Union(members) => members.iter().collect(),
+        other => vec![other],
+    };
+    let parent_members: Vec<&PhpType> = match &parent_sig.return_type {
+        PhpType::Union(members) => members.iter().collect(),
+        other => vec![other],
+    };
+    if child_members.len() < 2 && parent_members.len() < 2 {
+        return false;
+    }
+    if !child_sig
+        .return_type
+        .reference_payload_compatible(&parent_sig.return_type)
+    {
+        return false;
+    }
+    child_members.into_iter().all(|member| {
+        declared_return_type_compatible(checker, &parent_sig.return_type, member)
+            || (matches!(member, PhpType::Object(name) if name == class_name)
+                && parent_members.iter().any(|expected| {
+                    let PhpType::Object(expected_name) = expected else {
+                        return false;
+                    };
+                    expected_name == class_name
+                        || extends.is_some_and(|parent| {
+                            parent == expected_name
+                                || checker.is_subclass_of(parent, expected_name)
+                                || checker.class_implements_interface(parent, expected_name)
+                        })
+                        || implements.iter().any(|iface| {
+                            iface == expected_name
+                                || checker.interface_extends_interface(iface, expected_name)
+                        })
+                }))
+    })
 }

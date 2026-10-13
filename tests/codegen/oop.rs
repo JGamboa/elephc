@@ -15,6 +15,8 @@ mod instanceof;
 mod traits;
 #[path = "oop/inheritance.rs"]
 mod inheritance;
+#[path = "oop/override_compatibility.rs"]
+mod override_compatibility;
 #[path = "oop/interfaces.rs"]
 mod interfaces;
 #[path = "oop/modifiers_and_properties.rs"]

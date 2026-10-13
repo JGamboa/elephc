@@ -279,6 +279,11 @@ pub(super) fn check_types_impl(
     ) {
         errors.extend(error.flatten());
     }
+    super::schema::validation::apply_implicit_tostring_return_types(
+        &mut class_map,
+        &mut flattened_classes,
+        &interface_map,
+    );
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
