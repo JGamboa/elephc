@@ -290,3 +290,64 @@ $h = new H(); var_dump($h->pi ?: 5, !$h->pi); $h->pi = 7; var_dump($h->pi ?: 5, 
          bool(false)\n"
     );
 }
+
+/// Shared `UnhandledMatchError` message probe over a `mixed` and a typed subject.
+const UNHANDLED_MESSAGES: &str = r#"<?php
+enum Suit { case Hearts; case Spades; }
+enum BS: string { case A = "a"; case B = "b"; }
+function m($x) { try { return match ($x) { -999 => 1 }; } catch (\UnhandledMatchError $e) { return $e->getMessage(); } }
+"#;
+
+fn run_unhandled(body: &str) -> String {
+    compile_and_run(&format!("{UNHANDLED_MESSAGES}{body}"))
+}
+
+/// H1: an enum case subject renders as `Class::Case`, as PHP does, not `of type Class`.
+#[test]
+fn test_unhandled_match_message_renders_enum_case() {
+    let out = run_unhandled(
+        r#"function te(Suit $x) { try { return match ($x) { Suit::Spades => 1 }; } catch (\UnhandledMatchError $e) { return $e->getMessage(); } }
+echo m(Suit::Hearts), "\n", m(BS::A), "\n", te(Suit::Hearts), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Unhandled match case Suit::Hearts\nUnhandled match case BS::A\nUnhandled match case Suit::Hearts\n"
+    );
+}
+
+/// H2: a float subject renders like PHP's precision-14 form with `.0` on integral values.
+#[test]
+fn test_unhandled_match_message_renders_floats_like_php() {
+    let out = run_unhandled(
+        r#"function tf(float $x) { try { return match ($x) { 9.5 => 1 }; } catch (\UnhandledMatchError $e) { return $e->getMessage(); } }
+foreach ([1.0, -0.0, 1.5, 1e15, 0.30000000000000004, INF, NAN] as $v) { echo m($v), "|"; }
+echo tf(-2.0), "|", tf(0.1), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Unhandled match case 1.0|Unhandled match case -0.0|Unhandled match case 1.5|\
+         Unhandled match case 1.0E+15|Unhandled match case 0.3|Unhandled match case INF|\
+         Unhandled match case NAN|Unhandled match case -2.0|Unhandled match case 0.1\n"
+    );
+}
+
+/// H3: a string subject is quoted, truncated to 15 bytes plus `...`, with `\\` and control
+/// escapes applied.
+#[test]
+fn test_unhandled_match_message_truncates_long_strings() {
+    let out = run_unhandled(
+        r#"function ts(string $x) { try { return match ($x) { "z" => 1 }; } catch (\UnhandledMatchError $e) { return $e->getMessage(); } }
+foreach (["123456789012345", "1234567890123456", "a very long string here", "a'b", "", "ab\\c\n"] as $v) { echo m($v), "|"; }
+echo ts("a very long string here"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Unhandled match case '123456789012345'|Unhandled match case '123456789012345...'|\
+         Unhandled match case 'a very long str...'|Unhandled match case 'a'b'|\
+         Unhandled match case ''|Unhandled match case 'ab\\\\c\\n'|\
+         Unhandled match case 'a very long str...'\n"
+    );
+}
