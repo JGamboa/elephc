@@ -158,3 +158,67 @@ fn test_dynamic_receiver_static_call_is_accepted_by_strict_php() {
     );
     assert_eq!(out, "v1v1");
 }
+
+/// Verifies `call()[] = $v` in expression position (Laravel's `defer()` arrow fn): an
+/// `ArrayAccess` result gets `offsetSet(null, $v)`, an array result is a discarded temporary, a
+/// string throws PHP's Error, and the expression yields `$v`.
+#[test]
+fn test_append_to_call_result_in_expression() {
+    let out = compile_and_run(
+        r#"<?php
+        class Coll implements ArrayAccess {
+            public static array $log = [];
+            public function offsetExists(mixed $o): bool { return true; }
+            public function offsetGet(mixed $o): mixed { return 1; }
+            public function offsetSet(mixed $o, mixed $v): void { self::$log[] = var_export($o, true) . '=' . $v; }
+            public function offsetUnset(mixed $o): void {}
+        }
+        function app(): mixed { return new Coll; }
+        function typed(): Coll { return new Coll; }
+        function arr(): array { return [1]; }
+        function txt(): mixed { return 'abc'; }
+        $f = fn($d) => app()[] = $d;
+        echo $f('a'), $f('b'), (fn() => typed()[] = 'c')(), '|', implode(',', Coll::$log), "\n";
+        echo (fn() => arr()[] = 9)(), "\n";
+        try { (fn() => txt()[] = 'z')(); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+        "#,
+    );
+    assert_eq!(out, "abc|NULL=a,NULL=b,NULL=c\n9\n[] operator not supported for strings\n");
+}
+
+/// Verifies PHP's `new` class-name references: `new static::$prop(...)` (late static binding),
+/// `new self::$prop`, `new C::$prop`, `new $obj->prop(...)` and `new $obj->map['k'](...)`.
+#[test]
+fn test_new_with_dynamic_class_name_reference() {
+    let out = compile_and_run(
+        r#"<?php
+        class Q { public function __construct(public string $v = "q") {} }
+        class R extends Q {}
+        class M2 {
+            public static $builder = Q::class;
+            public static function make($x) { return new static::$builder($x); }
+            public static function bare() { return new self::$builder; }
+        }
+        class M3 extends M2 { public static $builder = R::class; }
+        class P { public $cls = R::class; public $map = ['q' => Q::class]; }
+        $p = new P;
+        echo get_class(M2::make('a')), M2::make('a')->v, '|', get_class(M3::make('b')), '|', M2::bare()->v, "\n";
+        echo get_class(new $p->cls('c')), '|', (new $p->map['q']('d'))->v, '|', get_class(new M2::$builder), "\n";
+        $names = ['Q']; echo get_class(new $p->cls), (new $names[0])->v, "\n";
+        "#,
+    );
+    assert_eq!(out, "Qa|R|q\nR|d|Q\nRq\n");
+}
+
+/// Verifies `new Foo` / `new $class(...)` keep compiling as before.
+#[test]
+fn test_new_plain_forms_still_work() {
+    let out = compile_and_run(
+        r#"<?php
+        class Q { public function __construct(public string $v = "q") {} }
+        $c = 'Q';
+        echo (new Q)->v, (new $c('x'))->v, new Q('y')->v, "\n";
+        "#,
+    );
+    assert_eq!(out, "qxy\n");
+}

@@ -103,6 +103,20 @@ fn parse_expr_bp_inner(
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;
+                if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
+                    // `$base[] = value` in expression position (e.g. an arrow fn body). PHP only
+                    // allows `[]` as a plain assignment target.
+                    *pos += 1;
+                    if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Assign)) {
+                        return Err(CompileError::new(span, "Cannot use [] for reading"));
+                    }
+                    *pos += 1;
+                    let (_, _, r_bp) = assignment_bp(&Token::Assign).expect("`=` is an assignment");
+                    let value = parse_expr_bp(tokens, pos, r_bp)?;
+                    let span = span.merge(value.span);
+                    lhs = super::assignment_targets::append_assignment_expr(lhs, value, span)?;
+                    continue;
+                }
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                     return Err(CompileError::new(span, "Expected ']'"));

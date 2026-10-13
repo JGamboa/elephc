@@ -508,6 +508,15 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if super::calls::parse_first_class_callable_parens(tokens, pos)? {
+                    // PHP builds a Closure over the runtime callable (`Closure::fromCallable`).
+                    // A wrapper closure would answer reflection (`isAnonymous`, scope class)
+                    // differently, so refuse rather than compile something PHP would not run.
+                    return Err(CompileError::new(
+                        span,
+                        "First-class callable syntax on a variable (`$callback(...)`) is not supported: elephc cannot build a Closure from a runtime callable value",
+                    ));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
