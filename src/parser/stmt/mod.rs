@@ -200,6 +200,46 @@ fn parse_stmt_dispatch(
         Token::Function => params::parse_function_decl(tokens, pos, span),
         // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
         Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
+        // Any expression is a statement in PHP, including one that opens with a literal, a
+        // predefined constant, a magic constant or a prefix operator: `0 > $T && $T += 0x40;`
+        // (symfony/polyfill-intl-normalizer) or `! $x && f();`. None of these tokens can begin
+        // a declaration, a label or an assignment target, so they go straight to the
+        // expression parser.
+        Token::IntLiteral(_)
+        | Token::FloatLiteral(_)
+        | Token::StringLiteral(_)
+        | Token::True
+        | Token::False
+        | Token::Null
+        | Token::Inf
+        | Token::Nan
+        | Token::PhpIntMax
+        | Token::PhpIntMin
+        | Token::PhpFloatMax
+        | Token::PhpFloatMin
+        | Token::PhpFloatEpsilon
+        | Token::MPi
+        | Token::ME
+        | Token::MSqrt2
+        | Token::MPi2
+        | Token::MPi4
+        | Token::MLog2e
+        | Token::MLog10e
+        | Token::PhpEol
+        | Token::PhpOs
+        | Token::DirectorySeparator
+        | Token::DunderDir
+        | Token::DunderFile
+        | Token::DunderLine
+        | Token::DunderFunction
+        | Token::DunderClass
+        | Token::DunderMethod
+        | Token::DunderNamespace
+        | Token::DunderTrait
+        | Token::Bang
+        | Token::Minus
+        | Token::Plus
+        | Token::Tilde => simple::parse_expr_stmt(tokens, pos, span),
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Declare => declare::parse_declare(tokens, pos, span),

@@ -162,3 +162,44 @@ fn test_while_condition_destructuring_alt_syntax() {
     );
     assert_eq!(out, "3\n");
 }
+
+// --- Statements that start with a literal (polyfill-intl-normalizer Normalizer.php:243) ---
+
+#[test]
+fn test_statement_starting_with_int_literal_short_circuit_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+function adjust(int $T): int
+{
+    0 > $T && $T += 0x40;
+    return $T;
+}
+echo adjust(-5), " ", adjust(3), "\n";
+"#,
+    );
+    assert_eq!(out, "59 3\n");
+}
+
+#[test]
+fn test_statements_starting_with_other_literals_and_unary_operators() {
+    let out = compile_and_run(
+        r#"<?php
+$s = 'abc';
+42;
+'abc' === $s and print("str-lead\n");
+1.5 < 2 || print("never\n");
+null ?? print("null-lead\n");
+true && print("true-lead\n");
+false || print("false-lead\n");
+-1 < 0 && print("neg-lead\n");
+!empty($s) && print("bang-lead\n");
+PHP_EOL === "\n" && print("const-lead\n");
+__LINE__ > 0 && print("magic-lead\n");
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "str-lead\nnull-lead\ntrue-lead\nfalse-lead\nneg-lead\nbang-lead\nconst-lead\nmagic-lead\ndone\n"
+    );
+}
