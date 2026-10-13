@@ -25,8 +25,6 @@ pub(super) fn lower_null_coalesce(
         Op::IsNull.default_effects(),
         Some(expr.span),
     );
-    let result_type = null_coalesce_result_type(ctx, value.value, default);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let default_block = ctx
         .builder
@@ -41,30 +39,47 @@ pub(super) fn lower_null_coalesce(
         else_args: Vec::new(),
     });
 
+    // Both arms are parked and the merge temp is typed from their lowered values (see
+    // `PendingBranchValue`): the default arm's type is only known once it is lowered.
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
-    release_discarded_branch_value(ctx, value, expr.span);
-    let default_reachable = !ctx.builder.insertion_block_is_terminated();
-    let default_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    let default_value = lower_expr(ctx, default);
+    let default_branch = park_pending_branch(ctx, default_value, Some(value));
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_value_into_temp(ctx, &temp_name, result_type, value, expr.span);
-    let value_reachable = !ctx.builder.insertion_block_is_terminated();
-    let value_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    // This arm only runs for a non-null value, so its null member does not join the merge.
+    let value_branch = park_pending_branch(ctx, value, None).map(PendingBranchValue::excluding_null);
 
+    lower_two_way_pending_merge(ctx, default_branch, value_branch, merge, &split_initialized, expr.span)
+}
+
+/// Stores two parked lazy-branch values into a merge temp typed from both, joins the
+/// definitely-initialized slot sets at `merge` and takes the temp's value there.
+pub(super) fn lower_two_way_pending_merge(
+    ctx: &mut LoweringContext<'_, '_>,
+    first: Option<PendingBranchValue>,
+    second: Option<PendingBranchValue>,
+    merge: BlockId,
+    split_initialized: &HashSet<LocalSlotId>,
+    span: Span,
+) -> LoweredValue {
+    let first_reachable = first.is_some();
+    let second_reachable = second.is_some();
+    let (temp_name, branches) =
+        store_pending_branches(ctx, first.into_iter().chain(second).collect(), merge, None, span);
+    let mut stored = branches.iter().map(|branch| branch.initialized().clone());
+    let first_initialized = if first_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
+    let second_initialized = if second_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
-        &split_initialized,
-        default_initialized,
-        default_reachable,
-        value_initialized,
-        value_reachable,
+        split_initialized,
+        first_initialized,
+        first_reachable,
+        second_initialized,
+        second_reachable,
     ));
-    take_owned_temp(ctx, &temp_name, expr.span)
+    take_owned_temp(ctx, &temp_name, span)
 }
 
 /// Lowers the value side of `??`, suppressing undefined-offset warnings from
@@ -156,10 +171,9 @@ pub(super) fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
                 (**right_value).clone(),
             )),
         },
-        (
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-        ) => right.clone(),
+        // `int` and `bool` share a register representation but not a PHP type: letting one side
+        // win relabels the other (`$c ? 42 : false` dumped `bool(true)`, `$c ? true : 42` dumped
+        // `int(1)`). Like every other pair of distinct scalars they merge into a boxed `mixed`.
         _ => PhpType::Mixed,
     }
 }
@@ -190,10 +204,8 @@ pub(super) fn lower_short_ternary(
     expr: &Expr,
 ) -> LoweredValue {
     let condition_span = value.span;
-    let result_type = short_ternary_merge_result_type(ctx, value, default);
     let value = lower_expr(ctx, value);
     let cond = ctx.truthy(value, Some(condition_span));
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let value_block = ctx
         .builder
@@ -214,28 +226,15 @@ pub(super) fn lower_short_ternary(
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_value_into_temp(ctx, &temp_name, result_type.clone(), value, expr.span);
-    let value_reachable = !ctx.builder.insertion_block_is_terminated();
-    let value_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    // A null value is never truthy, so this arm's null member does not join the merge.
+    let value_branch = park_pending_branch(ctx, value, None).map(PendingBranchValue::excluding_null);
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
-    release_discarded_branch_value(ctx, value, expr.span);
-    let default_reachable = !ctx.builder.insertion_block_is_terminated();
-    let default_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    let default_value = lower_expr(ctx, default);
+    let default_branch = park_pending_branch(ctx, default_value, Some(value));
 
-    ctx.builder.position_at_end(merge);
-    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
-        &split_initialized,
-        value_initialized,
-        value_reachable,
-        default_initialized,
-        default_reachable,
-    ));
-    take_owned_temp(ctx, &temp_name, expr.span)
+    lower_two_way_pending_merge(ctx, value_branch, default_branch, merge, &split_initialized, expr.span)
 }
 
 /// Releases a lowered value that a lazy branch tested but did not forward.

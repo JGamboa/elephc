@@ -439,10 +439,9 @@ $result = match($x) {
 echo $result; // two
 ```
 
-If no arm matches and there is no `default`, elephc aborts with a fatal runtime error.
-That implicit path does not currently construct a catchable `UnhandledMatchError`;
-the builtin class is available for explicit `new`, `throw`, `catch`, and `instanceof`
-expressions.
+If no arm matches and there is no `default`, elephc throws a catchable `UnhandledMatchError`
+whose message names the subject as PHP does (`Unhandled match case 5`, `Unhandled match case 'x'`,
+`Unhandled match case of type Foo`).
 
 Arms may produce values of different types (objects, arrays, strings, ints, `null`),
 and an arm may be a `throw` expression. When the arm types are heterogeneous, the
@@ -503,7 +502,7 @@ Divergences in the `Error` hierarchy:
 
 - **Static rejection instead of a runtime `ArgumentCountError`/`TypeError`.** elephc is an AOT compiler: a call whose arity or argument types are provably wrong is a COMPILE error, not a runtime throw. `opcache_reset(1)` fails the build with `Function 'opcache_reset' expects 0 arguments, got 1`, where PHP 8.5 would compile it and throw `ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given` when the line executes. The `catch (\ArgumentCountError $e)` clause itself compiles fine — only the statically provable error is reported earlier and more loudly. Wrap a genuinely dynamic call if you need the runtime behavior.
 - `AssertionError` can be thrown, caught, and inspected from userland, but nothing in elephc raises it: `assert()` is not a supported builtin (`Undefined function: assert`), so there is no `zend.assertions=1` path to fail.
-- `UnhandledMatchError` can be thrown and caught from userland, but an unmatched `match` arm is still a fatal terminator rather than a constructed, catchable `UnhandledMatchError` (see the `match` section above).
+- An unmatched `match` without `default` throws a catchable `UnhandledMatchError` (see the `match` section above).
 - `$a / 0` and `$a % 0` do NOT throw. `/` yields `INF` and `%` yields `0`, where PHP 8 raises `DivisionByZeroError` with `Division by zero` / `Modulo by zero`. Use `intdiv()` when you need the catchable error.
 - An UNCAUGHT throwable prints `Fatal error: Uncaught <Class>: <message> in <file>:<line>` and exits `255`, matching PHP up to the STACK TRACE, which elephc omits — PHP follows the first line with `Stack trace:`, `#0 {main}` and `  thrown in <file> on line <n>`. The file and line are the CONSTRUCTION site, as in PHP: an exception built on line 2 and thrown on line 5 reports line 2. `getFile()` and `getLine()` return the same pair; `getTrace()` and `getTraceAsString()` remain an empty array and an empty string, because elephc keeps no call stack.
 - A throwable raised by a CODEGEN GUARD (`intdiv()` by zero, the `array_keys()` argument check) names its class and message and exits `255` like any other, but carries NO ` in <file>:<line>` suffix: it is synthesized by the compiler rather than by a user `new`, so there is no construction site to report. `getLine()` returns `0` for these. PHP does report the operation's own line here.

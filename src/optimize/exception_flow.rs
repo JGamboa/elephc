@@ -881,6 +881,9 @@ impl ExceptionFlowAnalysis {
                 }
                 if let Some(default) = default {
                     thrown = thrown.combined(self.expr_throws(default, bindings, class_context));
+                } else {
+                    // No arm matched and there is no `default`: PHP throws `UnhandledMatchError`.
+                    thrown = thrown.combined(ThrownTypes::exact("UnhandledMatchError"));
                 }
                 thrown
             }
