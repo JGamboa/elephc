@@ -489,6 +489,13 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     );
     timings.record_since("version-prelude", phase_started);
 
+    // Inject the PHP-written stdlib functions (`pack`, `unpack`, `strspn`, `version_compare`, …)
+    // the program actually references. Same placement rules as the version prelude.
+    crate::progress::phase("stdlib-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory);
+    timings.record_since("stdlib-prelude", phase_started);
+
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {

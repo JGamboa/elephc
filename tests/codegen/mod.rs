@@ -89,6 +89,7 @@ mod runtime_reachability;
 mod runtime_introspection;
 mod math;
 mod misc;
+mod stdlib_builtins;
 mod pointers;
 mod ffi;
 mod oop;
