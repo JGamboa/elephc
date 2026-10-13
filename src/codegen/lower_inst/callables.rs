@@ -394,6 +394,59 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     )
 }
 
+/// PHP's `$callable(...)` reports a value it cannot turn into a Closure as a plain `Error`
+/// ("Value of type int is not callable", "Call to undefined function f()"), unlike the
+/// `TypeError` every callback-taking builtin raises. These are the messages the first-class
+/// callable conversion passes as its rejection diagnostics.
+pub(in crate::codegen) const FCC_UNDEFINED_FUNCTION_MESSAGE: &str = "Call to undefined function: the runtime callable name is not a function or static method compiled into this program";
+pub(in crate::codegen) const FCC_NOT_CALLABLE_MESSAGE: &str = "Value is not callable";
+
+/// Throws a callable-selection rejection with the exception class PHP uses for that message.
+///
+/// The first-class-callable conversion messages above raise `Error`; every other callable
+/// rejection keeps raising `TypeError`.
+fn emit_callable_rejection(ctx: &mut FunctionContext<'_>, message: &'static str) {
+    if message == FCC_UNDEFINED_FUNCTION_MESSAGE || message == FCC_NOT_CALLABLE_MESSAGE {
+        super::exceptions::emit_error(ctx, message);
+    } else {
+        super::exceptions::emit_type_error(ctx, message);
+    }
+}
+
+/// Returns whether a receiver statically typed `class_name` may select a `method_key` body other
+/// than `impl_class` at run time (a subclass overrides it).
+pub(in crate::codegen) fn instance_method_may_be_overridden(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_key: &str,
+    impl_class: &str,
+) -> bool {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.module.class_infos.iter().any(|(candidate, info)| {
+        if php_symbol_key(candidate) == class_key {
+            return false;
+        }
+        let mut parent = info.parent.clone();
+        let mut descends = false;
+        while let Some(name) = parent {
+            if php_symbol_key(name.trim_start_matches('\\')) == class_key {
+                descends = true;
+                break;
+            }
+            parent = ctx
+                .module
+                .class_infos
+                .get(name.trim_start_matches('\\'))
+                .and_then(|parent_info| parent_info.parent.clone());
+        }
+        descends
+            && info
+                .method_impl_classes
+                .get(method_key)
+                .is_some_and(|selected| selected != impl_class)
+    })
+}
+
 /// Materializes a boxed callable descriptor while turning an unknown string name into `TypeError`.
 pub(in crate::codegen) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_error(
     ctx: &mut FunctionContext<'_>,
@@ -422,6 +475,20 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
 ) -> Result<()> {
     emit_runtime_mixed_callable_descriptor_value_impl(
         ctx, callable, op_name, true, Some(message), Some(message), None,
+    )
+}
+
+/// Materializes a boxed callable for a first-class-callable conversion, throwing on every
+/// invalid shape with the supplied string-miss and invalid-value messages.
+pub(in crate::codegen) fn emit_runtime_mixed_callable_descriptor_value_for_conversion(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    string_message: &'static str,
+    invalid_message: &'static str,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx, callable, op_name, true, Some(string_message), Some(invalid_message), None,
     )
 }
 
@@ -549,7 +616,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.emitter.label(&next_label);
         }
         if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callable_rejection(ctx, message);
         } else {
             emit_runtime_callable_array_no_match_abort(ctx);
         }
@@ -589,7 +656,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.emitter.label(&next_label);
         }
         if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callable_rejection(ctx, message);
         } else if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
             abi::emit_jump(ctx.emitter, &fatal_label);
@@ -606,7 +673,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
     }
     if let Some(message) = invalid_type_error {
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_rejection(ctx, message);
     } else {
         emit_mixed_callable_not_callable_fatal(ctx, op_name);
     }
@@ -1101,7 +1168,7 @@ fn emit_runtime_string_descriptor_value_impl(
     ctx.emitter.label(&miss_label);
     if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_rejection(ctx, message);
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -1165,7 +1232,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx.emitter.label(&miss_label);
     if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_rejection(ctx, message);
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -1292,7 +1359,8 @@ fn runtime_instance_method_descriptor_template(
             callable_descriptor::CallableDescriptorShape::InstanceMethod,
             Some(class_name.to_string()),
             method_name,
-        ),
+        )
+        .with_scope_class(Some(impl_class.to_string())),
         Some(&invoker_label),
     );
     let template = RuntimeInstanceMethodDescriptorTemplate { descriptor_label };
@@ -1752,7 +1820,8 @@ fn runtime_static_method_descriptor_cases(
                 callable_descriptor::CallableDescriptorShape::StaticMethod,
                 Some(class_name.clone()),
                 method_name.as_str(),
-            ),
+            )
+            .with_scope_class(Some(impl_class.clone())),
             Some(&invoker_label),
         );
         let case = callable_dispatch::RuntimeCallableCase {
@@ -2103,7 +2172,7 @@ fn emit_require_callable_array_pair_in_reg(
 /// Uses a catchable builtin diagnostic for malformed pairs without changing legacy call behavior.
 fn emit_callable_array_shape_error(ctx: &mut FunctionContext<'_>, type_error: Option<&'static str>) {
     if let Some(message) = type_error {
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_rejection(ctx, message);
     } else {
         emit_runtime_callable_array_no_match_abort(ctx);
     }

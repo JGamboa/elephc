@@ -510,13 +510,12 @@ fn parse_variable(
             Token::LParen => {
                 *pos += 1;
                 if super::calls::parse_first_class_callable_parens(tokens, pos)? {
-                    // PHP builds a Closure over the runtime callable (`Closure::fromCallable`).
-                    // A wrapper closure would answer reflection (`isAnonymous`, scope class)
-                    // differently, so refuse rather than compile something PHP would not run.
-                    return Err(CompileError::new(
-                        span,
-                        "First-class callable syntax on a variable (`$callback(...)`) is not supported: elephc cannot build a Closure from a runtime callable value",
-                    ));
+                    // PHP converts the runtime callable itself (`Closure::fromCallable`
+                    // semantics): an existing Closure comes back unchanged and a name, a
+                    // callable array, or an invokable object becomes a Closure of that target,
+                    // which reflection reports as the target rather than as a wrapper.
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                    return Ok(variable_first_class_callable(name, span));
                 }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
@@ -526,6 +525,23 @@ fn parse_variable(
         }
     }
     Ok(Expr::new(ExprKind::Variable(name), span))
+}
+
+/// Builds the internal Closure conversion behind `$name(...)`.
+///
+/// The fully qualified name keeps namespace resolution from looking for a namespaced function
+/// of the same name.
+fn variable_first_class_callable(name: String, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                vec!["__elephc_closure_from_callable".to_string()],
+            ),
+            args: vec![Expr::new(ExprKind::Variable(name), span)],
+        },
+        span,
+    )
 }
 
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects

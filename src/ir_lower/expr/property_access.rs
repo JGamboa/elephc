@@ -356,7 +356,10 @@ pub(super) fn lower_property_get_from_value(
         && !ctx.in_own_property_accessor(property)
     {
         let accessor = property_hook_get_method(property);
-        let call_op = if op == Op::NullsafePropGet {
+        // A nullable receiver reads `null` like a plain property read does, instead of calling
+        // the accessor on null; that keeps `$maybeNull->hooked ?? $default` answering the
+        // default. (PHP's "Attempt to read property on null" warning is not emitted here.)
+        let call_op = if op == Op::NullsafePropGet || value_is_nullable(ctx, object.value) {
             Op::NullsafeMethodCall
         } else {
             Op::MethodCall

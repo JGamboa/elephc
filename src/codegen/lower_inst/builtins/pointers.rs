@@ -174,10 +174,31 @@ pub(crate) fn lower_elephc_normalize_callable(
 ) -> Result<()> {
     ensure_arg_count(inst, "__elephc_normalize_callable", 1)?;
     let value = expect_operand(inst, 0)?;
+    let conversion = match inst.immediate {
+        Some(Immediate::I64(mode)) => Some(ClosureConversionMode::from_immediate(mode)?),
+        _ => None,
+    };
     match ctx.value_php_type(value)? {
         PhpType::Callable => {
             ctx.load_value_to_result(value)?;
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
+        }
+        PhpType::Mixed | PhpType::Union(_) if conversion.is_some() => {
+            let (string_message, invalid_message) =
+                conversion.expect("guarded conversion mode").messages();
+            super::super::callables::emit_runtime_mixed_callable_descriptor_value_for_conversion(
+                ctx,
+                value,
+                "__elephc_closure_from_callable",
+                string_message,
+                invalid_message,
+            )?;
+        }
+        other if conversion.is_some() => {
+            return Err(CodegenIrError::unsupported(format!(
+                "__elephc_closure_from_callable expects a callable or boxed operand, got {:?}",
+                other
+            )));
         }
         PhpType::Mixed | PhpType::Union(_) => {
             super::super::callables::emit_runtime_mixed_callable_descriptor_value(
@@ -222,6 +243,49 @@ pub(crate) fn lower_elephc_normalize_callable(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// PHP-visible Closure conversions lowered through `NormalizeCallable`.
+///
+/// The immediate distinguishes `$callable(...)` (PHP raises `Error`) from
+/// `Closure::fromCallable($callable)` (PHP raises `TypeError`); both must throw on a value
+/// that names nothing instead of aborting like the internal bridge normalizer does.
+#[derive(Clone, Copy)]
+enum ClosureConversionMode {
+    FirstClassCallable,
+    FromCallable,
+}
+
+impl ClosureConversionMode {
+    /// Decodes the conversion immediate attached by `__elephc_closure_from_callable`.
+    fn from_immediate(mode: i64) -> Result<Self> {
+        match mode {
+            crate::builtins::callables::__elephc_closure_from_callable::MODE_FIRST_CLASS_CALLABLE => {
+                Ok(Self::FirstClassCallable)
+            }
+            crate::builtins::callables::__elephc_closure_from_callable::MODE_FROM_CALLABLE => {
+                Ok(Self::FromCallable)
+            }
+            other => Err(CodegenIrError::invalid_module(format!(
+                "normalize_callable has unknown closure conversion mode {}",
+                other
+            ))),
+        }
+    }
+
+    /// Returns the (unknown string name, invalid value) diagnostics PHP raises for this mode.
+    fn messages(self) -> (&'static str, &'static str) {
+        match self {
+            Self::FirstClassCallable => (
+                super::super::callables::FCC_UNDEFINED_FUNCTION_MESSAGE,
+                super::super::callables::FCC_NOT_CALLABLE_MESSAGE,
+            ),
+            Self::FromCallable => (
+                "Failed to create closure from callable: function not found or invalid function name",
+                "Failed to create closure from callable: no array or string given",
+            ),
+        }
+    }
 }
 
 /// Lowers `__elephc_pdo_adapter_addr($kind)` — materializes the GOT address of the

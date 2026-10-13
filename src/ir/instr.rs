@@ -939,6 +939,10 @@ pub enum Op {
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
     NormalizeCallable,
+    /// Reads one reflection fact from a Closure's runtime descriptor; the `I64` immediate picks
+    /// it (`0` = `isAnonymous()` as bool, `1` = `getClosureScopeClass()` name as a borrowed
+    /// string, empty for no scope). Throws `Error` when the descriptor cannot answer.
+    CallableReflectionMeta,
     /// Returns the address of one compiler-emitted PDO callback adapter.
     PdoAdapterAddr,
     /// Reports whether an AOT class selected by runtime name has a constructor.
@@ -1248,10 +1252,14 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableArrayNew | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            // A value that names nothing callable throws (`$v(...)`, `Closure::fromCallable()`)
+            // or aborts (bridge normalization), so the conversion is never dead code.
+            NormalizeCallable => E::ALLOC_HEAP | E::MAY_THROW,
+            CallableReflectionMeta => E::READS_HEAP | E::MAY_THROW,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
@@ -1677,6 +1685,7 @@ impl Op {
             }
             CallablePtr => "callable_ptr",
             NormalizeCallable => "normalize_callable",
+            CallableReflectionMeta => "callable_reflection_meta",
             PdoAdapterAddr => "pdo_adapter_addr",
             DynamicClassHasConstructor => "dynamic_class_has_constructor",
             DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
