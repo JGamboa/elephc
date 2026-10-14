@@ -152,6 +152,7 @@ impl Checker {
             mixed_storage_locals: HashSet::new(),
             guarded_union_types: HashMap::new(),
             maybe_undefined_locals: HashSet::new(),
+            by_ref_argument_locals: HashSet::new(),
             maybe_undefined_result: Default::default(),
             mixed_storage_store_sites: HashMap::new(),
             buffer_read_observations: HashMap::new(),

@@ -400,21 +400,25 @@ impl Checker {
                     if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
+                            self.maybe_undefined_locals.remove(name);
                         }
                     }
                     if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Mixed);
+                            self.maybe_undefined_locals.remove(name);
                         }
                     }
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
+                            self.maybe_undefined_locals.remove(name);
                         }
                     }
                     if let Some(output_ty) = xml_struct_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
+                            self.maybe_undefined_locals.remove(name);
                         }
                     }
                 }
@@ -422,6 +426,7 @@ impl Checker {
                     if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Str);
+                            self.maybe_undefined_locals.remove(name);
                         }
                     }
                 }

@@ -175,6 +175,7 @@ impl super::Checker {
             && !name.starts_with('\u{1}')
             && !self.active_ref_params.contains(name)
             && !self.ref_aliased_locals.contains(name)
+            && !self.by_ref_argument_locals.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.name_is_seeded_program_storage(name)

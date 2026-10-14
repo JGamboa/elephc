@@ -59,6 +59,18 @@ impl Checker {
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        // Binders that do not go through an assignment merge define their names too.
+        match &stmt.kind {
+            StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
+                for var in vars {
+                    self.maybe_undefined_locals.remove(var);
+                }
+            }
+            StmtKind::StaticVar { name, .. } => {
+                self.maybe_undefined_locals.remove(name);
+            }
+            _ => {}
+        }
         if let (Some(mark_new), Some((marks_before, keys_before))) = (optional_region, region_before) {
             let definite = super::condition_edges::loop_head_definite_assignments(stmt);
             self.join_maybe_undefined_after_optional_region(

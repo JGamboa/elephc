@@ -366,6 +366,12 @@ impl Checker {
                 // one. Require the body to establish any affirmative managed-cell provenance it
                 // consumes within the loop itself.
                 self.boxed_ref_aliased_locals.clear();
+                // The body runs with both binders assigned (see `condition_edges`); the loop's
+                // own join marks them again for the code after it.
+                if let Some(key_var) = key_var {
+                    self.maybe_undefined_locals.remove(key_var);
+                }
+                self.maybe_undefined_locals.remove(value_var);
                 // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
                 // touches are reference-aliased for the rest of the body and neither binding can
                 // be killed or re-bound — releasing or abandoning that storage would strand the
@@ -1014,6 +1020,10 @@ impl Checker {
                 }
                 for catch_clause in catches {
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
+                    // The handler binds its variable (see `condition_edges`).
+                    if let Some(variable) = &catch_clause.variable {
+                        self.maybe_undefined_locals.remove(variable);
+                    }
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
