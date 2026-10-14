@@ -310,3 +310,136 @@ echo (new ReflectionProperty('Shape', 'side'))->name, "\n";
     );
     assert_eq!(out, "Shape\nShape\ndraw\narea\nside\n");
 }
+
+/// Mirrors `probes/fcc/lifetime_destruct.php` (review round 1).
+#[test]
+fn test_fcc_variable_probe_lifetime_destruct() {
+    let out = compile_and_run(
+        r#"<?php
+// Converted Closures keep exactly one reference to their receiver or captures.
+class Obj { public function __construct(public string $v) {}
+  public function get() { return "v=" . $this->v; }
+  public function __invoke() { return "i=" . $this->v; }
+  public function __destruct() { echo "destruct {$this->v}\n"; } }
+function conv(mixed $cb) { return $cb(...); }
+function t1() { $o = new Obj("1"); $x = $o->get(...); $y = $x(...); unset($o, $x); echo $y(), "\n"; unset($y); echo "t1 end\n"; }
+function t2() { $o = new Obj("2"); $x = function () use ($o) { return $o->get(); }; $y = $x(...); unset($o, $x); echo $y(), "\n"; unset($y); echo "t2 end\n"; }
+function t3() { $o = new Obj("3"); $y = Closure::fromCallable($o->get(...)); unset($o); echo $y(), "\n"; unset($y); echo "t3 end\n"; }
+function t4() { $o = new Obj("4"); $y = conv([$o, 'get']); unset($o); echo $y(), "\n"; unset($y); echo "t4 end\n"; }
+function t5() { $o = new Obj("5"); $y = conv($o); unset($o); echo $y(), "\n"; unset($y); echo "t5 end\n"; }
+t1(); t2(); t3(); t4(); t5();
+echo "main end\n";
+"#,
+    );
+    assert_eq!(out, "v=1\ndestruct 1\nt1 end\nv=2\ndestruct 2\nt2 end\nv=3\ndestruct 3\nt3 end\nv=4\ndestruct 4\nt4 end\ni=5\ndestruct 5\nt5 end\nmain end\n");
+}
+
+/// Mirrors `probes/fcc/lifetime_loop.php` (review round 1).
+#[test]
+fn test_fcc_variable_probe_lifetime_loop() {
+    let out = compile_and_run(
+        r#"<?php
+// 20000 conversions of 1 KB receivers stay within the default 8 MB heap.
+class Obj { public string $pad; public function __construct(public int $v) { $this->pad = str_repeat("x", 1000); }
+  public function get() { return $this->v; } public function __invoke() { return $this->v; } }
+$sum = 0;
+for ($i = 0; $i < 20000; $i++) {
+    $o = new Obj($i);
+    $x = $o->get(...); $a = $x(...);
+    $b = Closure::fromCallable([$o, 'get']);
+    $c = $o(...);
+    $sum += $a() + $b() + $c();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_eq!(out, "599970000\n");
+}
+
+/// Mirrors `probes/fcc/reflection_scope_loop.php` (review round 1).
+#[test]
+fn test_fcc_variable_probe_reflection_scope_loop() {
+    let out = compile_and_run(
+        r#"<?php
+// getClosureScopeClass() in a loop, with and without a scope, does not leak.
+class K { public function m() { return 1; } }
+$k = new K; $cl = function () { return 1; }; $cnt = 0;
+for ($i = 0; $i < 120000; $i++) {
+    $r = new ReflectionFunction($k->m(...));
+    $cnt += strlen($r->getClosureScopeClass()->name);
+    $r2 = new ReflectionFunction($cl);
+    $cnt += $r2->getClosureScopeClass() === null ? 1 : 0;
+}
+echo $cnt, "\n";
+"#,
+    );
+    assert_eq!(out, "240000\n");
+}
+
+/// Mirrors `probes/fcc/static_lsb.php` (review round 1).
+#[test]
+fn test_fcc_variable_probe_static_lsb() {
+    let out = compile_and_run(
+        r#"<?php
+// Static methods selected at run time keep late static binding (static::class, static::K).
+class Acc { const K = "accK";
+  public static function mk($p = "p") { return static::class . ":" . $p; }
+  public static function both() { return static::K . "|" . static::other(); }
+  public static function other() { return "accO"; } }
+class Sub extends Acc { const K = "subK"; public static function other() { return "subO"; } }
+$t = ['Sub', 'mk']; echo $t(), "\n";
+$u = $t(...); echo $u(), " ", $u("q"), "\n";
+$b = ['Sub', 'both']; $bb = $b(...); echo $bb(), "\n";
+$s = 'Sub::mk'; $v = Closure::fromCallable($s); echo $v(), "\n";
+$w = Closure::fromCallable('Sub::both'); echo $w(), "\n";
+$o = new Sub; $x = [$o, 'mk']; echo is_callable($x) ? "callable" : "not", "\n";
+$y = $x(...); echo $y(), "\n";
+"#,
+    );
+    assert_eq!(out, "Sub:p\nSub:p Sub:q\nsubK|subO\nSub:p\nsubK|subO\ncallable\nSub:p\n");
+}
+
+/// Mirrors `probes/fcc/scoped_visibility.php` (review round 1).
+#[test]
+fn test_fcc_variable_probe_scoped_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+// Inside a class, private and protected targets convert with the caller's scope, as in PHP.
+class C {
+  private function priv($x) { return "priv $x " . static::class; }
+  protected function prot($x) { return "prot $x " . get_class($this); }
+  private static function pst() { return "pst " . static::class; }
+  public function inside() {
+    $m = 'priv'; $a = [$this, $m]; $c = $a(...); echo $c(1), "\n";
+    $b = [$this, 'prot']; $d = $b(...); echo $d(2), "\n";
+    $e = Closure::fromCallable([$this, 'priv']); echo $e(3), "\n";
+    $s = 'C::pst'; $f = $s(...); echo $f(), "\n";
+    $t = [static::class, 'pst']; $g = $t(...); echo $g(), "\n";
+  }
+}
+class D extends C {}
+(new C)->inside();
+(new D)->inside();
+foreach ([[new C, 'priv'], [new C, 'prot'], 'C::pst'] as $outside) {
+    try { $outside(...); echo "converted\n"; } catch (Error $e) { echo get_class($e), "\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "priv 1 C\nprot 2 C\npriv 3 C\npst C\npst C\npriv 1 D\nprot 2 D\npriv 3 D\npst C\npst D\nError\nError\nError\n");
+}
+
+/// Mirrors `probes/fcc/prune_literal_name.php` (review round 1).
+#[test]
+fn test_fcc_variable_probe_prune_literal_name() {
+    let out = compile_and_run(
+        r#"<?php
+// A function reached only through a converted name survives pruning.
+function f($x) { return $x; }
+$n = 'f';
+$d = $n(...);
+$x = [$d];
+echo count($x), "\n";
+"#,
+    );
+    assert_eq!(out, "1\n");
+}

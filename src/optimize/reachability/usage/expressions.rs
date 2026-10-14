@@ -291,6 +291,12 @@ impl Scanner<'_> {
                 self.callable_or_hazard(first);
                 self.scan_call_user_func_class_introspection(&key, &normalized);
             }
+            // `$callable(...)` / `Closure::fromCallable($callable)`: the converted value may name
+            // any function or method, so a literal keeps its target and anything else keeps
+            // every candidate (the runtime tables can only select what survives pruning).
+            "__elephc_closure_from_callable" | "__elephc_closure_from_callable_type_error" => {
+                self.callable_or_hazard(first);
+            }
             "method_exists" => self.method_exists(args),
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),

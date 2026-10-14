@@ -9,7 +9,8 @@
 //! - Returns the scope class recorded in the Closure's descriptor (the lexical class of a
 //!   closure literal, the declaring class of a method), or `""` when the Closure has no class
 //!   scope (functions, builtins, closures declared outside a class).
-//! - The string is borrowed from static descriptor data.
+//! - The string lives in static descriptor data, so it never aliases the boxed Closure argument
+//!   (`Independent`): the argument temporary is released after the read.
 //! - A descriptor whose scope is only known per call (late-bound `static::m(...)`, eval
 //!   adapters) throws `Error` rather than reporting a guess.
 
@@ -24,7 +25,7 @@ builtin! {
     semantics: internal_eir_semantics(
         lower,
         Effects::READS_HEAP.union(Effects::MAY_THROW),
-        BuiltinResultOwnership::Borrowed,
+        BuiltinResultOwnership::Independent,
     ),
 }
 

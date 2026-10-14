@@ -356,10 +356,10 @@ pub(super) fn lower_property_get_from_value(
         && !ctx.in_own_property_accessor(property)
     {
         let accessor = property_hook_get_method(property);
-        // A nullable receiver reads `null` like a plain property read does, instead of calling
-        // the accessor on null; that keeps `$maybeNull->hooked ?? $default` answering the
-        // default. (PHP's "Attempt to read property on null" warning is not emitted here.)
-        let call_op = if op == Op::NullsafePropGet || value_is_nullable(ctx, object.value) {
+        if op == Op::PropGet && value_is_nullable(ctx, object.value) {
+            return lower_hooked_property_get_on_nullable(ctx, object, &accessor, expr);
+        }
+        let call_op = if op == Op::NullsafePropGet {
             Op::NullsafeMethodCall
         } else {
             Op::MethodCall
@@ -377,6 +377,55 @@ pub(super) fn lower_property_get_from_value(
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Reads a get-hooked property through a receiver that may be null.
+///
+/// A null receiver reads `null`, like a plain property read does, instead of calling the accessor
+/// on null; that keeps `$maybeNull->hooked ?? $default` answering the default. (PHP's "Attempt to
+/// read property on null" warning is not emitted.) The non-null arm is an ordinary method call,
+/// so the accessor's string result keeps its normal ownership when it is boxed into the merge.
+fn lower_hooked_property_get_on_nullable(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    accessor: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = PhpType::Mixed;
+    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let null_block = ctx.builder.create_named_block("hooked.prop.null", Vec::new());
+    let call_block = ctx.builder.create_named_block("hooked.prop.call", Vec::new());
+    let merge = ctx.builder.create_named_block("hooked.prop.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    let null_value = lower_null(ctx, expr);
+    let null_value = ctx.box_value_as_mixed(null_value, result_type.clone(), Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(call_block);
+    let call = lower_method_call_with_receiver(ctx, object, accessor, &[], Op::MethodCall, expr);
+    store_value_into_temp(ctx, &temp_name, result_type, call, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Returns true when value metadata proves the runtime value is PHP null.

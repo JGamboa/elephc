@@ -487,8 +487,16 @@ pub(in crate::codegen) fn emit_runtime_mixed_callable_descriptor_value_for_conve
     string_message: &'static str,
     invalid_message: &'static str,
 ) -> Result<()> {
-    emit_runtime_mixed_callable_descriptor_value_impl(
-        ctx, callable, op_name, true, Some(string_message), Some(invalid_message), None,
+    let scope = ctx.defined_class_scope().map(str::to_string);
+    emit_runtime_mixed_callable_descriptor_value_scoped(
+        ctx,
+        callable,
+        op_name,
+        true,
+        Some(string_message),
+        Some(invalid_message),
+        None,
+        scope,
     )
 }
 
@@ -509,13 +517,63 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     invalid_type_error: Option<&'static str>,
     arity: Option<usize>,
 ) -> Result<()> {
-    let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
+    emit_runtime_mixed_callable_descriptor_value_scoped(
+        ctx,
+        callable,
+        op_name,
+        retain_existing_descriptor,
+        string_type_error,
+        invalid_type_error,
+        arity,
+        None,
+    )
+}
+
+/// Implements boxed callable descriptor selection; `scope` is the class whose private and
+/// protected methods the conversion may also select (PHP's calling scope).
+#[allow(clippy::too_many_arguments)]
+fn emit_runtime_mixed_callable_descriptor_value_scoped(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    retain_existing_descriptor: bool,
+    string_type_error: Option<&'static str>,
+    invalid_type_error: Option<&'static str>,
+    arity: Option<usize>,
+    scope: Option<String>,
+) -> Result<()> {
+    let mut instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
         .iter()
         .filter(|target| target.method_key == "__invoke")
         .cloned()
         .collect::<Vec<_>>();
-    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    let mut static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    if let Some(scope) = scope.as_deref() {
+        // Scoped (non-public) targets are tested first: inside the scope a private method
+        // shadows a same-named method of a subclass, as in PHP.
+        let mut scoped_instance = scoped_instance_method_targets(ctx, scope);
+        scoped_instance.extend(instance_targets);
+        instance_targets = scoped_instance;
+        let mut scoped_static = scoped_static_method_cases(ctx, scope);
+        scoped_static.extend(static_cases);
+        static_cases = scoped_static;
+    }
+    let scoped_string_cases = static_cases
+        .iter()
+        .filter(|case| scope.is_some() && !runtime_static_case_is_public(ctx, case))
+        .map(|case| case.case.clone())
+        .collect::<Vec<_>>();
+    // `[$object, 'staticMethod']` selects the static method of the object's class.
+    let object_static_cases = static_cases
+        .iter()
+        .filter_map(|case| {
+            ctx.module
+                .class_infos
+                .get(&case.class_name)
+                .map(|info| (info.class_id, case.clone()))
+        })
+        .collect::<Vec<_>>();
     let array_label = (!instance_targets.is_empty() || !static_cases.is_empty())
         .then(|| ctx.next_label("mixed_callable_value_array"));
     let object_label = (!invokable_targets.is_empty())
@@ -588,6 +646,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         string_type_error,
         candidate_names.as_deref(),
         arity,
+        &scoped_string_cases,
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -601,6 +660,17 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             let next_label = ctx.next_label("mixed_callable_value_array_instance_next");
             emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
             emit_runtime_array_instance_descriptor_value(ctx, target)?;
+            abi::emit_jump(ctx.emitter, &selected_label);
+            ctx.emitter.label(&next_label);
+        }
+        for (class_id, case) in &object_static_cases {
+            let next_label = ctx.next_label("mixed_callable_value_array_object_static_next");
+            emit_branch_if_mixed_object_static_case_mismatch(ctx, *class_id, case, &next_label);
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                &case.case.descriptor_label,
+            );
             abi::emit_jump(ctx.emitter, &selected_label);
             ctx.emitter.label(&next_label);
         }
@@ -1185,14 +1255,16 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     type_error: Option<&'static str>,
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
+    scoped_cases: &[callable_dispatch::RuntimeCallableCase],
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases_at_arity(
+    let mut cases = scoped_cases.to_vec();
+    cases.extend(runtime_string_descriptor_cases_at_arity(
         ctx,
         None,
         candidate_names,
         crate::strict_php::is_enabled(),
         arity,
-    )?;
+    )?);
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
@@ -1786,14 +1858,35 @@ fn runtime_static_method_descriptor_cases(
 
     let mut cases = Vec::new();
     for (class_name, method_name, method_key, impl_class, class_id, sig) in methods {
+        if let Some(case) = runtime_static_method_case(
+            ctx, class_name, method_name, method_key, impl_class, class_id, sig,
+        ) {
+            cases.push(case);
+        }
+    }
+    ctx.shared
+        .cache_runtime_static_method_descriptor_cases(candidate_names, &cases);
+    cases
+}
+
+/// Builds (or reuses) the descriptor case for one `Class::method` static target.
+fn runtime_static_method_case(
+    ctx: &mut FunctionContext<'_>,
+    class_name: String,
+    method_name: String,
+    method_key: String,
+    impl_class: String,
+    class_id: u64,
+    sig: FunctionSig,
+) -> Option<callable_dispatch::RuntimeStaticMethodCallableCase> {
+    {
         let wrapper_sig = callable_dispatch::static_method_runtime_wrapper_sig(&sig);
         let php_name = format!("{}::{}", class_name, method_name);
         if let Some(case) = ctx
             .shared
             .runtime_static_method_descriptor_case(&php_name)
         {
-            cases.push(case);
-            continue;
+            return Some(case);
         }
         let Ok(entry_label) = emit_static_method_descriptor_entry_wrapper(
             ctx,
@@ -1802,7 +1895,7 @@ fn runtime_static_method_descriptor_cases(
             &wrapper_sig,
             class_id,
         ) else {
-            continue;
+            return None;
         };
         let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
             ctx.module, &impl_class, &method_key, true,
@@ -1836,11 +1929,200 @@ fn runtime_static_method_descriptor_cases(
         };
         ctx.shared
             .cache_runtime_static_method_descriptor_case(&static_case);
-        cases.push(static_case);
+        Some(static_case)
     }
-    ctx.shared
-        .cache_runtime_static_method_descriptor_cases(candidate_names, &cases);
-    cases
+}
+
+/// Returns whether a static case targets a public method (reachable from any scope).
+fn runtime_static_case_is_public(
+    ctx: &FunctionContext<'_>,
+    case: &callable_dispatch::RuntimeStaticMethodCallableCase,
+) -> bool {
+    ctx.module
+        .class_infos
+        .get(&case.class_name)
+        .and_then(|info| info.static_method_visibilities.get(&case.method_name))
+        .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+}
+
+/// Returns whether `left` and `right` share an inheritance line (PHP protected visibility).
+fn classes_are_related(ctx: &FunctionContext<'_>, left: &str, right: &str) -> bool {
+    crate::codegen::runtime_metadata::is_same_or_descendant(ctx.module, left, right)
+        || crate::codegen::runtime_metadata::is_same_or_descendant(ctx.module, right, left)
+}
+
+/// Collects the private and protected instance methods a conversion inside `scope` may bind.
+///
+/// A private method of `scope` is selected for receivers of `scope` and of its subclasses (the
+/// scope's own method, not a subclass override). A protected method is selected when its
+/// declaring class shares an inheritance line with `scope`.
+fn scoped_instance_method_targets(
+    ctx: &FunctionContext<'_>,
+    scope: &str,
+) -> Vec<RuntimeArrayInstanceMethodTarget> {
+    let scope = scope.trim_start_matches('\\');
+    let mut targets = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by(|left, right| left.0.cmp(right.0));
+    let Some(scope_info) = ctx.module.class_infos.get(scope) else {
+        return targets;
+    };
+    let mut private_methods = scope_info
+        .methods
+        .iter()
+        .filter(|(name, _)| {
+            matches!(scope_info.method_visibilities.get(*name), Some(Visibility::Private))
+                && scope_info
+                    .method_impl_classes
+                    .get(&php_symbol_key(name))
+                    .is_none_or(|impl_class| impl_class == scope)
+        })
+        .collect::<Vec<_>>();
+    private_methods.sort_by(|left, right| left.0.cmp(right.0));
+    for (method_name, physical_sig) in private_methods {
+        let Ok(sig) = crate::codegen_support::source_method_adapters::source_visible_signature(
+            physical_sig,
+        ) else {
+            continue;
+        };
+        let method_key = php_symbol_key(method_name);
+        if !class_method_already_emitted(ctx, scope, &method_key, false) {
+            continue;
+        }
+        for (class_name, class_info) in &classes {
+            if !crate::codegen::runtime_metadata::is_same_or_descendant(ctx.module, class_name, scope) {
+                continue;
+            }
+            targets.push(RuntimeArrayInstanceMethodTarget {
+                class_name: (*class_name).clone(),
+                class_id: class_info.class_id,
+                method_key: method_key.clone(),
+                method_name: method_name.clone(),
+                impl_class: scope.to_string(),
+                sig: sig.clone(),
+            });
+        }
+    }
+    for (class_name, class_info) in &classes {
+        let mut methods = class_info.methods.iter().collect::<Vec<_>>();
+        methods.sort_by(|left, right| left.0.cmp(right.0));
+        for (method_name, physical_sig) in methods {
+            if !matches!(class_info.method_visibilities.get(method_name), Some(Visibility::Protected)) {
+                continue;
+            }
+            let method_key = php_symbol_key(method_name);
+            let impl_class = class_info
+                .method_impl_classes
+                .get(&method_key)
+                .cloned()
+                .unwrap_or_else(|| (*class_name).clone());
+            if !classes_are_related(ctx, &impl_class, scope)
+                || !class_method_already_emitted(ctx, &impl_class, &method_key, false)
+            {
+                continue;
+            }
+            let Ok(sig) = crate::codegen_support::source_method_adapters::source_visible_signature(
+                physical_sig,
+            ) else {
+                continue;
+            };
+            targets.push(RuntimeArrayInstanceMethodTarget {
+                class_name: (*class_name).clone(),
+                class_id: class_info.class_id,
+                method_key,
+                method_name: method_name.clone(),
+                impl_class,
+                sig,
+            });
+        }
+    }
+    targets
+}
+
+/// Collects the private and protected static methods a conversion inside `scope` may bind,
+/// with the same visibility rules as `scoped_instance_method_targets`.
+fn scoped_static_method_cases(
+    ctx: &mut FunctionContext<'_>,
+    scope: &str,
+) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
+    let scope = scope.trim_start_matches('\\').to_string();
+    let mut methods = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by(|left, right| left.0.cmp(right.0));
+    // A private static method of the scope is reachable through the scope and every subclass
+    // (`D::pst` from inside C calls C::pst with `static` = D), which subclasses do not inherit
+    // into their own metadata.
+    if let Some(scope_info) = ctx.module.class_infos.get(&scope) {
+        let mut private_methods = scope_info
+            .static_methods
+            .iter()
+            .filter(|(name, _)| {
+                matches!(
+                    scope_info.static_method_visibilities.get(*name),
+                    Some(Visibility::Private)
+                ) && scope_info
+                    .static_method_impl_classes
+                    .get(&php_symbol_key(name))
+                    .is_none_or(|impl_class| *impl_class == scope)
+            })
+            .collect::<Vec<_>>();
+        private_methods.sort_by(|left, right| left.0.cmp(right.0));
+        for (method_name, sig) in private_methods {
+            let method_key = php_symbol_key(method_name);
+            if !class_method_already_emitted(ctx, &scope, &method_key, true) {
+                continue;
+            }
+            for (class_name, class_info) in &classes {
+                if crate::codegen::runtime_metadata::is_same_or_descendant(
+                    ctx.module, class_name, &scope,
+                ) {
+                    methods.push((
+                        (*class_name).clone(),
+                        method_name.clone(),
+                        method_key.clone(),
+                        scope.clone(),
+                        class_info.class_id,
+                        sig.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    for (class_name, class_info) in &classes {
+        let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
+        static_methods.sort_by(|left, right| left.0.cmp(right.0));
+        for (method_name, sig) in static_methods {
+            let method_key = php_symbol_key(method_name);
+            let impl_class = class_info
+                .static_method_impl_classes
+                .get(&method_key)
+                .cloned()
+                .unwrap_or_else(|| (*class_name).clone());
+            let visible = match class_info.static_method_visibilities.get(method_name) {
+                Some(Visibility::Protected) => classes_are_related(ctx, &impl_class, &scope),
+                _ => false,
+            };
+            if !visible || !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
+                continue;
+            }
+            methods.push((
+                (*class_name).clone(),
+                method_name.clone(),
+                method_key,
+                impl_class,
+                class_info.class_id,
+                sig.clone(),
+            ));
+        }
+    }
+    methods
+        .into_iter()
+        .filter_map(|(class_name, method_name, method_key, impl_class, class_id, sig)| {
+            runtime_static_method_case(
+                ctx, class_name, method_name, method_key, impl_class, class_id, sig,
+            )
+        })
+        .collect()
 }
 
 /// Collects public instance-method targets that can receive this positional shape.
@@ -2211,6 +2493,31 @@ fn emit_branch_if_runtime_array_instance_mismatch(
         MIXED_METHOD_PAYLOAD_OFFSET,
         MIXED_METHOD_PAYLOAD_OFFSET + 8,
         target.method_name.as_bytes(),
+        next_label,
+    );
+}
+
+/// Branches unless saved mixed slots hold `[$object, 'method']` whose object class is
+/// `class_id` and whose method names the static case.
+fn emit_branch_if_mixed_object_static_case_mismatch(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    case: &callable_dispatch::RuntimeStaticMethodCallableCase,
+    next_label: &str,
+) {
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_RECEIVER_TAG_OFFSET, MIXED_TAG_OBJECT, next_label);
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_METHOD_TAG_OFFSET, MIXED_TAG_STRING, next_label);
+    emit_branch_if_saved_receiver_class_id_mismatch(
+        ctx,
+        class_id,
+        MIXED_RECEIVER_PAYLOAD_OFFSET,
+        next_label,
+    );
+    emit_branch_if_stack_string_mismatch(
+        ctx,
+        MIXED_METHOD_PAYLOAD_OFFSET,
+        MIXED_METHOD_PAYLOAD_OFFSET + 8,
+        case.method_name.as_bytes(),
         next_label,
     );
 }

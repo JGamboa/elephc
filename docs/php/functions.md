@@ -333,6 +333,13 @@ throws, as PHP does: `$callback(...)` throws `Error`, `Closure::fromCallable()` 
 runtime callable name is not a function or static method compiled into this program`, `Failed to
 create closure from callable: ...`) rather than naming the offending value.
 
+Inside a class, the conversion uses the caller's scope like PHP: `[$this, 'privateMethod'](...)`,
+`[$this, 'protectedMethod'](...)`, `Closure::fromCallable([$this, 'priv'])` and
+`'Self::privateStatic'(...)` through a variable bind the non-public target, while the same values
+outside the class throw. `[$object, 'staticMethod']` converts to the static method of the
+object's class, and static targets selected at run time keep late static binding
+(`static::class`, `static::CONST`).
+
 `new ReflectionFunction($closure)` reflects such a Closure at run time; see
 [Classes → Reflection](./classes.md). Only first-class callable syntax on a plain variable is
 supported: `[$object, "m"](...)` or `"strlen"(...)` written as literals are not parsed yet.
