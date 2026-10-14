@@ -13,9 +13,10 @@ use super::*;
 pub(super) fn coerce_to_return_type(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
+    value_expr: Option<&Expr>,
     span: Option<Span>,
 ) -> LoweredValue {
-    if let Some(value) = verify_declared_scalar_return(ctx, value, span) {
+    if let Some(value) = verify_declared_scalar_return(ctx, value, value_expr, span) {
         return value;
     }
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
@@ -74,6 +75,7 @@ pub(super) fn coerce_to_return_type(
 fn verify_declared_scalar_return(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
+    value_expr: Option<&Expr>,
     span: Option<Span>,
 ) -> Option<LoweredValue> {
     use crate::return_coerce_prelude as rc;
@@ -86,7 +88,10 @@ fn verify_declared_scalar_return(
     if !span.is_some_and(Span::is_from_source) {
         return None;
     }
-    let mask = rc::scalar_mask(&ctx.return_php_type)?;
+    let mut mask = rc::scalar_mask(&ctx.return_php_type)?;
+    if ctx.return_literal_true {
+        mask = rc::literal_true_mask(mask);
+    }
     let source = ctx.builder.value_php_type(value.value);
     if rc::statically_satisfies(&source, mask) {
         return None;
@@ -95,11 +100,25 @@ fn verify_declared_scalar_return(
         return None;
     }
     let strict = crate::source::current_strict_types();
-    if !strict
-        && mask == rc::MASK_INT
-        && matches!(source.codegen_repr(), PhpType::Mixed | PhpType::Float)
-    {
-        return None;
+    // A numeric source (int/float arithmetic, a float) can only hold an int or a float, which
+    // the dedicated boundary op verifies in both modes without a call: the overflow float of
+    // `$a + 1` throws "float returned" exactly where php-src does. Strings never take this path,
+    // so its numeric-string coercion cannot saturate (`"1e100"` throws through the helper).
+    let numeric = source.codegen_repr() == PhpType::Float
+        || source.is_int_float_union()
+        || value_expr.is_some_and(|expr| expr_is_numeric(ctx, expr));
+    if numeric {
+        if mask == rc::MASK_INT {
+            return Some(emit_int_return_boundary(ctx, value, span, strict));
+        }
+        if mask == rc::MASK_FLOAT {
+            // int widens to float in both modes and a float passes, so the cast is exact.
+            return Some(coerce_return_scalar_source(ctx, value, span, coerce_to_float));
+        }
+        if mask == rc::MASK_INT | rc::MASK_NULL && ctx.return_type == IrType::TaggedScalar {
+            let verified = emit_int_return_boundary(ctx, value, span, strict);
+            return Some(coerce_to_tagged_scalar(ctx, verified, span));
+        }
     }
     if !ctx.functions.contains_key(rc::HELPER) {
         // Every pipeline injects the helper and reachability keeps it for each scalar return
@@ -140,6 +159,68 @@ fn verify_declared_scalar_return(
     );
     let verified = lower_expr(ctx, &call);
     Some(narrow_verified_return(ctx, verified, span))
+}
+
+/// Returns whether an expression is int/float arithmetic over operands that are statically
+/// numeric (literals, int/float/bool/`?int` locals, casts and nested arithmetic), so its value is
+/// an int or a float and never a string, array or object (`null + 1` is `1`).
+fn expr_is_numeric(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    use crate::parser::ast::{BinOp, CastType};
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right } => {
+            matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow)
+                && numeric_operand(ctx, left)
+                && numeric_operand(ctx, right)
+        }
+        ExprKind::Negate(inner) => numeric_operand(ctx, inner),
+        ExprKind::Cast { target: CastType::Int | CastType::Float, .. } => true,
+        _ => false,
+    }
+}
+
+/// Returns whether one arithmetic operand is statically an int, float or bool.
+fn numeric_operand(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) => true,
+        ExprKind::Variable(name) => matches!(
+            ctx.local_type(name).codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::TaggedScalar
+        ),
+        _ => expr_is_numeric(ctx, expr),
+    }
+}
+
+/// Emits the dedicated `int` return boundary for the current function, carrying the return
+/// statement's `strict_types` mode so strict returns reject floats and bools.
+fn emit_int_return_boundary(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+    strict: bool,
+) -> LoweredValue {
+    let source = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source == PhpType::Int {
+        return value;
+    }
+    let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
+    let data = ctx.intern_string(&prefix);
+    let immediate = if strict {
+        Immediate::ProfiledData { data, strict_php: true }
+    } else {
+        Immediate::Data(data)
+    };
+    let verified = ctx.emit_value(
+        Op::ReturnBoundaryMixedToInt,
+        vec![value.value],
+        Some(immediate),
+        PhpType::Int,
+        Op::ReturnBoundaryMixedToInt.default_effects(),
+        span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    verified
 }
 
 /// Narrows the helper's verified `mixed` result to the current return storage.

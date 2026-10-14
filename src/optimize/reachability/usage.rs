@@ -734,7 +734,7 @@ impl Scanner<'_> {
             TypeExpr::Union(types) | TypeExpr::Intersection(types) => {
                 for ty in types { self.scan_type(ty); }
             }
-            TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::False | TypeExpr::Str
+            TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::False | TypeExpr::True | TypeExpr::Str
             | TypeExpr::Void | TypeExpr::Never | TypeExpr::Iterable | TypeExpr::Ptr(None) => {}
         }
     }
@@ -751,6 +751,7 @@ fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never

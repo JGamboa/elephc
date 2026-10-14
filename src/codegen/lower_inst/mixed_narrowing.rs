@@ -42,10 +42,16 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     let input = *inst.operands.first().ok_or_else(|| {
         CodegenIrError::unsupported("return_boundary_mixed_to_int without operand".to_string())
     })?;
-    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
-        return Err(CodegenIrError::unsupported(
-            "return_boundary_mixed_to_int without a TypeError message prefix".to_string(),
-        ));
+    // `ProfiledData { strict_php }` marks a `declare(strict_types=1)` return: only an int passes,
+    // and a float or bool throws instead of converting.
+    let (data_id, strict) = match inst.immediate {
+        Some(crate::ir::Immediate::Data(data_id)) => (data_id, false),
+        Some(crate::ir::Immediate::ProfiledData { data, strict_php }) => (data, strict_php),
+        _ => {
+            return Err(CodegenIrError::unsupported(
+                "return_boundary_mixed_to_int without a TypeError message prefix".to_string(),
+            ))
+        }
     };
     // The same verification guards a family-boxed `int` PARAMETER on method entry
     // (`ir_lower::stmt::coerce_boxed_family_param`), whose PHP message says "given".
@@ -65,17 +71,29 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     // Constant folding runs AFTER lowering and can retype the operand under the op: a
     // checker-Mixed value becomes a raw I64 or F64. The op must be total over every
     // post-fold representation — unboxing a raw scalar as a pointer is a segfault.
-    if matches!(
-        loaded_ty,
-        crate::types::PhpType::Int | crate::types::PhpType::Bool
-    ) {
+    if matches!(loaded_ty, crate::types::PhpType::Int)
+        || (!strict && matches!(loaded_ty, crate::types::PhpType::Bool))
+    {
         // Already the integer word; nothing to verify.
+        return store_if_result(ctx, inst);
+    }
+    if strict && matches!(loaded_ty, crate::types::PhpType::Bool) {
+        let l_true = ctx.next_label("ret_boundary_int_strict_true");
+        emit_branch_if_nonzero(ctx, abi::int_result_reg(ctx.emitter), &l_true);
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("false"));
+        ctx.emitter.label(&l_true);
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("true"));
+        ctx.emitter.label(&done);
         return store_if_result(ctx, inst);
     }
     if matches!(loaded_ty, crate::types::PhpType::Float) {
         // A raw F64 (the promoted overflow result) without a box; the float-result
-        // register already holds it.
-        emit_float_result_fits_i64_or_jump(ctx, &l_float_fail);
+        // register already holds it. Strict mode rejects every float.
+        if strict {
+            abi::emit_jump(ctx.emitter, &l_float_fail);
+        } else {
+            emit_float_result_fits_i64_or_jump(ctx, &l_float_fail);
+        }
         abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&l_float_fail);
         emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("float"));
@@ -99,10 +117,19 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     let l_callable = ctx.next_label("ret_boundary_int_callable");
     // Tag values: 0 int, 1 string, 2 float, 3 bool, 4 indexed array, 5 hash, 6 object,
     // 8 null, 9 resource, 10 callable (7 nested is peeled by `__rt_mixed_unbox`).
+    let l_bool_strict = ctx.next_label("ret_boundary_int_bool_strict");
+    let l_string_strict = ctx.next_label("ret_boundary_int_string_strict");
     emit_mixed_tag_branch(ctx, tag_reg, 0, &l_scalar);
-    emit_mixed_tag_branch(ctx, tag_reg, 3, &l_scalar);
-    emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float);
-    emit_mixed_tag_branch(ctx, tag_reg, 1, &l_string);
+    if strict {
+        // strict_types: an int is the only accepted tag; a float, bool or string throws.
+        emit_mixed_tag_branch(ctx, tag_reg, 3, &l_bool_strict);
+        emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float_fail);
+        emit_mixed_tag_branch(ctx, tag_reg, 1, &l_string_strict);
+    } else {
+        emit_mixed_tag_branch(ctx, tag_reg, 3, &l_scalar);
+        emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float);
+        emit_mixed_tag_branch(ctx, tag_reg, 1, &l_string);
+    }
     emit_mixed_tag_branch(ctx, tag_reg, 8, &l_null);
     emit_mixed_tag_branch(ctx, tag_reg, 4, &l_array);
     emit_mixed_tag_branch(ctx, tag_reg, 5, &l_array);
@@ -133,6 +160,16 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     ctx.emitter.label(&string_invalid);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("string"));
+    if strict {
+        ctx.emitter.label(&l_bool_strict);
+        let l_true = ctx.next_label("ret_boundary_int_strict_true");
+        emit_branch_if_nonzero(ctx, lo_reg, &l_true);
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("false"));
+        ctx.emitter.label(&l_true);
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("true"));
+        ctx.emitter.label(&l_string_strict);
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("string"));
+    }
     // Non-coercible types throw a TypeError naming the runtime type, like PHP.
     ctx.emitter.label(&l_null);
     emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("null"));
@@ -191,6 +228,19 @@ pub(in crate::codegen::lower_inst) fn emit_float_result_fits_i64_or_jump(
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare against the inclusive lower bound
             ctx.emitter.instruction(&format!("jb {}", fail_label));             // d < -2^63 is below PHP_INT_MIN
             ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // in-range: exact truncation toward zero
+        }
+    }
+}
+
+/// Branches to `target` when `reg` holds a non-zero word (a `true` boolean payload).
+fn emit_branch_if_nonzero(ctx: &mut FunctionContext<'_>, reg: &str, target: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", reg, target));      // a non-zero boolean payload is `true`
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", reg, reg));         // set flags from the boolean payload
+            ctx.emitter.instruction(&format!("jnz {}", target));                // a non-zero boolean payload is `true`
         }
     }
 }

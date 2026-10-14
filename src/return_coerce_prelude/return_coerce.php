@@ -83,6 +83,11 @@ function __elephc_return_coerce(mixed $value, int $mask, bool $strict, string $p
         }
     }
     if (is_object($value)) {
+        // php-src `zend_parse_arg_str_weak()`: coercive mode converts an object with
+        // `__toString()` when the declaration accepts a string.
+        if (!$strict && ($mask & 4) !== 0 && $value instanceof Stringable) {
+            return (string) $value;
+        }
         throw new TypeError($prefix . get_class($value) . " returned");
     }
     throw new TypeError($prefix . __elephc_return_value_name($value) . " returned");

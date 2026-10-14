@@ -614,14 +614,16 @@ fn parse_atomic_type_expr(
         }
         // Preserve `false` as a literal subtype so `$x === false` can remove only the false
         // member from `T|false` without incorrectly removing a full `bool` member. Its runtime
-        // representation remains identical to bool. `true` is conservatively widened to bool.
+        // representation remains identical to bool. `true` is likewise kept as its own literal type
+        // (`TypeExpr::True`), which every type position treats as `bool` except the declared-return
+        // check, where `: true` must reject a `false` value.
         Some(Token::False) => {
             *pos += 1;
             Ok(TypeExpr::False)
         }
         Some(Token::True) => {
             *pos += 1;
-            Ok(TypeExpr::Bool)
+            Ok(TypeExpr::True)
         }
         // `self`, `static`, and `parent` are relative class types. They are kept symbolic here
         // (their concrete class is not known until inheritance/trait flattening) and resolved to

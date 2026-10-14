@@ -54,6 +54,8 @@ pub(crate) const MASK_STRING: u32 = 4;
 pub(crate) const MASK_BOOL: u32 = 8;
 /// Mask bit for the literal `false` type.
 pub(crate) const MASK_FALSE: u32 = 16;
+/// Mask bit for the literal `true` type.
+pub(crate) const MASK_TRUE: u32 = 32;
 /// Mask bit for `null`.
 pub(crate) const MASK_NULL: u32 = 64;
 
@@ -192,12 +194,41 @@ fn program_declares_generic_template(stmts: &[crate::parser::ast::Stmt]) -> bool
 /// helper only costs its own code.
 pub(crate) fn annotation_may_need_coercion(ty: &TypeExpr) -> bool {
     match ty {
-        TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::False | TypeExpr::Str => {
+        TypeExpr::Int
+        | TypeExpr::Float
+        | TypeExpr::Bool
+        | TypeExpr::False
+        | TypeExpr::True
+        | TypeExpr::Str => {
             true
         }
         TypeExpr::Nullable(inner) => annotation_may_need_coercion(inner),
         TypeExpr::Union(members) => members.iter().any(annotation_may_need_coercion),
         _ => false,
+    }
+}
+
+/// Returns whether a return annotation names the literal `true` type without a full `bool`.
+pub(crate) fn annotation_is_literal_true(ty: Option<&TypeExpr>) -> bool {
+    fn names(ty: &TypeExpr, wanted: &dyn Fn(&TypeExpr) -> bool) -> bool {
+        match ty {
+            TypeExpr::Nullable(inner) => names(inner, wanted),
+            TypeExpr::Union(members) => members.iter().any(|member| names(member, wanted)),
+            other => wanted(other),
+        }
+    }
+    ty.is_some_and(|ty| {
+        names(ty, &|t| matches!(t, TypeExpr::True))
+            && !names(ty, &|t| matches!(t, TypeExpr::Bool | TypeExpr::False))
+    })
+}
+
+/// Replaces the `bool` bit of a mask by the literal `true` bit, for a `: true` declaration.
+pub(crate) fn literal_true_mask(mask: u32) -> u32 {
+    if mask & MASK_BOOL != 0 {
+        (mask & !MASK_BOOL) | MASK_TRUE
+    } else {
+        mask
     }
 }
 
@@ -233,6 +264,7 @@ pub(crate) fn statically_satisfies(actual: &PhpType, mask: u32) -> bool {
         PhpType::Str => mask & MASK_STRING != 0,
         PhpType::Bool => mask & MASK_BOOL != 0,
         PhpType::False => mask & (MASK_BOOL | MASK_FALSE) != 0,
+        // A `bool` value proves neither literal member: `: true` must check the value.
         PhpType::Void => mask & MASK_NULL != 0,
         PhpType::Never => true,
         PhpType::TaggedScalar => mask & (MASK_INT | MASK_NULL) == MASK_INT | MASK_NULL,
@@ -259,6 +291,8 @@ pub(crate) fn declared_type_name(mask: u32) -> String {
         parts.push("bool");
     } else if mask & MASK_FALSE != 0 {
         parts.push("false");
+    } else if mask & MASK_TRUE != 0 {
+        parts.push("true");
     }
     let joined = parts.join("|");
     if mask & MASK_NULL == 0 {

@@ -73,8 +73,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
-        | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr)) => expr_effect(expr),
+        | StmtKind::ListUnpack { value: expr, .. } => expr_effect(expr),
+        // A `return` checked against a declared scalar type can throw `TypeError` in this frame.
+        StmtKind::Return(Some(expr)) if super::exception_flow::return_check_may_throw(expr) => {
+            expr_effect(expr).with_may_throw()
+        }
+        StmtKind::Return(Some(expr)) => expr_effect(expr),
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }

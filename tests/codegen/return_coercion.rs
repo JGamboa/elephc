@@ -243,3 +243,187 @@ try { f([]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
         "bool(true)\nbool(false)\nint(5)\nNULL\nf(): Return value must be of type bool, array returned\n"
     );
 }
+
+/// Verifies coercive mode converts a `mixed` object with `__toString()` returned through `string`,
+/// `?string` or `int|string` (php-src `zend_parse_arg_str_weak`), including a property-backed
+/// getter, and still throws for an object without one.
+#[test]
+fn test_return_coercion_stringable_object_weak() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public function __construct(private string $v) {} public function __toString(): string { return $this->v; } }
+class N {}
+function s(mixed $v): string { return $v; }
+function ns(mixed $v): ?string { return $v; }
+function is(mixed $v): int|string { return $v; }
+class Bag { private array $items = []; public function set(string $k, $v): void { $this->items[$k] = $v; } public function get(string $k): string { return $this->items[$k]; } }
+var_dump(s(new S("a")), ns(new S("b")), is(new S("c")));
+$b = new Bag(); $b->set('k', new S("bag")); var_dump($b->get('k'));
+try { s(new N); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"a\"\nstring(1) \"b\"\nstring(1) \"c\"\nstring(3) \"bag\"\ns(): Return value must be of type string, N returned\n"
+    );
+}
+
+/// Verifies `strict_types` rejects a Stringable object returned through `string`.
+#[test]
+fn test_return_coercion_stringable_object_strict_throws() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+class S { public function __toString(): string { return "s"; } }
+function s(mixed $v): string { return $v; }
+try { var_dump(s(new S)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "s(): Return value must be of type string, S returned\n"
+    );
+}
+
+/// Verifies strict int arithmetic returned through `int`, `float` and `?int` keeps its value and
+/// that the overflow float of `PHP_INT_MAX + 1` / `PHP_INT_MIN - 1` throws "float returned".
+#[test]
+fn test_return_coercion_strict_int_arithmetic_fast_path() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function inc(int $a): int { return $a + 1; }
+function dec(int $a): int { return $a - 1; }
+function half(int $a): float { return $a / 2; }
+function nxt(?int $a): ?int { return $a + 1; }
+var_dump(inc(41), dec(1), half(3), half(4), nxt(null), nxt(5));
+foreach ([fn() => inc(PHP_INT_MAX), fn() => dec(PHP_INT_MIN)] as $f) {
+  try { var_dump($f()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nint(0)\nfloat(1.5)\nfloat(2)\nint(1)\nint(6)\ninc(): Return value must be of type int, float returned\ndec(): Return value must be of type int, float returned\n"
+    );
+}
+
+/// Verifies coercive int arithmetic returned through `int` throws for the overflow float.
+#[test]
+fn test_return_coercion_weak_int_arithmetic_overflow_throws() {
+    let out = compile_and_run(
+        r#"<?php
+function inc(int $a): int { return $a + 1; }
+function dec(int $a): int { return $a - 1; }
+function half(int $a): int { return intdiv($a, 2) + $a % 2; }
+var_dump(inc(41), half(7));
+foreach ([fn() => inc(PHP_INT_MAX), fn() => dec(PHP_INT_MIN)] as $f) {
+  try { var_dump($f()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nint(4)\ninc(): Return value must be of type int, float returned\nint(-9223372036854775808)\n"
+    );
+}
+
+/// Verifies the return check's `TypeError` is raised inside the function, so a `try`/`catch`
+/// around the `return` in the same body catches it (coercive mode).
+#[test]
+fn test_return_coercion_type_error_caught_in_same_function() {
+    let out = compile_and_run(
+        r#"<?php
+function a(mixed $v): int { try { return $v; } catch (TypeError $e) { return -1; } }
+function b(mixed $v): bool { try { return $v; } catch (TypeError $e) { return false; } }
+function c(mixed $v): string { try { return $v; } catch (TypeError $e) { return "caught"; } }
+function d(mixed $v): int|string { try { return $v; } catch (TypeError $e) { return "caught"; } }
+foreach (['a', 'b', 'c', 'd'] as $f) {
+  try { var_dump($f([])); } catch (TypeError $e) { echo "$f escaped\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(-1)\nbool(false)\nstring(6) \"caught\"\nstring(6) \"caught\"\n"
+    );
+}
+
+/// Verifies the same-function `catch` of a return `TypeError` under `strict_types`.
+#[test]
+fn test_return_coercion_type_error_caught_in_same_function_strict() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function a(mixed $v): int { try { return $v; } catch (TypeError $e) { return -1; } }
+function b(mixed $v): bool { try { return $v; } catch (TypeError $e) { return false; } }
+function c(mixed $v): string { try { return $v; } catch (TypeError $e) { return "caught"; } }
+function d(mixed $v): int|string { try { return $v; } catch (TypeError $e) { return "caught"; } }
+foreach (['a', 'b', 'c', 'd'] as $f) {
+  try { var_dump($f([])); } catch (TypeError $e) { echo "$f escaped\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(-1)\nbool(false)\nstring(6) \"caught\"\nstring(6) \"caught\"\n"
+    );
+}
+
+/// Verifies the literal `true` return type rejects `0` and `"x"` (no bool coercion) while `false`
+/// keeps its own literal check.
+#[test]
+fn test_return_coercion_literal_true_type() {
+    let out = compile_and_run(
+        r#"<?php
+function t(mixed $v): true { return $v; }
+function tl(): true { return true; }
+function ff(mixed $v): false { return $v; }
+try { var_dump(t(0)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(t("x")); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(ff(0)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(tl());
+"#,
+    );
+    assert_eq!(
+        out,
+        "t(): Return value must be of type true, int returned\nt(): Return value must be of type true, string returned\nff(): Return value must be of type false, int returned\nbool(true)\n"
+    );
+}
+
+/// Verifies coercive `int` returns reject numeric strings outside the int range (`"1e100"`,
+/// `"9223372036854775808"`) instead of saturating, and still accept whitespace-padded ints.
+#[test]
+fn test_return_coercion_weak_int_rejects_out_of_range_strings() {
+    let out = compile_and_run(
+        r#"<?php
+function i(mixed $v): int { return $v; }
+function si(mixed $v): int|bool { return $v; }
+foreach (["9223372036854775808", "1e100", "-1e100", "1e19", 1e19, "12abc", " 12", "12 "] as $v) {
+  try { var_dump(i($v)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+  try { var_dump(si($v)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "i(): Return value must be of type int, string returned\nbool(true)\ni(): Return value must be of type int, string returned\nbool(true)\ni(): Return value must be of type int, string returned\nbool(true)\ni(): Return value must be of type int, string returned\nbool(true)\ni(): Return value must be of type int, float returned\nbool(true)\ni(): Return value must be of type int, string returned\nbool(true)\nint(12)\nint(12)\nint(12)\nint(12)\n"
+    );
+}
+
+/// Verifies `parent::class` in a method parameter default names the parent class, also inside an
+/// array default next to `self::class`.
+#[test]
+fn test_param_default_parent_class_resolves_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function n($x = self::class) { return $x; } }
+class C extends P { public function pc($x = parent::class, $y = [parent::class, self::class]) { return $x . "," . implode("|", $y); } }
+echo (new C())->n(), " ", (new C())->pc(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "P P,P|C\n"
+    );
+}

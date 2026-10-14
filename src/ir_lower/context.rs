@@ -380,6 +380,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// from the body. Only a declared boundary carries PHP's coercive-mode verification
     /// (TypeError on a non-coercible runtime value); an inferred return must never throw.
     pub return_type_is_declared: bool,
+    /// The declared return names the literal `true` type, which the checker carries as `bool`.
+    pub return_literal_true: bool,
     /// The declared scalar return of a method body its override family boxed into a Mixed call
     /// ABI: a `return` first coerces to it, exactly as the unboxed body would, then boxes.
     pub boxed_return_contract: Option<PhpType>,
@@ -538,6 +540,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_type,
             return_php_type,
             return_type_is_declared: false,
+            return_literal_true: false,
             boxed_return_contract: None,
             by_ref_return: false,
             in_main,
@@ -5115,6 +5118,7 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
         TypeExpr::False => PhpType::False,
+        TypeExpr::True => PhpType::Bool,
         TypeExpr::Str => PhpType::Str,
         TypeExpr::Void => PhpType::Void,
         TypeExpr::Never => PhpType::Never,

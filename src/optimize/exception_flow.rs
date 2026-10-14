@@ -42,6 +42,63 @@ thread_local! {
     static ACTIVE_EXCEPTION_FLOW: RefCell<Option<Rc<ExceptionFlowAnalysis>>> = const { RefCell::new(None) };
     /// Exact/constrained throwable domains bound to catch variables in the current DCE region.
     static ACTIVE_CAUGHT_THROW_BINDINGS: RefCell<HashMap<String, ThrownTypes>> = RefCell::new(HashMap::new());
+    /// Whether the body being pruned declares a scalar return type, so each of its `return`
+    /// statements is verified at run time and can throw `TypeError` (`return_coerce_prelude`).
+    static CHECKED_SCALAR_RETURN: RefCell<Option<crate::parser::ast::TypeExpr>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` over one function, method or closure body, recording whether its return annotation
+/// makes every `return` a run-time `TypeError` source.
+///
+/// php-src raises that `TypeError` inside the callee, so a `try`/`catch` in the SAME body sees it:
+/// `try { return $v; } catch (TypeError $e) { return -1; }` returns -1 for an array. Without this
+/// the `return` looked pure and the `catch` was pruned, letting the error escape to the caller.
+pub(in crate::optimize) fn with_return_annotation<R>(
+    return_type: Option<&crate::parser::ast::TypeExpr>,
+    f: impl FnOnce() -> R,
+) -> R {
+    let checked = return_type
+        .filter(|ty| crate::return_coerce_prelude::annotation_may_need_coercion(ty))
+        .cloned();
+    let previous = CHECKED_SCALAR_RETURN.with(|cell| cell.replace(checked));
+    let result = f();
+    CHECKED_SCALAR_RETURN.with(|cell| *cell.borrow_mut() = previous);
+    result
+}
+
+/// Returns whether `return <expr>;` in the body being pruned can throw the declared-return
+/// `TypeError`: the body declares a scalar return and the value is not a literal that is
+/// already a member of it (`return 'no';` in a `: string` function never throws).
+pub(in crate::optimize) fn return_check_may_throw(expr: &Expr) -> bool {
+    CHECKED_SCALAR_RETURN.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|annotation| !literal_satisfies_annotation(expr, annotation))
+    })
+}
+
+/// Returns whether a literal return value is exactly a member of a scalar return annotation.
+fn literal_satisfies_annotation(expr: &Expr, annotation: &crate::parser::ast::TypeExpr) -> bool {
+    use crate::parser::ast::TypeExpr;
+    let member = |wanted: &dyn Fn(&TypeExpr) -> bool| {
+        fn any(ty: &TypeExpr, wanted: &dyn Fn(&TypeExpr) -> bool) -> bool {
+            match ty {
+                TypeExpr::Nullable(inner) => wanted(&TypeExpr::Void) || any(inner, wanted),
+                TypeExpr::Union(members) => members.iter().any(|m| any(m, wanted)),
+                other => wanted(other),
+            }
+        }
+        any(annotation, wanted)
+    };
+    match &expr.kind {
+        ExprKind::IntLiteral(_) => member(&|t| matches!(t, TypeExpr::Int | TypeExpr::Float)),
+        ExprKind::FloatLiteral(_) => member(&|t| matches!(t, TypeExpr::Float)),
+        ExprKind::StringLiteral(_) => member(&|t| matches!(t, TypeExpr::Str)),
+        ExprKind::BoolLiteral(true) => member(&|t| matches!(t, TypeExpr::Bool | TypeExpr::True)),
+        ExprKind::BoolLiteral(false) => member(&|t| matches!(t, TypeExpr::Bool | TypeExpr::False)),
+        ExprKind::Null => member(&|t| matches!(t, TypeExpr::Void)),
+        _ => false,
+    }
 }
 
 /// Fixed-point exception summaries and hierarchy shared by post-typecheck DCE.
@@ -514,8 +571,14 @@ impl ExceptionFlowAnalysis {
             | StmtKind::ListUnpack { value: expr, .. } => self
                 .expr_throws(expr, bindings, class_context)
                 .combined(self.overwrite_cleanup_throws()),
-            StmtKind::ConstDecl { value: expr, .. } | StmtKind::Return(Some(expr)) => {
-                self.expr_throws(expr, bindings, class_context)
+            StmtKind::ConstDecl { value: expr, .. } => self.expr_throws(expr, bindings, class_context),
+            StmtKind::Return(Some(expr)) => {
+                let thrown = self.expr_throws(expr, bindings, class_context);
+                if return_check_may_throw(expr) {
+                    thrown.combined(ThrownTypes::exact("TypeError"))
+                } else {
+                    thrown
+                }
             }
             StmtKind::Throw(expr) => self
                 .expr_throws(expr, bindings, class_context)

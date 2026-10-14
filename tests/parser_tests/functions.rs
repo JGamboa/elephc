@@ -666,15 +666,16 @@ fn test_parse_t_or_false_preserves_literal_union_member() {
 }
 
 #[test]
-/// Verifies that the `true` literal type also widens to `bool`, so `int|true` parses as
-/// `Union([Int, Bool])`.
-fn test_parse_t_or_true_widens_to_bool_union() {
+/// Verifies that the `true` literal type is kept as its own member, so `int|true` parses as
+/// `Union([Int, True])`; the checker treats it as `bool`, and a declared `: true` return checks
+/// the value.
+fn test_parse_t_or_true_keeps_literal_true_member() {
     let stmts = parse_source("<?php function f(int|true $x): int { return 0; }");
     match &stmts[0].kind {
         StmtKind::FunctionDecl { params, .. } => {
             assert_eq!(
                 params[0].1,
-                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::True]))
             );
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),

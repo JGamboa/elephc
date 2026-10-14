@@ -485,12 +485,15 @@ fn validate_instruction_immediate(
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
-        | ReturnBoundaryMixedToInt
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
+        // The profiled form carries `strict_types` for a declared-return check.
+        ReturnBoundaryMixedToInt => require_immediate(inst_id, inst, "data id", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
+        }),
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),

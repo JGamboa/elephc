@@ -705,6 +705,7 @@ fn describe(ty: &TypeExpr) -> String {
         TypeExpr::Str => "string".to_string(),
         TypeExpr::Bool => "bool".to_string(),
         TypeExpr::False => "false".to_string(),
+        TypeExpr::True => "true".to_string(),
         TypeExpr::Void => "null".to_string(),
         TypeExpr::Never => "never".to_string(),
         TypeExpr::Iterable => "iterable".to_string(),
