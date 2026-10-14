@@ -572,6 +572,11 @@ pub(crate) struct Checker {
     pub mixed_storage_locals: HashSet<String>,
     /// Union storage contracts retained while guards narrow reads of a local in the current body.
     pub guarded_union_types: HashMap<String, PhpType>,
+    /// Locals the current body may have left undefined at this point of the walk (flow state;
+    /// see `condition_edges` for how join points maintain it).
+    pub maybe_undefined_locals: HashSet<String>,
+    /// Accumulated maybe-undefined reads and flagged locals for EIR lowering.
+    pub maybe_undefined_result: crate::types::MaybeUndefinedLocals,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
     /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
@@ -643,6 +648,7 @@ pub(crate) struct SavedLocalBindingScope {
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
+    maybe_undefined: HashSet<String>,
     contains_eval: bool,
 }
 
@@ -842,6 +848,7 @@ impl Checker {
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
+            maybe_undefined: std::mem::take(&mut self.maybe_undefined_locals),
             contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
@@ -868,6 +875,7 @@ impl Checker {
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
+        self.maybe_undefined_locals = saved.maybe_undefined;
         self.body_contains_eval = saved.contains_eval;
     }
 
@@ -1314,6 +1322,7 @@ fn check_types_on_compiler_stack(
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
+        maybe_undefined: checker.maybe_undefined_result,
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_ref_detach_sites: checker.local_ref_detach_sites,

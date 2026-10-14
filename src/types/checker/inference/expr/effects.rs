@@ -180,10 +180,28 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
+                // Each arm starts from the marks the condition left, minus what its own edge
+                // assigns for sure; the join keeps any arm's mark (see `condition_edges`).
+                let marks_cond = self.maybe_undefined_locals.clone();
+                let true_names =
+                    crate::types::checker::condition_edges::definitely_assigned_on_edge(condition, true);
+                let false_names =
+                    crate::types::checker::condition_edges::definitely_assigned_on_edge(condition, false);
+                let arm_marks = |names: &std::collections::BTreeSet<String>| {
+                    marks_cond
+                        .iter()
+                        .filter(|name| !names.contains(*name))
+                        .cloned()
+                        .collect::<std::collections::HashSet<_>>()
+                };
+                self.maybe_undefined_locals = arm_marks(&true_names);
                 let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                let mut marks_then = self.maybe_undefined_locals.clone();
                 merge_array_storage_effects(env, &then_env);
                 merge_array_storage_effects(&mut else_env, &then_env);
+                self.maybe_undefined_locals = arm_marks(&false_names);
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                let mut marks_else = self.maybe_undefined_locals.clone();
                 // A branch that RETYPES an existing local is re-checked on the real environment,
                 // as `infer_conditional_operand_with_effects` explains.
                 if branch_retypes_existing_local(env, &then_env, guard_var.as_deref())
@@ -195,10 +213,14 @@ impl Checker {
                     // spurious "cannot reassign $y from string to int".
                     let mut then_real = env.clone();
                     Self::insert_edge_definitions(&mut then_real, &true_defs);
+                    self.maybe_undefined_locals = arm_marks(&true_names);
                     let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_real)?;
+                    marks_then = self.maybe_undefined_locals.clone();
                     let mut else_real = env.clone();
                     Self::insert_edge_definitions(&mut else_real, &false_defs);
+                    self.maybe_undefined_locals = arm_marks(&false_names);
                     let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_real)?;
+                    marks_else = self.maybe_undefined_locals.clone();
                     let names = env.keys().cloned().collect::<Vec<_>>();
                     for name in names {
                         if let Some(ty) = then_real.get(&name) {
@@ -207,9 +229,13 @@ impl Checker {
                     }
                     merge_array_storage_effects(env, &else_real);
                     widen_lazy_edge_disagreements(env, &[&then_real, &else_real]);
+                    self.maybe_undefined_locals = marks_then.union(&marks_else).cloned().collect();
+                    self.join_arm_only_locals(env, &[&then_real, &else_real]);
                     return Ok(merge_match_arm_result_type(self, then_ty, else_ty));
                 }
                 merge_array_storage_effects(env, &else_env);
+                self.maybe_undefined_locals = marks_then.union(&marks_else).cloned().collect();
+                self.join_arm_only_locals(env, &[&then_env, &else_env]);
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -773,17 +799,69 @@ impl Checker {
         operand: &Expr,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let marks_before = self.maybe_undefined_locals.clone();
         let mut branch_env = env.clone();
         let ty = self.infer_type_with_assignment_effects(operand, &mut branch_env)?;
         if !branch_retypes_existing_local(env, &branch_env, None) {
             merge_array_storage_effects(env, &branch_env);
+            // The operand may not run: a mark it cleared still holds after it, and a local it
+            // introduced is defined only on its edge.
+            self.maybe_undefined_locals.extend(marks_before);
+            let before = env.clone();
+            self.join_arm_only_locals(env, &[&before, &branch_env]);
             return Ok(ty);
         }
         let before = env.clone();
         let ty = self.infer_type_with_assignment_effects(operand, env)?;
-        env.retain(|name, _| before.contains_key(name));
         widen_lazy_edge_disagreements(env, &[&before, &branch_env]);
+        self.maybe_undefined_locals.extend(marks_before);
+        let introduced = env
+            .keys()
+            .filter(|name| !before.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in introduced {
+            self.mark_maybe_undefined(&name);
+            self.allow_edge_binding_retype(&name);
+        }
         Ok(ty)
+    }
+
+    /// Lets a local first bound on one lazy edge be retyped later like any other local
+    /// (review P2c r2, R2-1): `if ($a && ($r = f(5))) { $r .= "x"; }` compiled before the
+    /// condition's definitions were modelled, because the body did not know `$r` at all; now that
+    /// it does, a failed merge falls back to `mixed` (`guarded_union_types`) instead of the
+    /// "cannot reassign" a binding created inside a branch otherwise gets.
+    pub(crate) fn allow_edge_binding_retype(&mut self, name: &str) {
+        self.guarded_union_types.insert(name.to_string(), PhpType::Mixed);
+    }
+
+    /// Joins locals introduced by only some of `arms` (alternatives that started from `env`):
+    /// they are added to `env` and marked maybe-undefined; a local every arm introduced is added
+    /// with the arms' common type (or `mixed`) and stays defined.
+    pub(crate) fn join_arm_only_locals(&mut self, env: &mut TypeEnv, arms: &[&TypeEnv]) {
+        let mut introduced = std::collections::BTreeSet::new();
+        for arm in arms {
+            for name in arm.keys() {
+                if !env.contains_key(name) && !Checker::narrowed_place_key_is_property(name) {
+                    introduced.insert(name.clone());
+                }
+            }
+        }
+        for name in introduced {
+            let types = arms.iter().filter_map(|arm| arm.get(&name)).collect::<Vec<_>>();
+            let ty = if types.windows(2).all(|pair| pair[0] == pair[1]) {
+                types[0].clone()
+            } else {
+                PhpType::Mixed
+            };
+            let everywhere = types.len() == arms.len();
+            env.insert(name.clone(), ty);
+            if !everywhere {
+                self.mark_maybe_undefined(&name);
+                self.allow_edge_binding_retype(&name);
+            }
+        }
     }
 }
 

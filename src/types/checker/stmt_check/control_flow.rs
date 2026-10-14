@@ -648,8 +648,30 @@ impl Checker {
                 // edge reaches and only there. A later clause, the `else` and — when every clause
                 // diverges — the code after the `if` are reached through the false edges.
                 let mut false_edge_inserted: Vec<(String, PhpType)> = Vec::new();
+                // Maybe-undefined join (see `condition_edges`): each arm starts from the marks of
+                // the path reaching it, marks what earlier arms introduced (they did not run on
+                // this path), and the `if` ends with every falling-through arm's marks plus the
+                // locals some falling-through arm never defined.
+                let if_keys_start = env.keys().cloned().collect::<std::collections::HashSet<_>>();
+                let mut path_marks = self.maybe_undefined_locals.clone();
+                let mut body_introduced = std::collections::HashSet::<String>::new();
+                let mut arm_marks: Vec<std::collections::HashSet<String>> = Vec::new();
+                let mut arm_end_keys: Vec<std::collections::HashSet<String>> = Vec::new();
                 for (cond, body) in &clauses {
+                    self.maybe_undefined_locals = path_marks.clone();
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    let marks_after_cond = self.maybe_undefined_locals.clone();
+                    let true_names = super::super::condition_edges::definitely_assigned_on_edge(cond, true);
+                    let false_names = super::super::condition_edges::definitely_assigned_on_edge(cond, false);
+                    self.maybe_undefined_locals = marks_after_cond
+                        .iter()
+                        .filter(|name| !true_names.contains(*name))
+                        .cloned()
+                        .collect();
+                    for name in &body_introduced {
+                        self.mark_maybe_undefined(name);
+                    }
+                    let keys_before_body = env.keys().cloned().collect::<std::collections::HashSet<_>>();
                     let true_defs = self.condition_edge_definitions(cond, env, true);
                     let false_defs = self.condition_edge_definitions(cond, env, false);
                     let true_inserted = Self::insert_edge_definitions(env, &true_defs);
@@ -723,7 +745,24 @@ impl Checker {
                         self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     }
                     Self::remove_edge_definitions(env, &true_inserted);
+                    if !self.body_cannot_fall_through(body) {
+                        arm_marks.push(self.maybe_undefined_locals.clone());
+                        arm_end_keys.push(env.keys().cloned().collect());
+                    }
+                    for name in env.keys() {
+                        if !keys_before_body.contains(name) {
+                            body_introduced.insert(name.clone());
+                        }
+                    }
+                    path_marks = marks_after_cond
+                        .into_iter()
+                        .filter(|name| !false_names.contains(name))
+                        .collect();
                     false_edge_inserted.extend(Self::insert_edge_definitions(env, &false_defs));
+                }
+                self.maybe_undefined_locals = path_marks.clone();
+                for name in &body_introduced {
+                    self.mark_maybe_undefined(name);
                 }
 
                 // Final else body (if present) is checked with the accumulated complement.
@@ -744,6 +783,26 @@ impl Checker {
                     callable_target_exits.push(self.callable_array_targets.clone());
                     callable_target_version_exits
                         .push(self.callable_array_target_versions.clone());
+                    arm_marks.push(self.maybe_undefined_locals.clone());
+                    arm_end_keys.push(env.keys().cloned().collect());
+                }
+                if !arm_marks.is_empty() {
+                    let mut joined = arm_marks
+                        .iter()
+                        .flatten()
+                        .cloned()
+                        .collect::<std::collections::HashSet<_>>();
+                    for name in env.keys() {
+                        if !if_keys_start.contains(name)
+                            && arm_end_keys.iter().any(|keys| !keys.contains(name))
+                        {
+                            joined.insert(name.clone());
+                        }
+                    }
+                    self.maybe_undefined_locals.clear();
+                    for name in joined {
+                        self.mark_maybe_undefined(&name);
+                    }
                 }
                 let (joined_targets, joined_target_versions) = joined_callable_array_targets(
                     &callable_target_exits,

@@ -40,9 +40,35 @@ impl Checker {
         // must not leave the includer's setting behind, and vice versa.
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
+        // Constructs whose body may not run, or that the walk cannot split into arms, join their
+        // maybe-undefined locals here (see `condition_edges`); `if` joins its arms itself.
+        let optional_region = match &stmt.kind {
+            StmtKind::While { .. } | StmtKind::For { .. } | StmtKind::Foreach { .. } => Some(true),
+            StmtKind::DoWhile { .. }
+            | StmtKind::Switch { .. }
+            | StmtKind::Try { .. }
+            | StmtKind::IncludeOnceGuard { .. } => Some(false),
+            _ => None,
+        };
+        let region_before = optional_region.map(|_| {
+            (
+                self.maybe_undefined_locals.clone(),
+                env.keys().cloned().collect::<std::collections::HashSet<_>>(),
+            )
+        });
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        if let (Some(mark_new), Some((marks_before, keys_before))) = (optional_region, region_before) {
+            let definite = super::condition_edges::loop_head_definite_assignments(stmt);
+            self.join_maybe_undefined_after_optional_region(
+                &marks_before,
+                &keys_before,
+                &definite,
+                mark_new,
+                env,
+            );
+        }
         self.strict_types = outer_strict_types;
         result
     }

@@ -390,3 +390,55 @@ fn test_ternary_arms_retyping_the_same_local_are_joined() {
     );
     assert_eq!(out, "string(1) \"s\"\nstring(1) \"s\"\nint(1)\nint(1)\nfloat(1.5)\nint(2)\n");
 }
+
+/// Verifies a local some path leaves undefined reads as PHP null there — `isset`, `??`, `@`, `empty`, after an `if`, a lazy edge, a loop that did not run and `unset` — instead of the value a previous call left in the slot (review P2c r2, R2-2).
+#[test]
+fn test_maybe_undefined_local_reads_answer_php_null() {
+    let out = compile_and_run(
+        r#"<?php
+        // A local some path leaves undefined reads as PHP null there (review P2c r2, R2-2).
+        function f($v) { return $v; }
+        function e01($a) { if ($a && ($r = f(5))) { echo "in\n"; } return $r ?? null; }
+        var_dump(e01(true), e01(false));
+        function e02($a) { if ($a && ($r = f(5))) { } var_dump(isset($r)); }
+        e02(true); e02(false);
+        function e03($a) { if ($a && ($r = f(5))) { } $r = $r ?? 0; var_dump($r); }
+        e03(true); e03(false);
+        function e08($a) { if ($a && ($r = f(5))) { } echo @$r, "|\n"; }
+        e08(true); e08(false);
+        function e14($a) { $a && ($r = f(5)); return $r ?? "d"; }
+        var_dump(e14(true), e14(false));
+        function g03($a) { if ($a) { $r = f(5); } return $r ?? null; }
+        var_dump(g03(true), g03(false));
+        function g05($a) { if ($a) { $r = f(5); } var_dump(isset($r), empty($r)); }
+        g05(true); g05(false);
+        function lp($n) { for ($i = 0; $i < $n; $i++) { $last = $i; } return isset($last) ? $last : "none"; }
+        var_dump(lp(3), lp(0));
+        function un($a) { $r = 1; if ($a) { unset($r); } return $r ?? "unset"; }
+        var_dump(un(true), un(false));
+        "#,
+    );
+    assert_eq!(out, "in\nint(5)\nNULL\nbool(true)\nbool(false)\nint(5)\nint(0)\n5|\n|\nint(5)\nstring(1) \"d\"\nint(5)\nNULL\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nint(2)\nstring(4) \"none\"\nstring(5) \"unset\"\nint(1)\n");
+}
+
+/// Verifies a local defined by a condition edge can be retyped inside the guarded region like any other local (review P2c r2, R2-1).
+#[test]
+fn test_condition_edge_local_can_be_retyped_in_the_region() {
+    let out = compile_and_run(
+        r#"<?php
+        // A local defined by a condition edge can be retyped in the guarded region (review P2c r2, R2-1).
+        function f($v) { return $v; }
+        function k2($a) { if ($a && ($r = f(5))) { $r .= "x"; echo $r, "\n"; } }
+        k2(true);
+        function k3($a) { if ($a && ($r = f(5))) { $r = "s"; echo $r, "\n"; } }
+        k3(true);
+        function k5($a) { $i = 0; while ($i++ < 2 && ($r = f(5))) { $r .= "x"; echo $r, "\n"; } }
+        k5(true);
+        function k6($a) { echo ($a && ($r = f(5))) ? ($r = "s") : "no", "\n"; }
+        k6(true); k6(false);
+        function v12($a) { if ($a && ($r = f(5))) { $r++; $r .= "x"; echo $r, "\n"; } }
+        v12(true);
+        "#,
+    );
+    assert_eq!(out, "5x\ns\n5x\n5x\ns\nno\n6x\n");
+}

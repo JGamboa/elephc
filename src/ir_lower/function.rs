@@ -1833,6 +1833,7 @@ fn lower_body_into_function(
     if let Some(class) = property_initializers {
         super::property_initializers::lower(&mut ctx, class);
     } else if !super::throwable_constructors::lower(&mut ctx) {
+        super::maybe_undefined::init_frame_flags(&mut ctx);
         for stmt in body {
             crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
         }

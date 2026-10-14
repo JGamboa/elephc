@@ -157,3 +157,107 @@ impl super::Checker {
         }
     }
 }
+
+/// Maybe-undefined locals (review P2c r2, R2-2).
+///
+/// A local a join point may leave undefined — assigned in one `if` arm, on one lazy edge, or only
+/// inside a loop body — is tracked in `Checker::maybe_undefined_locals` while the body is walked.
+/// A read of such a local is recorded in `maybe_undefined_result` and typed `mixed`, and EIR
+/// lowering answers it from the local's hidden "defined" flag: PHP null (after an `Undefined
+/// variable` warning for a plain read) when the local was never assigned on the path taken.
+/// Before this, the read loaded whatever the slot held: a previous call's value for `isset($r)`,
+/// a folded null for `$r ?? $d` even when the edge had assigned it.
+impl super::Checker {
+    /// Whether `name` can be tracked: a frame local this body owns and writes only by name.
+    pub(crate) fn local_is_flaggable(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            && name != "this"
+            && !name.starts_with('\u{1}')
+            && !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
+    }
+
+    /// Marks `name` maybe-undefined from this point of the walk.
+    pub(crate) fn mark_maybe_undefined(&mut self, name: &str) {
+        if self.local_is_flaggable(name) {
+            self.maybe_undefined_locals.insert(name.to_string());
+        }
+    }
+
+    /// Records a read of a maybe-undefined local; returns whether the read is flagged.
+    pub(crate) fn record_maybe_undefined_read(&mut self, name: &str, span: crate::span::Span) -> bool {
+        if !self.maybe_undefined_locals.contains(name) || !self.local_is_flaggable(name) {
+            return false;
+        }
+        let warns = self.null_probe_depth == 0;
+        self.maybe_undefined_result
+            .reads
+            .insert((span, name.to_string()), warns);
+        self.maybe_undefined_result
+            .by_scope
+            .entry(self.current_loop_storage_scope.clone())
+            .or_default()
+            .insert(name.to_string());
+        true
+    }
+
+    /// Joins a construct whose body may not run (a loop) or whose parts the walk cannot split
+    /// into arms (`switch`, `try`): a mark the body cleared does not hold after it, and a local
+    /// the body introduced, outside `definite`, may be undefined after it.
+    pub(crate) fn join_maybe_undefined_after_optional_region(
+        &mut self,
+        marks_before: &std::collections::HashSet<String>,
+        keys_before: &std::collections::HashSet<String>,
+        definite: &BTreeSet<String>,
+        mark_new: bool,
+        env: &crate::types::TypeEnv,
+    ) {
+        for name in marks_before {
+            self.maybe_undefined_locals.insert(name.clone());
+        }
+        if mark_new {
+            let new = env
+                .keys()
+                .filter(|name| !keys_before.contains(*name) && !definite.contains(*name))
+                .cloned()
+                .collect::<Vec<_>>();
+            for name in new {
+                self.mark_maybe_undefined(&name);
+            }
+        }
+    }
+}
+
+/// Assignments a statement runs before its body for sure (`for` init, the unconditional part of
+/// a loop condition), which stay defined after the loop.
+pub(crate) fn loop_head_definite_assignments(stmt: &crate::parser::ast::Stmt) -> BTreeSet<String> {
+    use crate::parser::ast::StmtKind;
+    let mut out = BTreeSet::new();
+    match &stmt.kind {
+        StmtKind::While { condition, .. } => collect_unconditional_assignments(condition, &mut out),
+        StmtKind::For { init, condition, .. } => {
+            if let Some(init) = init {
+                if let StmtKind::Assign { name, .. } = &init.kind {
+                    out.insert(name.clone());
+                } else if let StmtKind::ExprStmt(expr) = &init.kind {
+                    collect_unconditional_assignments(expr, &mut out);
+                } else if let StmtKind::Synthetic(stmts) = &init.kind {
+                    for stmt in stmts {
+                        if let StmtKind::Assign { name, .. } = &stmt.kind {
+                            out.insert(name.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(condition) = condition {
+                collect_unconditional_assignments(condition, &mut out);
+            }
+        }
+        _ => {}
+    }
+    out
+}

@@ -84,21 +84,12 @@ fn test_error_null_coalesce_assign_call_dimension() {
     );
 }
 
-/// Verifies a local assigned only on the true edge of `&&` stays undefined after the `if`, where
-/// that edge no longer holds (PHP would read it as an undefined variable).
+/// Verifies capturing a possibly undefined local by value in `use()` is refused explicitly
+/// rather than copying whatever its slot holds.
 #[test]
-fn test_error_true_edge_definition_does_not_outlive_the_if() {
+fn test_error_use_capture_of_possibly_undefined_local() {
     expect_error(
-        "<?php function f($v) { return $v; } $c = f(true); if ($c && ($x = f(1))) { echo $x; } echo $x;",
-        "Undefined variable: $x",
-    );
-}
-
-/// Verifies a local assigned only on the false edge of `||` is not defined in the `then` body.
-#[test]
-fn test_error_false_edge_definition_is_not_in_the_then_body() {
-    expect_error(
-        "<?php function f($v) { return $v; } $c = f(true); if (!$c || !($y = f(1))) { echo $y; }",
-        "Undefined variable: $y",
+        "<?php function f($v) { return $v; } function t($a) { if ($a && ($r = f(5))) { } $g = function () use ($r) { return $r; }; return $g(); } t(true);",
+        "Capturing a possibly undefined variable in use() is not supported",
     );
 }

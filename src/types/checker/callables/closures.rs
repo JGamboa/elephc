@@ -57,6 +57,17 @@ impl Checker {
                     &format!("Undefined variable in use(): ${}", cap),
                 ));
             }
+            // A capture copies the local's value when the closure is created, and a local a join
+            // point may have left undefined has no defined-flag in the closure's frame.
+            if self.maybe_undefined_locals.contains(cap) && self.local_is_flaggable(cap) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Capturing a possibly undefined variable in use() is not supported: ${} may be undefined here; assign it on every path first",
+                        cap
+                    ),
+                ));
+            }
         }
 
         let mut closure_env = env.clone();
