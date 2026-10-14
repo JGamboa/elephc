@@ -205,6 +205,17 @@ pub(crate) trait Pass {
         ty
     }
 
+    /// Transforms the RETURN annotation of a function, method or closure. Every other pass treats
+    /// it like any type position, which is the default; `return_coerce_prelude` overrides it to
+    /// tell a return annotation from a parameter one.
+    fn transform_return_type(
+        &self,
+        ty: crate::parser::ast::TypeExpr,
+        span: Span,
+    ) -> crate::parser::ast::TypeExpr {
+        self.transform_type(ty, span)
+    }
+
     /// Transforms a class NAMED at a use site — a construction or a static receiver.
     ///
     /// Exists for one caller: `generics::classes` renaming `new Box(5)` and `Box::of(5)` to the

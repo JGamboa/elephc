@@ -577,6 +577,20 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     };
     timings.record_since("natives-prelude", phase_started);
 
+    // Inject the declared-return coercion helper LAST among the preludes, so its detection sees
+    // every injected declaration's return annotation too. `ir_lower` lowers a `return` whose static type
+    // does not prove a declared scalar contract (`mixed` into `: bool`, `?int`, `int|string`, ...)
+    // to a call of it; declaration reachability keeps it only when some reachable declaration has
+    // a scalar return annotation, so other binaries carry nothing.
+    let ast = match crate::return_coerce_prelude::inject(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
     // `mixed ...$__elephc_func_args` parameter, so the surplus positional arguments PHP

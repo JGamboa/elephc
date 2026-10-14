@@ -73,13 +73,19 @@ pub(super) struct ExceptionFlowAnalysis {
     scalar_frame_callables: HashSet<String>,
 }
 
-/// Returns whether argument binding can throw before entering an otherwise clean body.
+/// Returns whether the call boundary itself can throw `TypeError` around an otherwise clean
+/// body: argument binding of a declared by-reference object parameter, or the run-time check
+/// of a declared scalar return type (`return_coerce_prelude`), which throws when the returned
+/// value does not fit (`mixed` into `: int`, `null` into `: bool`).
 fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
-    signature.params.iter().enumerate().any(|(index, (_, ty))| {
+    let object_reference = signature.params.iter().enumerate().any(|(index, (_, ty))| {
         signature.ref_params.get(index).copied().unwrap_or(false)
             && signature.declared_params.get(index).copied().unwrap_or(false)
             && matches!(ty, PhpType::Object(_))
-    })
+    });
+    object_reference
+        || (signature.declared_return
+            && crate::return_coerce_prelude::scalar_mask(&signature.return_type).is_some())
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.

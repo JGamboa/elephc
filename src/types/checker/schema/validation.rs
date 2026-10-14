@@ -17,6 +17,42 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
 
+/// Resolves `self::class` inside a parameter default to the declaring class name.
+///
+/// Omitted arguments are materialized at the CALL site, which lowers the default expression in
+/// the caller's scope: there `self` names the caller's class, or nothing at all, and the
+/// default came back as the literal string `"self"`. php-src evaluates the default in the
+/// declaring class, so the name is fixed here, where the declaring class is known. Array
+/// defaults (`[self::class]`) are resolved element by element.
+fn resolve_self_class_default(default: Expr, declaring_type: &str) -> Expr {
+    use crate::parser::ast::{ExprKind, StaticReceiver};
+    let span = default.span;
+    let kind = match default.kind {
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Self_,
+        } => ExprKind::StringLiteral(declaring_type.trim_start_matches('\\').to_string()),
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .into_iter()
+                .map(|item| resolve_self_class_default(item, declaring_type))
+                .collect(),
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        resolve_self_class_default(key, declaring_type),
+                        resolve_self_class_default(value, declaring_type),
+                    )
+                })
+                .collect(),
+        ),
+        other => other,
+    };
+    Expr { kind, span }
+}
+
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
 /// annotations through the checker. Untyped by-reference parameters use canonical `Mixed`
 /// storage; other parameters without hints use a declared default's syntactic type when present,
@@ -55,7 +91,11 @@ pub(crate) fn build_method_sig(
             Ok((n.clone(), ty))
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
-    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
+    let defaults: Vec<Option<Expr>> = method
+        .params
+        .iter()
+        .map(|(_, _, d, _)| d.clone().map(|default| resolve_self_class_default(default, declaring_type)))
+        .collect();
     let mut ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
     for ((param_name, type_ann, default, _), (_, resolved_ty)) in
         method.params.iter().zip(params.iter())

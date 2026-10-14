@@ -266,7 +266,7 @@ impl Checker {
         } else if !all_return_infos.is_empty() {
             return_type = all_return_infos[0].ty.clone();
             for return_info in &all_return_infos[1..] {
-                return_type = Self::wider_type(&return_type, &return_info.ty);
+                return_type = Self::wider_return_type(&return_type, &return_info.ty);
             }
         }
 

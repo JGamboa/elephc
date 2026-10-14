@@ -15,6 +15,9 @@ pub(super) fn coerce_to_return_type(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    if let Some(value) = verify_declared_scalar_return(ctx, value, span) {
+        return value;
+    }
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -45,6 +48,135 @@ pub(super) fn coerce_to_return_type(
             span,
         ),
         IrType::Void => value,
+    }
+}
+
+/// Verifies a value against a DECLARED scalar return contract through the return-coercion
+/// prelude helper, when its static type does not already prove the contract.
+///
+/// Covers every purely scalar declaration — `bool`, `int`, `float`, `string`, their nullable
+/// forms and scalar unions like `int|string` or `string|false` — for a source that is `mixed`,
+/// a union, `?int` or another scalar representation. The helper applies PHP's rules for the
+/// return statement's own file mode: an exact member passes, `strict_types` only widens int to
+/// float, coercive mode converts in php-src's int > float > string > bool order, and anything
+/// else throws `TypeError` ("f(): Return value must be of type T, V returned"). Its `mixed`
+/// result already holds a value of a declared member, so narrowing it to the return storage is
+/// a plain cast (or, for a union, no change at all).
+///
+/// The plain storage coercions this replaces converted blindly: `mixed` into `: bool` was an
+/// int cast (`"x"` came back `false`), `null` and arrays never threw, `strict_types` was
+/// ignored, a union return passed any value through untouched, and `mixed` into `?int` failed
+/// codegen outright.
+///
+/// Statically exact sources keep the direct path, as do an int widening into a `float` slot
+/// and a coercive `int` return from `mixed`/`float`, which `declared_int_return_boundary`
+/// verifies with the same rules and no call. INFERRED returns are never verified.
+fn verify_declared_scalar_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    use crate::return_coerce_prelude as rc;
+    if !ctx.return_type_is_declared {
+        return None;
+    }
+    // Compiler-built bodies (builtin class methods, synthetic helpers) carry no source span and
+    // return exactly their declared type; only PHP source — the program and the PHP-written
+    // preludes — is verified, and only it is what the helper's injection detects.
+    if !span.is_some_and(Span::is_from_source) {
+        return None;
+    }
+    let mask = rc::scalar_mask(&ctx.return_php_type)?;
+    let source = ctx.builder.value_php_type(value.value);
+    if rc::statically_satisfies(&source, mask) {
+        return None;
+    }
+    if source == PhpType::Int && ctx.return_type == IrType::F64 {
+        return None;
+    }
+    let strict = crate::source::current_strict_types();
+    if !strict
+        && mask == rc::MASK_INT
+        && matches!(source.codegen_repr(), PhpType::Mixed | PhpType::Float)
+    {
+        return None;
+    }
+    if !ctx.functions.contains_key(rc::HELPER) {
+        // Every pipeline injects the helper and reachability keeps it for each scalar return
+        // annotation; a missing declaration is a pipeline bug, never a reason to convert
+        // blindly.
+        crate::ir_lower::diagnostics::refuse(
+            span.unwrap_or_else(Span::dummy),
+            "internal error: the return-type coercion helper was not injected",
+        );
+        return None;
+    }
+    // The value goes through a synthetic local and an ordinary call expression, as the
+    // `(object)` cast does: the user-call path then boxes it for the `mixed` parameter, supplies
+    // any hidden parameter the callee grew (`func_args` adds one when the program uses `eval`),
+    // roots the arguments and releases their temporaries. The call gets a synthetic span, so no
+    // span-keyed checker table (generic instantiations, builtin result types) can match it.
+    let local_type = super::static_property_helpers::normalize_value_php_type(source);
+    let temp = ctx.declare_synthetic_php_local(local_type.clone());
+    ctx.store_local(&temp, value, local_type, span);
+    let call_span = Span::synthetic();
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        ctx.owner_name(),
+        rc::declared_type_name(mask)
+    );
+    let args = vec![
+        Expr::new(ExprKind::Variable(temp), call_span),
+        Expr::new(ExprKind::IntLiteral(mask as i64), call_span),
+        Expr::new(ExprKind::BoolLiteral(strict), call_span),
+        Expr::new(ExprKind::StringLiteral(prefix), call_span),
+    ];
+    let call = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::from(rc::HELPER.to_string()),
+            args,
+        },
+        call_span,
+    );
+    let verified = lower_expr(ctx, &call);
+    Some(narrow_verified_return(ctx, verified, span))
+}
+
+/// Narrows the helper's verified `mixed` result to the current return storage.
+///
+/// The value already holds a declared member, so each cast is exact: a scalar slot takes the
+/// cast of its own type, `?int` the tagged-scalar conversion (null stays null), and every
+/// other union keeps the boxed value.
+fn narrow_verified_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    verified: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let declared = ctx.return_php_type.clone();
+    match ctx.return_type {
+        IrType::I64 => {
+            let target = if declared.codegen_repr() == PhpType::Bool {
+                PhpType::Bool
+            } else {
+                PhpType::Int
+            };
+            let cast = ctx.emit_value(
+                Op::Cast,
+                vec![verified.value],
+                Some(Immediate::CastTarget(IrType::I64)),
+                target,
+                Op::Cast.default_effects(),
+                span,
+            );
+            crate::ir_lower::ownership::release_if_owned(ctx, verified, span);
+            cast
+        }
+        IrType::F64 => coerce_return_scalar_source(ctx, verified, span, coerce_to_float),
+        IrType::Str => coerce_return_scalar_source(ctx, verified, span, coerce_to_string),
+        IrType::TaggedScalar => {
+            coerce_return_scalar_source(ctx, verified, span, coerce_to_tagged_scalar)
+        }
+        _ => verified,
     }
 }
 

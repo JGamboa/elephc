@@ -393,7 +393,7 @@ impl Checker {
         } else {
             let mut widest = return_infos[0].ty.clone();
             for return_info in &return_infos[1..] {
-                widest = Self::wider_type(&widest, &return_info.ty);
+                widest = Self::wider_return_type(&widest, &return_info.ty);
             }
             Some(widest)
         };

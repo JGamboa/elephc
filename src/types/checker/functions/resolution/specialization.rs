@@ -321,6 +321,25 @@ impl Checker {
             seen_idx += 1;
         }
 
+        // An OMITTED argument still binds its default. A `null` default on an untyped parameter
+        // that another call site specialized to `float` has no in-band null in a float slot, so
+        // the default was materialized as `0.0`; the omitted call widens it to `float|null`,
+        // exactly as an explicit `null` argument does through `union_param_type`.
+        let named_call = args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
+        if !named_call {
+            for idx in seen_idx..regular_param_count {
+                let declared = stored_sig.declared_params.get(idx).copied().unwrap_or(false);
+                let null_default = matches!(
+                    stored_sig.defaults.get(idx),
+                    Some(Some(default)) if matches!(default.kind, ExprKind::Null)
+                );
+                if !declared && null_default && param_types[idx].1 == PhpType::Float {
+                    param_types[idx].1 = PhpType::Union(vec![PhpType::Float, PhpType::Void]);
+                    changed = true;
+                }
+            }
+        }
+
         if !variadic_param_is_by_ref(stored_sig)
             && function_variadic_tail_needs_iterable(
             args,
