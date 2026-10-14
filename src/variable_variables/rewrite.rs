@@ -21,7 +21,9 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 
-use super::scope::{collect_frame_names, known_values, literal_foreach_values, FrameNames};
+use super::scope::{
+    collect_frame_names, known_values, literal_foreach_values, region_may_rewrite, FrameNames,
+};
 use super::respan::{respan_expr, respan_stmts};
 use super::walk::{walk_expr_children, walk_stmt_children, Visitor};
 use super::{
@@ -40,6 +42,9 @@ pub(super) struct Scope {
     pub(super) frame: FrameNames,
     /// Narrowed name bindings from enclosing literal `foreach` loops and `switch` cases.
     pub(super) narrow: Vec<(String, BTreeSet<String>)>,
+    /// Frame names definitely assigned at the statement being rewritten (straight-line
+    /// assignments of enclosing blocks plus parameters); used by `compact()`.
+    pub(super) definite: std::collections::HashSet<String>,
     /// `true` inside a closure or arrow function body.
     pub(super) in_closure: bool,
     /// Nesting depth of the statement block being rewritten (0 = the function body).
@@ -76,6 +81,7 @@ impl Rewriter {
         Self {
             scope: Scope {
                 top_level: true,
+                definite: Default::default(),
                 in_closure: false,
                 this_available: false,
                 frame: FrameNames::default(),
@@ -91,12 +97,14 @@ impl Rewriter {
     }
 
     /// Rewrites the whole program, starting in its top-level frame.
-    pub(super) fn run_top_level(&mut self, program: &mut Vec<Stmt>) {
+    /// Returns whether anything needed rewriting.
+    pub(super) fn run_top_level(&mut self, program: &mut Vec<Stmt>) -> bool {
         if !super::scan::needs_rewrite(program) {
-            return;
+            return false;
         }
         self.scope.frame = collect_frame_names(&[], program);
         self.block(program);
+        true
     }
 
     /// Returns the diagnostics collected during the rewrite.
@@ -136,9 +144,15 @@ impl Rewriter {
             .into_iter()
             .filter_map(|(name, ty)| ty.map(|ty| (name, ty)))
             .collect();
+        let definite = names
+            .iter()
+            .filter(|name| !frame.unset_names.contains(*name))
+            .cloned()
+            .collect();
         let outer = std::mem::replace(
             &mut self.scope,
             Scope {
+                definite,
                 top_level: false,
                 in_closure,
                 this_available,
@@ -270,7 +284,7 @@ impl Rewriter {
     ) -> Vec<Stmt> {
         let throw_with = |suffix: &str| {
             Stmt::new(
-                StmtKind::ExprStmt(throw_error(
+                StmtKind::Throw(super::new_error(
                     binop(
                         binop(
                             str_lit("Variable variable $", span),
@@ -286,8 +300,23 @@ impl Rewriter {
             )
         };
         let unknown: Vec<Stmt> = if unknown_is_error {
-            vec![throw_with(
-                ": creating a new local through a variable variable is not supported (elephc); only locals the function names at compile time can be written",
+            // PHP's own error for `$$n = v` with `$n === 'this'`.
+            vec![Stmt::new(
+                StmtKind::If {
+                    condition: binop(var(temp, span), BinOp::StrictEq, str_lit("this", span)),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Throw(super::new_error(
+                            str_lit("Cannot re-assign $this", span),
+                            span,
+                        )),
+                        span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![throw_with(
+                        ": creating a new local through a variable variable is not supported (elephc); only locals the function names at compile time can be written",
+                    )]),
+                },
+                span,
             )]
         } else {
             Vec::new()
@@ -845,6 +874,32 @@ impl Visitor for Rewriter {
                 }
                 return;
             }
+            // Destructuring (`[$$x, $$y] = ...`, `list($$x) = ...`, `foreach (... as [$$x])`)
+            // lowers each element to a plain store on the frame access: route it through the
+            // ordinary write dispatch.
+            StmtKind::ArrayAssign {
+                array,
+                index,
+                value,
+            } if array == FRAME_LOCAL => {
+                let span = stmt.span;
+                let target = super::frame_access(index.clone(), span);
+                stmt.kind = StmtKind::ExprStmt(plain_assignment(target, value.clone(), span));
+                self.rewrite_write_stmt(stmt);
+                return;
+            }
+            StmtKind::NestedArrayAssign { target, value } if place_frame_root(target).is_some() => {
+                let span = stmt.span;
+                let assignment = plain_assignment(target.clone(), value.clone(), span);
+                stmt.kind = StmtKind::ExprStmt(assignment);
+                self.rewrite_write_stmt(stmt);
+                return;
+            }
+            StmtKind::ArrayPush { array, .. } if array == FRAME_LOCAL => {
+                let span = stmt.span;
+                self.error(span, "Unsupported variable-variable form (elephc): a variable variable needs a name");
+                return;
+            }
             StmtKind::ExprStmt(expr) => match &expr.kind {
                 ExprKind::Assignment { target, .. } if place_frame_root(target).is_some() => {
                     self.rewrite_write_stmt(stmt);
@@ -888,17 +943,28 @@ impl Visitor for Rewriter {
                 let mut pushed = 0;
                 if !*value_by_ref {
                     if let Some(values) = literal_foreach_values(array, false) {
-                        self.scope.narrow.push((value_var.clone(), values));
-                        pushed += 1;
+                        if !region_may_rewrite(body, value_var, &values) {
+                            self.scope.narrow.push((value_var.clone(), values));
+                            pushed += 1;
+                        }
                     }
                 }
                 if let Some(key) = key_var {
                     if let Some(values) = literal_foreach_values(array, true) {
-                        self.scope.narrow.push((key.clone(), values));
-                        pushed += 1;
+                        if !region_may_rewrite(body, key, &values) {
+                            self.scope.narrow.push((key.clone(), values));
+                            pushed += 1;
+                        }
+                    }
+                }
+                let saved = self.scope.definite.clone();
+                for var in std::iter::once(value_var.clone()).chain(key_var.clone()) {
+                    if !self.scope.frame.unset_names.contains(&var) {
+                        self.scope.definite.insert(var);
                     }
                 }
                 self.block(body);
+                self.scope.definite = saved;
                 for _ in 0..pushed {
                     self.scope.narrow.pop();
                 }
@@ -911,10 +977,12 @@ impl Visitor for Rewriter {
                 else_body,
             } => {
                 self.expr(condition);
-                self.block_narrowed(condition_bounds(condition), then_body);
+                let bounds = stable_bounds(condition_bounds(condition), then_body);
+                self.block_narrowed(bounds, then_body);
                 for (condition, body) in elseif_clauses.iter_mut() {
                     self.expr(condition);
-                    self.block_narrowed(condition_bounds(condition), body);
+                    let bounds = stable_bounds(condition_bounds(condition), body);
+                    self.block_narrowed(bounds, body);
                 }
                 if let Some(body) = else_body {
                     self.block(body);
@@ -927,8 +995,24 @@ impl Visitor for Rewriter {
                 default,
             } => {
                 self.expr(subject);
+                // A case body that rewrites the subject (possibly falling through into the
+                // next group) invalidates the label bound.
+                let all_labels: BTreeSet<String> = cases
+                    .iter()
+                    .flat_map(|(conditions, _)| conditions.iter())
+                    .filter_map(|condition| match &condition.kind {
+                        ExprKind::StringLiteral(value) => Some(value.clone()),
+                        _ => None,
+                    })
+                    .collect();
                 let subject_var = match &subject.kind {
-                    ExprKind::Variable(name) => Some(name.clone()),
+                    ExprKind::Variable(name)
+                        if !cases
+                            .iter()
+                            .any(|(_, body)| region_may_rewrite(body, name, &all_labels)) =>
+                    {
+                        Some(name.clone())
+                    }
                     _ => None,
                 };
                 let mut labels: Option<BTreeSet<String>> = Some(BTreeSet::new());
@@ -990,6 +1074,7 @@ impl Rewriter {
 
     fn block_inner(&mut self, stmts: &mut Vec<Stmt>) {
         let function_body = self.scope.block_depth == 0;
+        let saved_definite = self.scope.definite.clone();
         self.scope.block_depth += 1;
         let mut index = 0;
         while index < stmts.len() {
@@ -1005,6 +1090,7 @@ impl Rewriter {
             self.pending_splice = false;
             self.stmt(&mut stmts[index]);
             self.extract_context = None;
+            let mut count = 1;
             if std::mem::take(&mut self.pending_splice) {
                 // Splice the desugared sequence into this block rather than leaving it
                 // wrapped: several later passes do not look inside `Synthetic` for reference
@@ -1012,14 +1098,20 @@ impl Rewriter {
                 if let StmtKind::Synthetic(body) =
                     std::mem::replace(&mut stmts[index].kind, StmtKind::Synthetic(Vec::new()))
                 {
-                    let count = body.len();
+                    count = body.len();
                     stmts.splice(index..=index, body);
-                    index += count;
-                    continue;
                 }
             }
-            index += 1;
+            for stmt in &stmts[index..index + count] {
+                for name in definitely_assigned(stmt) {
+                    if !self.scope.frame.unset_names.contains(&name) {
+                        self.scope.definite.insert(name);
+                    }
+                }
+            }
+            index += count;
         }
+        self.scope.definite = saved_definite;
         self.scope.block_depth -= 1;
     }
 
@@ -1165,6 +1257,53 @@ pub(super) fn inherit_profile(stmts: &mut Vec<Stmt>, origin: &Stmt) {
         fn expr(&mut self, _expr: &mut Expr) {}
     }
     Profile(origin.source_mode, origin.strict_types).block(stmts);
+}
+
+/// Builds a plain `target = value` assignment expression (no prelude, no read-back).
+fn plain_assignment(target: Expr, value: Expr, span: Span) -> Expr {
+    let result_target = (!matches!(target.kind, ExprKind::Variable(_))).then(|| Box::new(value.clone()));
+    Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(value),
+            result_target,
+            prelude: Vec::new(),
+            conditional_value_temp: None,
+        },
+        span,
+    )
+}
+
+/// Drops the condition bounds a branch body may invalidate.
+fn stable_bounds(
+    bounds: Vec<(String, BTreeSet<String>)>,
+    body: &[Stmt],
+) -> Vec<(String, BTreeSet<String>)> {
+    bounds
+        .into_iter()
+        .filter(|(var, bound)| !region_may_rewrite(body, var, bound))
+        .collect()
+}
+
+/// Locals a statement assigns unconditionally (for `compact()`'s definite-assignment check).
+fn definitely_assigned(stmt: &Stmt) -> Vec<String> {
+    match &stmt.kind {
+        StmtKind::Assign { name, .. }
+        | StmtKind::TypedAssign { name, .. }
+        | StmtKind::RefAssign { target: name, .. }
+        | StmtKind::ArrayAssign { array: name, .. }
+        | StmtKind::ArrayPush { array: name, .. }
+        | StmtKind::StaticVar { name, .. } => vec![name.clone()],
+        StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => vars.clone(),
+        StmtKind::ExprStmt(Expr {
+            kind: ExprKind::Assignment { target, .. },
+            ..
+        }) => match &target.kind {
+            ExprKind::Variable(name) => vec![name.clone()],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// Returns whether `stmt` is a discarded `extract(...)` call.

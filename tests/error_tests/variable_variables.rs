@@ -106,3 +106,39 @@ fn test_error_extract_expression_and_mode() {
         "extract() is only supported with EXTR_OVERWRITE or EXTR_SKIP",
     );
 }
+
+/// Destructuring into a variable variable at top level is refused without leaking the internal
+/// frame pseudo-variable's name (review r1, H1).
+#[test]
+fn test_error_variable_variable_destructuring_top_level() {
+    match check_source("<?php $a = 0; $x = 'a'; [$$x] = [5]; var_dump($a);") {
+        Ok(_) => panic!("expected an error"),
+        Err(msg) => {
+            assert!(msg.contains("only supported inside functions and methods"), "{msg}");
+            assert!(!msg.contains("__elephc_varvar_frame"), "{msg}");
+        }
+    }
+}
+
+/// compact() of a local that is only conditionally assigned is refused: PHP omits it when it
+/// is undefined, which elephc cannot test yet (review r1, M1).
+#[test]
+fn test_error_compact_possibly_undefined_local() {
+    expect_error(
+        "<?php function g(bool $c) { if ($c) { $x = 'str'; } return compact('x'); }",
+        "compact() of $x, which may be undefined at this point, is not supported",
+    );
+    expect_error(
+        "<?php function h() { $r = compact('later'); $later = 1; return $r; }",
+        "compact() of $later, which may be undefined at this point",
+    );
+}
+
+/// compact() of a name extract() may have defined is refused too (review r1, M2).
+#[test]
+fn test_error_compact_after_extract() {
+    expect_error(
+        "<?php function h(array $d) { $x = 1; extract($d); return compact('x', 'title'); }",
+        "compact() of $title, which may be undefined at this point",
+    );
+}

@@ -23,6 +23,9 @@ use super::{is_frame_reachable_name, FRAME_LOCAL};
 /// Maximum number of names a narrowed bound may hold before it is treated as unbounded.
 const MAX_KNOWN_VALUES: usize = 64;
 
+/// Narrowing-stack marker that disables the self-write check while it is being evaluated.
+const SELF_CHECK_MARKER: &str = "#self-check";
+
 /// Maximum definition-chasing depth for `known_values`.
 const MAX_KNOWN_DEPTH: usize = 4;
 
@@ -37,6 +40,15 @@ pub(super) struct FrameNames {
     pub(super) defs: HashMap<String, Vec<Expr>>,
     /// Variables written by some form other than a plain definition (unbounded values).
     pub(super) opaque: HashSet<String>,
+    /// Name expressions of every variable-variable write site (`$$n = v`, `unset($$n)`,
+    /// `foreach ($$n as &$v)`, `= &$$n`, destructuring into `$$n`) in this frame.
+    pub(super) frame_writes: Vec<Expr>,
+    /// Frame names spelled by something other than a `compact()` string.
+    pub(super) spelled: BTreeSet<String>,
+    /// The frame calls `extract()`, which may define any frame name.
+    pub(super) has_extract: bool,
+    /// Locals some statement `unset()`s by name; never definitely assigned.
+    pub(super) unset_names: HashSet<String>,
     /// Declared types of the typed parameters.
     pub(super) param_types: HashMap<String, crate::parser::ast::TypeExpr>,
     /// The scope reads its frame by runtime name (`$$name`, `get_defined_vars()`).
@@ -45,6 +57,13 @@ pub(super) struct FrameNames {
 
 impl FrameNames {
     fn add(&mut self, name: &str) {
+        if is_frame_reachable_name(name) {
+            self.names.insert(name.to_string());
+            self.spelled.insert(name.to_string());
+        }
+    }
+
+    fn add_compact_name(&mut self, name: &str) {
         if is_frame_reachable_name(name) {
             self.names.insert(name.to_string());
         }
@@ -89,14 +108,47 @@ impl Visitor for Collector {
                     .or_default()
                     .push(value.clone());
             }
+            StmtKind::RefAssign { target, source } => {
+                self.frame.add_opaque(target);
+                // `$r = &$n`: later writes through `$r` change `$n`.
+                if let ExprKind::Variable(name) = &source.kind {
+                    let name = name.clone();
+                    self.frame.add_opaque(&name);
+                }
+                if let Some(root) = super::place_frame_root(source) {
+                    if let Some(name) = super::frame_access_name(root) {
+                        self.frame.frame_writes.push(name.clone());
+                    }
+                }
+            }
+            StmtKind::ArrayAssign { array, index, .. } if array == FRAME_LOCAL => {
+                self.frame.frame_writes.push(index.clone());
+            }
+            StmtKind::NestedArrayAssign { target, .. } => {
+                if let Some(root) = super::place_frame_root(target) {
+                    if let Some(name) = super::frame_access_name(root) {
+                        self.frame.frame_writes.push(name.clone());
+                    }
+                }
+            }
             StmtKind::TypedAssign { name, .. }
-            | StmtKind::RefAssign { target: name, .. }
             | StmtKind::ArrayAssign { array: name, .. }
             | StmtKind::ArrayPush { array: name, .. }
             | StmtKind::StaticVar { name, .. } => self.frame.add_opaque(name),
             StmtKind::Foreach {
-                key_var, value_var, ..
+                key_var,
+                value_var,
+                array,
+                value_by_ref,
+                ..
             } => {
+                if *value_by_ref {
+                    if let Some(root) = super::place_frame_root(array) {
+                        if let Some(name) = super::frame_access_name(root) {
+                            self.frame.frame_writes.push(name.clone());
+                        }
+                    }
+                }
                 self.frame.add_opaque(value_var);
                 if let Some(key) = key_var {
                     self.frame.add_opaque(key);
@@ -137,14 +189,50 @@ impl Visitor for Collector {
                 let name = name.clone();
                 self.frame.add_opaque(&name);
             }
-            ExprKind::ClosureCall { var, .. } => {
-                let var = var.clone();
-                self.frame.add(&var);
-            }
             ExprKind::Assignment { target, .. } => {
                 if let ExprKind::Variable(name) = &target.kind {
                     let name = name.clone();
                     self.frame.add_opaque(&name);
+                }
+                if let Some(root) = super::place_frame_root(target) {
+                    if let Some(name) = super::frame_access_name(root) {
+                        self.frame.frame_writes.push(name.clone());
+                    }
+                }
+            }
+            ExprKind::FunctionCall { name, args } => {
+                let builtin = super::rewrite::builtin_call_name(name);
+                match builtin.as_deref() {
+                    Some("compact") => {
+                        // `compact('x')` reads `$x` by name: it is a frame name.
+                        let mut names = Vec::new();
+                        for arg in args.iter() {
+                            super::builtins::collect_literal_names(arg, &mut names);
+                        }
+                        for name in names {
+                            self.frame.add_compact_name(&name);
+                        }
+                    }
+                    Some("extract") => self.frame.has_extract = true,
+                    Some("unset") => {
+                        for arg in args.iter() {
+                            if let ExprKind::Variable(name) = &arg.kind {
+                                self.frame.unset_names.insert(name.clone());
+                            }
+                            if let Some(root) = super::place_frame_root(arg) {
+                                if let Some(name) = super::frame_access_name(root) {
+                                    self.frame.frame_writes.push(name.clone());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            ExprKind::ClosureCall { .. } => {
+                if let ExprKind::ClosureCall { var, .. } = &expr.kind {
+                    let var = var.clone();
+                    self.frame.add(&var);
                 }
             }
             ExprKind::Closure {
@@ -220,6 +308,20 @@ fn known_values_at(
             if frame.opaque.contains(name) || frame.params.contains(name) {
                 return None;
             }
+            // `$n = 'n'; $$n = 'a';` rewrites `$n` itself: a write site named by `$n` whose
+            // own bound includes "n" makes the definitions unreliable.
+            if !narrow.iter().any(|(marker, _)| marker == SELF_CHECK_MARKER) {
+                let mut guarded: Vec<(String, BTreeSet<String>)> = narrow.to_vec();
+                guarded.push((SELF_CHECK_MARKER.to_string(), BTreeSet::new()));
+                for site in &frame.frame_writes {
+                    if matches!(&site.kind, ExprKind::Variable(v) if v == name) {
+                        let bound = known_values_at(site, frame, &guarded, depth + 1);
+                        if bound.is_none_or(|bound| bound.contains(name)) {
+                            return None;
+                        }
+                    }
+                }
+            }
             let defs = frame.defs.get(name)?;
             let mut out = BTreeSet::new();
             for def in defs {
@@ -250,6 +352,24 @@ fn known_values_at(
         }
         _ => None,
     }
+}
+
+/// Returns whether a narrowing of `var` established at the head of `region` may be invalidated
+/// inside it: `var` is reassigned, aliased, passed to a possibly by-reference call, or named by a
+/// variable-variable write.
+///
+/// A variable-variable write named by `var` itself only rewrites `var` when "var" is one of the
+/// `bound` names it can resolve to.
+pub(super) fn region_may_rewrite(region: &[Stmt], var: &str, bound: &BTreeSet<String>) -> bool {
+    let mut body = region.to_vec();
+    let inner = collect_frame_names(&[], &mut body);
+    inner.opaque.contains(var)
+        || inner.defs.contains_key(var)
+        || inner.unset_names.contains(var)
+        || inner
+            .frame_writes
+            .iter()
+            .any(|site| matches!(&site.kind, ExprKind::Variable(v) if v == var) && bound.contains(var))
 }
 
 /// Returns the string values a `foreach` over `array` binds to its value (or key) variable when

@@ -583,7 +583,11 @@ therefore quadratic; prefer `foreach` when you do not need the pointer.
 **Scope builtins.** `compact()` is supported with literal names (strings or literal arrays of
 strings): `compact('a', ['b', 'c'])` builds `['a' => $a, ...]` in argument order, and a name the
 function never spells is skipped with PHP's `compact(): Undefined variable $x` warning (raised as
-`E_USER_WARNING`). A runtime name list is rejected at compile time. `extract($array)` and
+`E_USER_WARNING`). A local that is only conditionally assigned before the call (assigned in a
+branch, a loop, a `try`, after the call, or possibly by `extract()`) is rejected at compile time,
+because PHP omits it when undefined and elephc cannot yet test that at runtime; assign it
+unconditionally before `compact()`. A runtime name list is rejected at compile time.
+`extract()` with a `this` key throws `Cannot re-assign $this` like PHP. `extract($array)` and
 `extract($array, EXTR_SKIP)` are supported as statements inside functions: each local the
 function spells is assigned from a matching key. `EXTR_SKIP` must come before the function
 mentions any local other than its parameters (elephc cannot test at runtime whether a `null`

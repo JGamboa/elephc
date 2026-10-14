@@ -66,8 +66,21 @@ impl Rewriter {
                 self.error(span, "compact() of $this is not supported (elephc)");
                 return;
             }
-            if self.scope.frame.names.contains(&name) && is_frame_reachable_name(&name) {
+            let frame = &self.scope.frame;
+            let defined = self.scope.definite.contains(&name);
+            let never_spelled = !frame.spelled.contains(&name) && !frame.has_extract;
+            if defined && is_frame_reachable_name(&name) {
                 pairs.push((str_lit(&name, span), var(&name, span)));
+            } else if !never_spelled && is_frame_reachable_name(&name) {
+                // PHP omits a local that is undefined at runtime; elephc cannot yet test that
+                // for a local that is only conditionally assigned here.
+                self.error(
+                    span,
+                    &format!(
+                        "compact() of ${name}, which may be undefined at this point, is not supported (elephc): assign it unconditionally before the call"
+                    ),
+                );
+                return;
             } else {
                 warnings.push(warning_then_null(
                     str_lit(&format!("compact(): Undefined variable ${name}"), span),
@@ -162,6 +175,26 @@ impl Rewriter {
             },
             span,
         )];
+        // PHP refuses to extract a `this` key before writing anything.
+        out.push(Stmt::new(
+            StmtKind::If {
+                condition: global_call(
+                    "array_key_exists",
+                    vec![str_lit("this", span), var(&temp, span)],
+                    span,
+                ),
+                then_body: vec![Stmt::new(
+                    StmtKind::Throw(super::new_error(
+                        str_lit("Cannot re-assign $this", span),
+                        span,
+                    )),
+                    span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ));
         let names: Vec<String> = self
             .scope
             .frame
@@ -207,7 +240,7 @@ impl Rewriter {
 }
 
 /// Appends the literal names of one `compact()` argument; returns `false` for a runtime name.
-fn collect_literal_names(arg: &Expr, out: &mut Vec<String>) -> bool {
+pub(super) fn collect_literal_names(arg: &Expr, out: &mut Vec<String>) -> bool {
     match &arg.kind {
         ExprKind::StringLiteral(name) => {
             out.push(name.clone());

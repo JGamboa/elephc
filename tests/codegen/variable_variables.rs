@@ -273,3 +273,74 @@ echo dsn(['host' => 'db', 'port' => 5432, 'config' => 'x']), ' ', dsn([]), ' ', 
     );
     assert_eq!(out, "host=db;port=5432 port=none new keep");
 }
+
+/// Destructuring targets that are variable variables write the named locals (review r1, H1).
+#[test]
+fn test_varvar_destructuring_targets() {
+    let out = compile_and_run(
+        r#"<?php
+function f(): string {
+    $a = 0; $b = 0; $x = 'a'; $y = 'b';
+    [$$x, $$y] = [1, 2];
+    $out = "$a$b";
+    ['k' => $$x] = ['k' => 7];
+    list($$x, $b) = [8, 9];
+    $out .= "$a$b";
+    foreach ([[3, 4]] as [$$x, $b]) {}
+    return $out . "$a$b";
+}
+echo f();
+"#,
+    );
+    assert_eq!(out, "128934");
+}
+
+/// extract() with a 'this' key throws before writing (review r1, B1).
+#[test]
+fn test_extract_this_key_throws() {
+    let out = compile_and_run(
+        r#"<?php
+function f(array $d): string { $a = 0; try { extract($d); } catch (Error $e) { return $e->getMessage() . $a; } return "ok$a"; }
+echo f(['this' => 1, 'a' => 5]), ' ', f(['a' => 6]);
+"#,
+    );
+    assert_eq!(out, "Cannot re-assign $this0 ok6");
+}
+
+/// A dispatched write followed by `return [...]` compiles (review r1, B2), and `$$n = v` with
+/// `$n === 'this'` raises PHP's own error.
+#[test]
+fn test_varvar_write_then_return_array_and_this() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $n): array { $a = 1; $b = 2; $$n = 5; return [$a, $b]; }
+function t(string $n): string { $a = 1; try { $$n = 2; } catch (Error $e) { return $e->getMessage(); } return 'no'; }
+echo json_encode(w('b')), ' ', t('this');
+"#,
+    );
+    assert_eq!(out, "[1,5] Cannot re-assign $this");
+}
+
+/// A switch case that rewrites the subject and falls through, and `$$n` renaming `$n`
+/// itself, no longer trust a stale bound (review r1, B3).
+#[test]
+fn test_varvar_bounds_invalidated_by_rewrites() {
+    let out = compile_and_run(
+        r#"<?php
+function fall(string $u): string {
+    $a = 1; $b = 2; $c = 3;
+    switch ($u) {
+        case 'a':
+            $u = 'c';
+        case 'b':
+            $$u = 100;
+            break;
+    }
+    return "$a $b $c";
+}
+function self_rename(): string { $a = 'x'; $n = 'n'; $$n = 'a'; $$n = $$n . 'y'; return "$n $a"; }
+echo fall('a'), '|', fall('b'), '|', self_rename();
+"#,
+    );
+    assert_eq!(out, "1 2 100|1 100 3|a xy");
+}

@@ -148,11 +148,20 @@ pub fn desugar(program: Program) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
         let mut program = program;
         let mut rewriter = rewrite::Rewriter::new();
-        rewriter.run_top_level(&mut program);
+        let rewritten = rewriter.run_top_level(&mut program);
         if rewriter.used_box {
             program.insert(0, box_helper_decl());
         }
-        match rewriter.into_errors() {
+        let mut errors = rewriter.into_errors();
+        if rewritten && errors.is_empty() {
+            for span in scan::leftover_frame_accesses(&mut program) {
+                errors.push(CompileError::new(
+                    span,
+                    "Unsupported variable-variable form (elephc): this position cannot take `$$name` or `${expr}`",
+                ));
+            }
+        }
+        match errors {
             errors if errors.is_empty() => Ok(program),
             errors => Err(CompileError::from_many(errors)),
         }
@@ -239,6 +248,17 @@ pub(crate) fn global_call(name: &str, args: Vec<Expr>, span: Span) -> Expr {
         ExprKind::FunctionCall {
             name: Name::from_parts(NameKind::FullyQualified, vec![name.to_string()]),
             args,
+        },
+        span,
+    )
+}
+
+/// Builds `new \Error(<message>)`.
+pub(crate) fn new_error(message: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::from_parts(NameKind::FullyQualified, vec!["Error".to_string()]),
+            args: vec![message],
         },
         span,
     )
