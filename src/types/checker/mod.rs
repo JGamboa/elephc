@@ -43,7 +43,7 @@ mod mixed_storage_scan;
 mod packed_counter;
 pub(crate) mod null_probe;
 mod schema;
-mod stmt_check;
+pub(crate) mod stmt_check;
 mod type_compat;
 /// yield_validation
 pub(crate) mod yield_validation;

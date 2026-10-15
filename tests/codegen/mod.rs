@@ -37,6 +37,7 @@ mod eval_reflection_invocation;
 mod eval_global_scope;
 mod eval_undefined_functions;
 mod operators;
+mod dyn_member;
 mod control_flow;
 mod scalar_strings;
 mod array_basics;

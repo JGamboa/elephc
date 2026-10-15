@@ -28,6 +28,7 @@
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_dynamic_class_constant;
 pub mod __elephc_dynamic_static_property;
+pub mod __elephc_dynamic_property_push;
 pub mod __elephc_dynamic_static_call;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;

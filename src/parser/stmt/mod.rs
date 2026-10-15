@@ -37,7 +37,9 @@ pub(crate) use params::{
     type_arguments_end,
 };
 pub(crate) use assign::{
-    can_replay_assignment_target, lower_place_ref_assign, lower_nested_append_assignment, lower_postfix_incdec_assignment,
+    append_to_place_stmt, assignment_target_store_stmt,
+    can_replay_assignment_target, lower_place_ref_assign, lower_nested_append_assignment,
+    lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};

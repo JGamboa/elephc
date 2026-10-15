@@ -15,6 +15,7 @@ pub(crate) use assignment_targets::{
     DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
 };
 mod calls;
+mod dynamic_calls;
 mod prefix;
 pub(crate) use prefix::REFERENCE_LITERAL_VALUE_STEM;
 mod prefix_complex;

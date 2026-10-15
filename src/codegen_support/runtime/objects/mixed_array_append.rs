@@ -12,7 +12,9 @@
 //! - A PHP `ArrayAccess` object receives `offsetSet(null, $value)`; another non-SPL object
 //!   throws PHP's `Cannot use object of type X as array`.
 //! - Tag 8 and legacy tag-4/tag-5 null-container payloads autovivify through
-//!   `__rt_mixed_cell_autovivify_array` before the append.
+//!   `__rt_mixed_cell_autovivify_array` before the append, and so does `false` (PHP also prints a
+//!   deprecation there). A string throws `[] operator not supported for strings`; an int, a float
+//!   or `true` throws `Cannot use a scalar value as an array`, as PHP does.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -59,7 +61,34 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_append_autovivify");             // PHP `$x[]` autovivifies null to an indexed array
     emitter.instruction("cmp x9, #6");                                          // is the receiver an object?
     emitter.instruction("b.eq __rt_mixed_array_append_object");                 // a PHP ArrayAccess receives offsetSet(null, $value)
-    emitter.instruction("b __rt_mixed_array_append_drop");                      // incompatible scalar receivers drop this write
+    emitter.instruction("cmp x9, #1");                                          // is the receiver a string?
+    emitter.instruction("b.eq __rt_mixed_array_append_string");                 // PHP refuses `[]` on strings
+    emitter.instruction("cmp x9, #3");                                          // is the receiver a bool?
+    emitter.instruction("b.eq __rt_mixed_array_append_bool");                   // false autovivifies, true is a scalar
+    emitter.instruction("cmp x9, #0");                                          // is the receiver an int?
+    emitter.instruction("b.eq __rt_mixed_array_append_scalar");                 // PHP refuses `[]` on a scalar
+    emitter.instruction("cmp x9, #2");                                          // is the receiver a float?
+    emitter.instruction("b.eq __rt_mixed_array_append_scalar");                 // PHP refuses `[]` on a scalar
+    emitter.instruction("b __rt_mixed_array_append_drop");                      // any other receiver shape drops this write
+
+    // PHP autovivifies `false` (with a deprecation) and refuses `true` like any scalar.
+    emitter.label("__rt_mixed_array_append_bool");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the bool payload
+    emitter.instruction("cbz x10, __rt_mixed_array_append_autovivify");         // false becomes a fresh array
+
+    emitter.label("__rt_mixed_array_append_scalar");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed value
+    emitter.instruction("bl __rt_decref_mixed");                                // release it before leaving through the Error
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame before the tail-call
+    emitter.instruction("b __rt_throw_scalar_as_array");                        // never returns
+
+    emitter.label("__rt_mixed_array_append_string");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed value
+    emitter.instruction("bl __rt_decref_mixed");                                // release it before leaving through the Error
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame before the tail-call
+    emitter.instruction("b __rt_throw_string_append");                          // never returns
 
     // `$mixed[] = $v` on a PHP `ArrayAccess` object is `$mixed->offsetSet(null, $v)`, resolved
     // through the same dense method table `__rt_mixed_array_set` uses for keyed writes. The
@@ -179,7 +208,34 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_append_autovivify");               // PHP `$x[]` autovivifies null to an indexed array
     emitter.instruction("cmp r10, 6");                                          // is the receiver an object?
     emitter.instruction("je __rt_mixed_array_append_object");                   // a PHP ArrayAccess receives offsetSet(null, $value)
-    emitter.instruction("jmp __rt_mixed_array_append_drop");                    // incompatible scalar receivers drop this write
+    emitter.instruction("cmp r10, 1");                                          // is the receiver a string?
+    emitter.instruction("je __rt_mixed_array_append_string");                   // PHP refuses `[]` on strings
+    emitter.instruction("cmp r10, 3");                                          // is the receiver a bool?
+    emitter.instruction("je __rt_mixed_array_append_bool");                     // false autovivifies, true is a scalar
+    emitter.instruction("cmp r10, 0");                                          // is the receiver an int?
+    emitter.instruction("je __rt_mixed_array_append_scalar");                   // PHP refuses `[]` on a scalar
+    emitter.instruction("cmp r10, 2");                                          // is the receiver a float?
+    emitter.instruction("je __rt_mixed_array_append_scalar");                   // PHP refuses `[]` on a scalar
+    emitter.instruction("jmp __rt_mixed_array_append_drop");                    // any other receiver shape drops this write
+
+    // PHP autovivifies `false` (with a deprecation) and refuses `true` like any scalar.
+    emitter.label("__rt_mixed_array_append_bool");
+    emitter.instruction("cmp QWORD PTR [rdi + 8], 0");                          // is the bool payload false?
+    emitter.instruction("je __rt_mixed_array_append_autovivify");               // false becomes a fresh array
+
+    emitter.label("__rt_mixed_array_append_scalar");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed value
+    emitter.instruction("call __rt_decref_mixed");                              // release it before leaving through the Error
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
+    emitter.instruction("jmp __rt_throw_scalar_as_array");                      // never returns
+
+    emitter.label("__rt_mixed_array_append_string");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed value
+    emitter.instruction("call __rt_decref_mixed");                              // release it before leaving through the Error
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
+    emitter.instruction("jmp __rt_throw_string_append");                        // never returns
 
     // See the ARM64 path: a PHP ArrayAccess object gets offsetSet(null, $value).
     emitter.label("__rt_mixed_array_append_object");
