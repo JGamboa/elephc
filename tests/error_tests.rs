@@ -78,6 +78,8 @@ fn check_source_with_defines_and_options(
         .map_err(|e| e.message.clone())?;
     let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)
         .map_err(|e| e.message.clone())?;
+    let ast = elephc::return_coerce_prelude::inject(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
@@ -107,6 +109,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)?;
+    let ast = elephc::return_coerce_prelude::inject(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {

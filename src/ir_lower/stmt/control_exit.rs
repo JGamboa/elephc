@@ -107,7 +107,7 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     } else {
         emit_null_value(ctx, Some(span))
     };
-    let mut value = coerce_to_return_type(ctx, value, Some(span));
+    let mut value = coerce_to_return_type(ctx, value, value_expr, Some(span));
     if let (Some(declared), Some((return_type, return_php_type))) = (boxed_contract, saved_return) {
         // `int` and `bool` share one storage word, so the coercion above keeps a `bool` value's
         // PHP type; relabel it, or the box would tag `true` instead of `1`.

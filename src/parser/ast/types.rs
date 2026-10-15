@@ -149,6 +149,9 @@ pub enum TypeExpr {
     Bool,
     /// PHP's literal `false` type, kept distinct from `bool` for flow narrowing.
     False,
+    /// PHP's literal `true` type. Its storage and checker type are `bool`; it is kept distinct
+    /// only so a declared `: true` return verifies the VALUE (`return 0;` throws `TypeError`).
+    True,
     Str,
     Void,
     Never,
@@ -265,6 +268,7 @@ impl TypeExpr {
             | TypeExpr::Float
             | TypeExpr::Bool
             | TypeExpr::False
+            | TypeExpr::True
             | TypeExpr::Str
             | TypeExpr::Void
             | TypeExpr::Never

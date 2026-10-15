@@ -169,6 +169,10 @@ fn try_lower_source_at_for_target(
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
+    // Mirrors `pipeline::compile`: a `return` that cannot prove its declared scalar type is
+    // lowered to a call of the return-coercion helper, so the helper must be declared.
+    let ast = crate::return_coerce_prelude::inject(ast, &mut prelude_inventory)
+        .expect("return-coercion prelude injection failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver rather than by the checker, so a plain

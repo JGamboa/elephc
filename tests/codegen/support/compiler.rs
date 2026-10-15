@@ -352,6 +352,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .expect("stdlib prelude injection failed");
     let resolved = elephc::natives_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("natives prelude injection failed");
+    // Mirrors `pipeline::compile`: the declared-return coercion helper `ir_lower` calls.
+    let resolved = elephc::return_coerce_prelude::inject(resolved, &mut prelude_inventory)
+        .expect("return-coercion prelude injection failed");
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.

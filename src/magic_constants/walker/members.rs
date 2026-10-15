@@ -85,7 +85,7 @@ pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
     // functions; it could not show here until a method could carry type parameters.
     let type_params = super::stmts::walk_type_params(method.type_params, pass, span);
     let variadic_type = method.variadic_type.map(|ty| pass.transform_type(ty, span));
-    let return_type = method.return_type.map(|ty| pass.transform_type(ty, span));
+    let return_type = method.return_type.map(|ty| pass.transform_return_type(ty, span));
     pass.leave_method();
     ClassMethod {
         type_params,

@@ -17,6 +17,52 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
 
+/// Resolves `self::class` (and, when the parent is known, `parent::class`) inside a parameter
+/// default to the declaring class name.
+///
+/// Omitted arguments are materialized at the CALL site, which lowers the default expression in
+/// the caller's scope: there `self` names the caller's class, or nothing at all, and the
+/// default came back as the literal string `"self"`. php-src evaluates the default in the
+/// declaring class, so the name is fixed here, where the declaring class is known. Array
+/// defaults (`[self::class]`) are resolved element by element.
+fn resolve_self_class_default(
+    default: Expr,
+    declaring_type: &str,
+    parent_type: Option<&str>,
+) -> Expr {
+    use crate::parser::ast::{ExprKind, StaticReceiver};
+    let span = default.span;
+    let kind = match default.kind {
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Self_,
+        } => ExprKind::StringLiteral(declaring_type.trim_start_matches('\\').to_string()),
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Parent,
+        } if parent_type.is_some() => ExprKind::StringLiteral(
+            parent_type.unwrap_or_default().trim_start_matches('\\').to_string(),
+        ),
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .into_iter()
+                .map(|item| resolve_self_class_default(item, declaring_type, parent_type))
+                .collect(),
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        resolve_self_class_default(key, declaring_type, parent_type),
+                        resolve_self_class_default(value, declaring_type, parent_type),
+                    )
+                })
+                .collect(),
+        ),
+        other => other,
+    };
+    Expr { kind, span }
+}
+
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
 /// annotations through the checker. Untyped by-reference parameters use canonical `Mixed`
 /// storage; other parameters without hints use a declared default's syntactic type when present,
@@ -27,6 +73,17 @@ pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
     declaring_type: &str,
+) -> Result<FunctionSig, CompileError> {
+    build_method_sig_in_class(checker, method, declaring_type, None)
+}
+
+/// [`build_method_sig`] for a method of a class whose parent is known, so a `parent::class`
+/// parameter default resolves to it.
+pub(crate) fn build_method_sig_in_class(
+    checker: &Checker,
+    method: &ClassMethod,
+    declaring_type: &str,
+    parent_type: Option<&str>,
 ) -> Result<FunctionSig, CompileError> {
     let method_key = php_symbol_key(&method.name);
     let params: Vec<(String, PhpType)> = method
@@ -55,7 +112,14 @@ pub(crate) fn build_method_sig(
             Ok((n.clone(), ty))
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
-    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
+    let defaults: Vec<Option<Expr>> = method
+        .params
+        .iter()
+        .map(|(_, _, d, _)| {
+            d.clone()
+                .map(|default| resolve_self_class_default(default, declaring_type, parent_type))
+        })
+        .collect();
     let mut ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
     for ((param_name, type_ann, default, _), (_, resolved_ty)) in
         method.params.iter().zip(params.iter())
@@ -625,11 +689,23 @@ pub(crate) fn validate_signature_compatibility_with_defaults(
         .zip(&child.defaults)
         .position(|pair| matches!(pair, (Some(parent_default), Some(child_default)) if !inherited_default_unchanged(parent_default, child_default, same_relative_default)))
     {
+        // `self::class` is resolved to the declaring class (see `resolve_self_class_default`),
+        // so the same spelling on both sides is two different values; say so.
+        let both_class_names = matches!(
+            &child.defaults[index],
+            Some(Expr { kind: crate::parser::ast::ExprKind::StringLiteral(name), .. })
+                if name.eq_ignore_ascii_case(owner_name.trim_start_matches('\\'))
+        );
+        let note = if both_class_names {
+            " A `self::class` default names a different class in each declaration."
+        } else {
+            ""
+        };
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change the default value of parameter ${} when {} {}: {}::{} (not yet supported until P10: calls through the parent's type would pass the parent's default)",
-                child.param_names[index], context, kind, owner_name, method_name
+                "Cannot change the default value of parameter ${} when {} {}: {}::{} (not yet supported until P10: calls through the parent's type would pass the parent's default).{}",
+                child.param_names[index], context, kind, owner_name, method_name, note
             ),
         ));
     }
@@ -750,7 +826,8 @@ pub(crate) fn validate_override_signature(
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let class_name = class.name.as_str();
-    let child_sig = build_method_sig(checker, method, class_name)?;
+    let child_sig =
+        build_method_sig_in_class(checker, method, class_name, class.extends.as_deref())?;
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
     }

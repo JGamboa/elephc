@@ -336,6 +336,9 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         .expect("stdlib prelude injection failed");
     let resolved = elephc::natives_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("natives prelude injection failed");
+    // Mirrors `pipeline::compile`: the declared-return coercion helper `ir_lower` calls.
+    let resolved = elephc::return_coerce_prelude::inject(resolved, &mut prelude_inventory)
+        .expect("return-coercion prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
@@ -517,6 +520,9 @@ fn compile_and_run_files_with_defines_per_argv(
         .expect("stdlib prelude injection failed");
     let resolved = elephc::natives_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("natives prelude injection failed");
+    // Mirrors `pipeline::compile`: the declared-return coercion helper `ir_lower` calls.
+    let resolved = elephc::return_coerce_prelude::inject(resolved, &mut prelude_inventory)
+        .expect("return-coercion prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");

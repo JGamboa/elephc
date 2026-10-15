@@ -644,7 +644,14 @@ impl Scanner<'_> {
             if let Some(default) = default { self.scan_expr(default); }
         }
         if let Some(ty) = variadic { self.scan_type(ty); }
-        if let Some(ty) = ret { self.scan_type(ty); }
+        if let Some(ty) = ret {
+            self.scan_type(ty);
+            // `ir_lower` lowers a `return` that cannot prove a declared scalar contract to a call
+            // of the return-coercion helper; no call syntax names it, so record it here.
+            if crate::return_coerce_prelude::annotation_may_need_coercion(ty) {
+                self.record_callable(crate::return_coerce_prelude::HELPER);
+            }
+        }
     }
 
     /// Scans class property types, defaults, and attributes.
@@ -727,7 +734,7 @@ impl Scanner<'_> {
             TypeExpr::Union(types) | TypeExpr::Intersection(types) => {
                 for ty in types { self.scan_type(ty); }
             }
-            TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::False | TypeExpr::Str
+            TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::False | TypeExpr::True | TypeExpr::Str
             | TypeExpr::Void | TypeExpr::Never | TypeExpr::Iterable | TypeExpr::Ptr(None) => {}
         }
     }
@@ -744,6 +751,7 @@ fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never

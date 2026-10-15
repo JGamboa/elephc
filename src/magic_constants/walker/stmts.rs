@@ -373,7 +373,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             // handed them to the pass with the ENCLOSING scope active — the one type position
             // in a function that is not covered by its own declaration.
             let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
-            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_return_type(ty, span));
             pass.leave_function();
             StmtKind::FunctionDecl {
                 by_ref_return,

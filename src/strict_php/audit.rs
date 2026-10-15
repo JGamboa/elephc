@@ -912,6 +912,7 @@ fn audit_type(type_expr: &TypeExpr, span: Span, errors: &mut Vec<CompileError>) 
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
