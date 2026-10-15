@@ -165,22 +165,23 @@ fn test_error_include_expression_dynamic_path_is_rejected() {
     }
 }
 
-/// Verifies an include that would have to run after an effectful operand of the same statement
-/// is a compile error rather than a reordering (hoisting it in front would run the file first).
+/// Verifies a variable or property passed to a call before an include of the same call is a
+/// compile error (review round 1): PHP binds it before the file runs, so a file that writes it
+/// must not change it, but the parameter may be by reference, so it cannot be copied either.
 #[test]
-fn test_error_include_after_effectful_operand_is_rejected() {
-    let err = resolve_files_error(
-        &[
-            ("main.php", "<?php function f() { echo 'f'; return 1; } $x = f() + require 'a.php';"),
-            ("a.php", "<?php return 2;"),
-        ],
-        "main.php",
-    );
-    assert!(
-        err.message.contains("would change PHP's evaluation order"),
-        "unexpected error message: {}",
-        err.message
-    );
+fn test_error_place_argument_before_include_is_rejected() {
+    for src in [
+        "<?php function f($a, $b) { echo $a, $b; } $x = 1; f($x, require 'a.php');",
+        "<?php class K { public static $p = 1; } function f($a, $b) {} f(K::$p, require 'a.php');",
+        "<?php function f($a, $b) {} $x = 1; $c = true; f($x, $c ? require 'a.php' : 0);",
+    ] {
+        let err = resolve_files_error(&[("main.php", src), ("a.php", "<?php $x = 2; return 10;")], "main.php");
+        assert!(
+            err.message.contains("may be by reference"),
+            "{src}: unexpected error message: {}",
+            err.message
+        );
+    }
 }
 
 /// Verifies includes in positions whose statements cannot be expanded (a loop condition, an

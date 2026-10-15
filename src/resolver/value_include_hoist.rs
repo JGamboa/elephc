@@ -10,12 +10,18 @@
 //!
 //! Key details:
 //! - The included file runs in the CALLER's scope, so it is expanded as statements, not as an
-//!   expression. Hoisting it in front of the statement is only correct when nothing the
-//!   statement evaluates before the include has an observable effect. The walk visits the
-//!   statement's own expressions in PHP evaluation order and refuses an include that follows a
-//!   call, an assignment or any other effectful operand: that is a compile error, never a
-//!   reordering. Variable reads are not effects here: php-src fetches a CV operand when the
-//!   operator runs, after the include, which is also what the hoisted form does.
+//!   expression, in front of the statement. To keep PHP's evaluation order, every operand PHP
+//!   has finished evaluating when the include runs is materialized into a temporary in front of
+//!   it, in order: `f(g(), $o->m(), require F)` is `$a = g(); $b = $o->m(); $c = include F;
+//!   f($a, $b, $c)`. That covers values PHP copies before the file runs (an array element, a
+//!   static property, a dimension, a method receiver, a dynamic callee), so a file that writes
+//!   them cannot change what the statement uses. A variable operand of a binary operator is NOT
+//!   snapshotted: php-src fetches that CV when the operator runs, after the include. Two passes
+//!   over the same walk decide this: a dry run finds the operands that precede the last
+//!   include, the real run snapshots exactly those.
+//! - A variable or property passed as a call argument before an include of the same call is a
+//!   compile error: the parameter may be by reference, which a copy would break, and the
+//!   resolver does not know the callee.
 //! - An include in a conditionally evaluated operand (a ternary branch, the right side of `??`,
 //!   `?:`, `&&`, `||`, so also `$x ??= require F`) hoists the whole conditional into an `if`
 //!   that runs the include only when PHP would, with the operator left in place over one
@@ -32,7 +38,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{ArrayEntry, BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::contains::expr_has_includes;
@@ -60,46 +66,30 @@ pub(super) fn hoist_value_includes(
     if !stmt_head_has_includes(stmt) {
         return Ok(None);
     }
-    let mut rewritten = stmt.clone();
-    let mut hoister = Hoister::default();
-    match &mut rewritten.kind {
-        StmtKind::ExprStmt(value)
-        | StmtKind::Echo(value)
-        | StmtKind::Throw(value)
-        | StmtKind::Return(Some(value))
-        | StmtKind::ListUnpack { value, .. } => hoister.visit(value)?,
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ArrayPush { value, .. }
-        | StmtKind::StaticPropertyAssign { value, .. }
-        | StmtKind::StaticPropertyArrayPush { value, .. } => hoister.visit_assigned(value)?,
-        StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
-            hoister.visit(index)?;
-            hoister.visit_assigned(value)?;
-        }
-        StmtKind::NestedArrayAssign { target, value } => {
-            hoister.visit(target)?;
-            hoister.visit_assigned(value)?;
-        }
-        StmtKind::PropertyAssign { object, value, .. }
-        | StmtKind::PropertyArrayPush { object, value, .. } => {
-            hoister.visit(object)?;
-            hoister.visit_assigned(value)?;
-        }
-        StmtKind::PropertyArrayAssign { object, index, value, .. } => {
-            hoister.visit(object)?;
-            hoister.visit(index)?;
-            hoister.visit_assigned(value)?;
-        }
-        // Only the expression evaluated once, before any body, can be hoisted. An `elseif`
-        // condition, a `case` value or a loop condition runs conditionally or repeatedly and is
-        // left to the safety net.
-        StmtKind::If { condition, .. } => hoister.visit(condition)?,
-        StmtKind::Switch { subject, .. } => hoister.visit(subject)?,
-        StmtKind::Foreach { array, .. } => hoister.visit(array)?,
-        _ => return Ok(None),
+    // Two passes over the same deterministic walk. The dry run on a copy finds, in evaluation
+    // order, which operand reads come before the last hoisted include; the real run snapshots
+    // exactly those into temporaries in front of it (see `Hoister::read_event`).
+    let mut dry_run = stmt.clone();
+    let mut dry = Hoister {
+        dry: true,
+        ..Hoister::default()
+    };
+    if !dry.walk_stmt(&mut dry_run.kind, stmt.span)? {
+        return Ok(None);
     }
+    let last_include = dry.include_events.last().copied().unwrap_or(0);
+    let snapshot = dry
+        .read_events
+        .iter()
+        .copied()
+        .filter(|&read| read < last_include)
+        .collect();
+    let mut rewritten = stmt.clone();
+    let mut hoister = Hoister {
+        snapshot,
+        ..Hoister::default()
+    };
+    hoister.walk_stmt(&mut rewritten.kind, stmt.span)?;
     if hoister.hoisted.is_empty() {
         return Ok(None);
     }
@@ -163,29 +153,118 @@ fn stmt_head_has_includes(stmt: &Stmt) -> bool {
 struct Hoister {
     /// Statements to run before the rewritten statement, in order.
     hoisted: Vec<Stmt>,
-    /// Whether an operand with an observable effect has been evaluated (and left in place)
-    /// before the current point. An include after it cannot be hoisted without reordering.
-    effect_seen: bool,
     /// Whether a conditional (`?:`, `??`, `&&`...) was hoisted into an `if`.
     hoisted_conditional: bool,
+    /// The dry run only records events; it rewrites a throwaway copy.
+    dry: bool,
+    /// Evaluation-order counter shared by operand reads and includes.
+    events: usize,
+    /// Dry run: the event index of every operand read that may need a snapshot.
+    read_events: Vec<usize>,
+    /// Dry run: the event index of every hoisted include (or conditional holding one).
+    include_events: Vec<usize>,
+    /// Real run: the operand reads to snapshot, because an include is hoisted after them.
+    snapshot: HashSet<usize>,
+}
+
+/// How the operand being visited is read by the operation that consumes it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ctx {
+    /// Copied when evaluated: an array element, a method receiver, a dynamic callee, a
+    /// condition. A variable here is captured at its place in evaluation order.
+    Eager,
+    /// A variable operand the consuming opcode fetches only when it runs (php-src reads a CV
+    /// operand of `ADD`, `CONCAT`, `FETCH_DIM_R`, `ASSIGN_DIM`... at execution), which is after
+    /// anything hoisted, as in PHP.
+    Lazy,
+    /// A call argument, which may be passed by reference: it cannot be copied.
+    Arg,
 }
 
 impl Hoister {
+    /// Walks the statement's own expressions in evaluation order. Returns `false` for a
+    /// statement kind this module does not lower.
+    fn walk_stmt(&mut self, kind: &mut StmtKind, span: Span) -> Result<bool, CompileError> {
+        match kind {
+            StmtKind::ExprStmt(value)
+            | StmtKind::Echo(value)
+            | StmtKind::Throw(value)
+            | StmtKind::Return(Some(value))
+            | StmtKind::ListUnpack { value, .. } => self.visit(value)?,
+            StmtKind::Assign { value, .. }
+            | StmtKind::TypedAssign { value, .. }
+            | StmtKind::ArrayPush { value, .. }
+            | StmtKind::StaticPropertyAssign { value, .. }
+            | StmtKind::StaticPropertyArrayPush { value, .. } => self.visit_assigned(value, span)?,
+            // `ASSIGN_DIM`/`ASSIGN_OBJ` fetch a variable container and a variable dimension when
+            // they run, after the value; a computed dimension is evaluated first.
+            StmtKind::ArrayAssign { index, value, .. }
+            | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+                self.visit_in(index, Ctx::Lazy)?;
+                self.visit_assigned(value, span)?;
+            }
+            StmtKind::NestedArrayAssign { target, value } => {
+                self.visit_target(target)?;
+                self.visit_assigned(value, span)?;
+            }
+            StmtKind::PropertyAssign { object, value, .. }
+            | StmtKind::PropertyArrayPush { object, value, .. } => {
+                self.visit_target(object)?;
+                self.visit_assigned(value, span)?;
+            }
+            StmtKind::PropertyArrayAssign { object, index, value, .. } => {
+                self.visit_target(object)?;
+                self.visit_in(index, Ctx::Lazy)?;
+                self.visit_assigned(value, span)?;
+            }
+            // Only the expression evaluated once, before any body, can be hoisted. An `elseif`
+            // condition, a `case` value or a loop condition runs conditionally or repeatedly and
+            // is left to the safety net.
+            StmtKind::If { condition, .. } => self.visit(condition)?,
+            StmtKind::Switch { subject, .. } => self.visit(subject)?,
+            StmtKind::Foreach { array, .. } => self.visit(array)?,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Visits an assignment target (`$a[$i][f()]`, `$o->p`): it is written, not read, so only
+    /// the dimensions it computes are walked; php-src delays the container fetches until after
+    /// the value (`zend_delayed_compile_dim`).
+    fn visit_target(&mut self, target: &mut Expr) -> Result<(), CompileError> {
+        match &mut target.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                self.visit_target(array)?;
+                self.visit_in(index, Ctx::Lazy)
+            }
+            ExprKind::PropertyAccess { object, .. } => self.visit_target(object),
+            ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => Ok(()),
+            _ => self.visit_in(target, Ctx::Lazy),
+        }
+    }
+
+    /// Returns the next evaluation-order event index.
+    fn next_event(&mut self) -> usize {
+        self.events += 1;
+        self.events
+    }
+
     /// Visits the value of an assignment statement.
     ///
-    /// A compound assignment (`K::$a[0] .= require F`) arrives as `<target> <op> <rhs>`, with the
-    /// target read on the left. php-src's `ASSIGN_*_OP` evaluates the right operand BEFORE it
-    /// reads the target, so that read is not an effect in front of the include: only the right
-    /// operand is walked. The read is recognised by shape (a variable, property or static
-    /// property, or a dimension of one with an inert index), which an explicit
-    /// `$a[0] = $a[0] . require F` shares; there the read happens first in PHP, and only a file
-    /// that writes `$a[0]` itself could tell the difference.
-    fn visit_assigned(&mut self, value: &mut Expr) -> Result<(), CompileError> {
+    /// A compound assignment (`K::$a[0] .= require F`) arrives as `<target> <op> <rhs>`, with a
+    /// copy of the target read on the left. php-src's `ASSIGN_*_OP` evaluates the right operand
+    /// BEFORE it reads the target, so only the right operand is walked. The parser gives that
+    /// synthesized operator the STATEMENT's span (`assign::compound::assignment_value`), while a
+    /// written operator's span starts at its operator token, after the `=`; so an explicit
+    /// `$a[0] = $a[0] + require F`, whose left operand comes after the `=`, is an ordinary
+    /// binary operator, and its `$a[0]` is read (and snapshotted) before the include, as in PHP.
+    fn visit_assigned(&mut self, value: &mut Expr, stmt_span: Span) -> Result<(), CompileError> {
+        let starts_with_stmt =
+            value.span.line == stmt_span.line && value.span.col == stmt_span.col;
         if let ExprKind::BinaryOp { left, op, right } = &mut value.kind {
-            if !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce) && is_place_read(left) {
-                self.visit(right)?;
-                self.effect_seen = true;
-                return Ok(());
+            let is_compound_copy = starts_with_stmt && is_place_read(left);
+            if !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce) && is_compound_copy {
+                return self.visit_in(right, Ctx::Lazy);
             }
         }
         self.visit(value)
@@ -194,11 +273,75 @@ impl Hoister {
     /// Visits `expr` in PHP evaluation order, replacing each hoistable include (or conditional
     /// holding one) by a hidden temporary.
     fn visit(&mut self, expr: &mut Expr) -> Result<(), CompileError> {
+        self.visit_in(expr, Ctx::Eager)
+    }
+
+    /// [`Hoister::visit`] for an operand consumed as `ctx` says.
+    ///
+    /// Every operand that PHP has finished evaluating when a later include of the statement runs
+    /// is materialized into a temporary in front of that include (see `completed`), so the
+    /// hoisted form keeps PHP's evaluation order exactly: `f(g(), require F, h())` becomes
+    /// `$a = g(); $b = include F; f($a, $b, h())`. A node without an include is one such unit;
+    /// a node holding one is walked, then is itself a unit once its operands are done.
+    fn visit_in(&mut self, expr: &mut Expr, ctx: Ctx) -> Result<(), CompileError> {
+        if is_inert_leaf(expr) || (ctx == Ctx::Lazy && matches!(expr.kind, ExprKind::Variable(_))) {
+            return Ok(());
+        }
+        // A named argument is a label on its value, not an operand of its own.
+        if let ExprKind::NamedArg { value, .. } = &mut expr.kind {
+            return self.visit_in(value, ctx);
+        }
+        if !expr_has_includes(expr) {
+            return self.completed(expr, ctx);
+        }
+        self.descend(expr)?;
+        if matches!(expr.kind, ExprKind::Variable(_)) {
+            // An include (or hoisted conditional) replaced by its temporary.
+            return Ok(());
+        }
+        self.completed(expr, ctx)
+    }
+
+    /// Records that `expr` has been fully evaluated at this point of the evaluation order and,
+    /// when an include is hoisted after it, snapshots its value into a temporary in front of
+    /// that include, which is where PHP evaluates it.
+    ///
+    /// A variable or property passed as a call argument cannot be snapshotted: the parameter
+    /// may be by reference (the resolver does not know the callee), so `f($x, require F)` is a
+    /// compile error rather than a copy. A spread argument cannot be snapshotted either.
+    fn completed(&mut self, expr: &mut Expr, ctx: Ctx) -> Result<(), CompileError> {
+        let event = self.next_event();
+        if self.dry {
+            self.read_events.push(event);
+            return Ok(());
+        }
+        if !self.snapshot.contains(&event) {
+            return Ok(());
+        }
+        let span = expr.span;
+        if (ctx == Ctx::Arg && is_place_read(expr)) || matches!(expr.kind, ExprKind::Spread(_)) {
+            return Err(CompileError::new(
+                span,
+                "a variable, property or spread passed to a call before an include/require of \
+                 the same call is not supported yet: the include could change it and the \
+                 argument may be by reference; assign the include to a local variable first",
+            ));
+        }
+        let temp = fresh_temp();
+        let value = std::mem::replace(expr, Expr::new(ExprKind::Variable(temp.clone()), span));
+        self.hoisted.push(assign(&temp, value, span));
+        Ok(())
+    }
+
+    /// Walks the operands of a node that holds an include, in PHP evaluation order, each with
+    /// the context its consumer reads it in.
+    fn descend(&mut self, expr: &mut Expr) -> Result<(), CompileError> {
         let span = expr.span;
         match &mut expr.kind {
             ExprKind::IncludeValue { .. } => {
-                if self.effect_seen {
-                    return Err(after_effect_error(span));
+                let event = self.next_event();
+                if self.dry {
+                    self.include_events.push(event);
                 }
                 let temp = fresh_temp();
                 let include =
@@ -207,24 +350,7 @@ impl Hoister {
                 Ok(())
             }
 
-            // Leaves that read without an effect of their own.
-            ExprKind::StringLiteral(_)
-            | ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::Null
-            | ExprKind::Variable(_)
-            | ExprKind::ConstRef(_)
-            | ExprKind::MagicConstant(_)
-            | ExprKind::This
-            | ExprKind::ClassConstant { .. }
-            | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::StaticPropertyAccess { .. } => Ok(()),
-            // Creating a closure runs none of its body; an include inside it is deferred and
-            // is resolved with the closure body.
-            ExprKind::Closure { .. } => Ok(()),
-
-            // Containers: their elements are evaluated in order and building them has no effect.
+            // Containers: elements are added as they are evaluated.
             ExprKind::ArrayLiteral(items) => {
                 for item in items {
                     self.visit(item)?;
@@ -240,28 +366,19 @@ impl Hoister {
             }
             ExprKind::ArrayLiteralMixed(entries) => {
                 for entry in entries {
-                    if matches!(entry, ArrayEntry::Spread(_)) {
-                        // Spreading a Traversable runs its iterator.
-                        for value in entry.exprs_mut() {
-                            self.visit(value)?;
-                        }
-                        self.effect_seen = true;
-                    } else {
-                        for value in entry.exprs_mut() {
-                            self.visit(value)?;
-                        }
+                    for value in entry.exprs_mut() {
+                        self.visit(value)?;
                     }
                 }
                 Ok(())
             }
-            ExprKind::NamedArg { value, .. } => self.visit(value),
             // `@include F`: the include is hoisted out of the `@`, as the statement form
             // `@include F;` already drops the operator.
             ExprKind::ErrorSuppress(inner) => self.visit(inner),
 
-            // Conditionally evaluated operands. An include in the lazy operand moves into an
-            // `if` with the rest of the conditional (see `hoist_conditional`); otherwise the
-            // node is an ordinary effectful operation.
+            // Conditionally evaluated operands: an include in the lazy operand moves into an
+            // `if` with the rest of the conditional (see `hoist_conditional`). The first operand
+            // is read right away (`JMPZ`, `COALESCE`, `JMP_SET` on a CV).
             ExprKind::BinaryOp {
                 left,
                 op: BinOp::And | BinOp::Or,
@@ -270,9 +387,7 @@ impl Hoister {
                 if expr_has_includes(right) {
                     return self.hoist_conditional(expr);
                 }
-                self.visit(left)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit(left)
             }
             ExprKind::Ternary {
                 condition,
@@ -282,18 +397,14 @@ impl Hoister {
                 if expr_has_includes(then_expr) || expr_has_includes(else_expr) {
                     return self.hoist_conditional(expr);
                 }
-                self.visit(condition)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit(condition)
             }
             ExprKind::NullCoalesce { value, default }
             | ExprKind::ShortTernary { value, default } => {
                 if expr_has_includes(default) {
                     return self.hoist_conditional(expr);
                 }
-                self.visit(value)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit(value)
             }
             ExprKind::Match { subject, arms, default } => {
                 let arms_have_include = arms.iter().any(|(patterns, value)| {
@@ -306,18 +417,13 @@ impl Hoister {
                          use an `if` and assign it to a local variable first",
                     ));
                 }
-                self.visit(subject)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit(subject)
             }
 
-            // Operators and accesses: operands first, then the operation itself, which can
-            // warn, throw or run user code (`__get`, `__toString`, `offsetGet`).
+            // Operators and accesses fetch a variable operand when they run.
             ExprKind::BinaryOp { left, right, .. } => {
-                self.visit(left)?;
-                self.visit(right)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit_in(left, Ctx::Lazy)?;
+                self.visit_in(right, Ctx::Lazy)
             }
             ExprKind::Negate(inner)
             | ExprKind::Not(inner)
@@ -328,76 +434,60 @@ impl Hoister {
             | ExprKind::Cast { expr: inner, .. }
             | ExprKind::InstanceOf { value: inner, .. }
             | ExprKind::PropertyAccess { object: inner, .. }
-            | ExprKind::ObjectClassName { object: inner } => {
-                self.visit(inner)?;
-                self.effect_seen = true;
-                Ok(())
-            }
+            | ExprKind::ObjectClassName { object: inner } => self.visit_in(inner, Ctx::Lazy),
             ExprKind::ArrayAccess { array, index } => {
-                self.visit(array)?;
-                self.visit(index)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit_in(array, Ctx::Lazy)?;
+                self.visit_in(index, Ctx::Lazy)
             }
             ExprKind::Pipe { value, callable } => {
                 self.visit(value)?;
-                self.visit(callable)?;
-                self.effect_seen = true;
-                Ok(())
+                self.visit(callable)
             }
 
-            // Calls and constructions: the callee or receiver, then the arguments, then the call.
+            // Calls: the receiver or callee is read first (`INIT_METHOD_CALL`,
+            // `INIT_DYNAMIC_CALL`), then the arguments.
             ExprKind::FunctionCall { args, .. }
-            | ExprKind::ClosureCall { args, .. }
             | ExprKind::StaticMethodCall { args, .. }
             | ExprKind::NewObject { args, .. }
             | ExprKind::NewGeneric { args, .. }
-            | ExprKind::NewScopedObject { args, .. } => {
-                for arg in args {
-                    self.visit(arg)?;
-                }
-                self.effect_seen = true;
-                Ok(())
-            }
+            | ExprKind::NewScopedObject { args, .. } => self.visit_args(args),
             ExprKind::MethodCall { object, args, .. } => {
                 self.visit(object)?;
-                for arg in args {
-                    self.visit(arg)?;
-                }
-                self.effect_seen = true;
-                Ok(())
+                self.visit_args(args)
             }
             ExprKind::ExprCall { callee, args } => {
                 self.visit(callee)?;
-                for arg in args {
-                    self.visit(arg)?;
-                }
-                self.effect_seen = true;
-                Ok(())
+                self.visit_args(args)
             }
             ExprKind::NewDynamic { name_expr, args } => {
                 self.visit(name_expr)?;
-                for arg in args {
-                    self.visit(arg)?;
+                self.visit_args(args)
+            }
+            ExprKind::ClosureCall { var, args } => {
+                let mut callee = Expr::new(ExprKind::Variable(var.clone()), span);
+                self.completed(&mut callee, Ctx::Eager)?;
+                if let ExprKind::Variable(name) = callee.kind {
+                    *var = name;
                 }
-                self.effect_seen = true;
-                Ok(())
+                self.visit_args(args)
             }
 
-            // Everything else (assignment expressions with their preludes, nullsafe chains whose
-            // arguments run conditionally, `yield`, increments, FFI nodes...) is not modelled.
-            _ => {
-                if expr_has_includes(expr) {
-                    return Err(CompileError::new(
-                        span,
-                        "include/require is not supported inside this expression yet; \
-                         assign it to a local variable first",
-                    ));
-                }
-                self.effect_seen = true;
-                Ok(())
-            }
+            // Assignment expressions with their preludes, nullsafe chains whose arguments run
+            // conditionally, `yield`, FFI nodes... are not modelled.
+            _ => Err(CompileError::new(
+                span,
+                "include/require is not supported inside this expression yet; \
+                 assign it to a local variable first",
+            )),
         }
+    }
+
+    /// Visits call arguments in order.
+    fn visit_args(&mut self, args: &mut [Expr]) -> Result<(), CompileError> {
+        for arg in args {
+            self.visit_in(arg, Ctx::Arg)?;
+        }
+        Ok(())
     }
 
     /// Hoists a conditional whose lazily evaluated operand holds an include into an `if` that
@@ -414,13 +504,14 @@ impl Hoister {
     /// Every operand gets its OWN temporary and the operator stays: elephc types a local from
     /// its assignments, so one temporary shared by operands of different types would not
     /// type-check, while the operator unifies them as the original did. The first operand is
-    /// evaluated once, and the whole conditional is hoisted, so nothing effectful may precede it.
+    /// evaluated once; operands before the conditional are materialized like before any include.
     fn hoist_conditional(&mut self, expr: &mut Expr) -> Result<(), CompileError> {
         let span = expr.span;
-        if self.effect_seen {
-            return Err(after_effect_error(span));
-        }
         self.hoisted_conditional = true;
+        let event = self.next_event();
+        if self.dry {
+            self.include_events.push(event);
+        }
         let placeholder = Expr::new(ExprKind::Null, span);
         let original = std::mem::replace(expr, placeholder).kind;
         let null = || Expr::new(ExprKind::Null, span);
@@ -437,8 +528,6 @@ impl Hoister {
                 let (then_body, then_expr) = operand_into_temp(*then_expr, span);
                 let (else_body, else_expr) = operand_into_temp(*else_expr, span);
                 self.push_if(variable(&cond_temp, span), then_body, else_body, span);
-                // A branch left inline still runs at the ternary's place.
-                self.effect_seen = !is_inert(&then_expr) || !is_inert(&else_expr);
                 *expr = Expr::new(
                     ExprKind::Ternary {
                         condition: Box::new(variable(&cond_temp, span)),
@@ -460,7 +549,6 @@ impl Hoister {
                 };
                 let (body, default) = operand_into_temp(*default, span);
                 self.push_if(Expr::new(is_null, span), body, Vec::new(), span);
-                self.effect_seen = false;
                 *expr = Expr::new(
                     ExprKind::NullCoalesce {
                         value: Box::new(variable(&value_temp, span)),
@@ -476,7 +564,6 @@ impl Hoister {
                 let falsy = ExprKind::Not(Box::new(variable(&value_temp, span)));
                 let (body, default) = operand_into_temp(*default, span);
                 self.push_if(Expr::new(falsy, span), body, Vec::new(), span);
-                self.effect_seen = false;
                 *expr = Expr::new(
                     ExprKind::ShortTernary {
                         value: Box::new(variable(&value_temp, span)),
@@ -496,7 +583,6 @@ impl Hoister {
                 };
                 let (body, right) = operand_into_temp(*right, span);
                 self.push_if(runs_right, body, Vec::new(), span);
-                self.effect_seen = false;
                 *expr = Expr::new(
                     ExprKind::BinaryOp {
                         left: Box::new(variable(&left_temp, span)),
@@ -562,6 +648,25 @@ fn is_place_read(expr: &Expr) -> bool {
     }
 }
 
+/// Whether `expr` is a value no include can change: a literal, a constant, `$this`, or a
+/// closure (whose creation runs none of its body).
+fn is_inert_leaf(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::ConstRef(_)
+            | ExprKind::MagicConstant(_)
+            | ExprKind::This
+            | ExprKind::ClassConstant { .. }
+            | ExprKind::ScopedConstantAccess { .. }
+            | ExprKind::Closure { .. }
+    )
+}
+
 /// `$name`
 fn variable(name: &str, span: Span) -> Expr {
     Expr::new(ExprKind::Variable(name.to_string()), span)
@@ -586,12 +691,3 @@ fn assign(temp: &str, value: Expr, span: Span) -> Stmt {
     )
 }
 
-/// The diagnostic for an include that follows an effectful operand of the same statement.
-fn after_effect_error(span: Span) -> CompileError {
-    CompileError::new(
-        span,
-        "include/require after a call, assignment or other effectful operand of the same \
-         statement is not supported yet: hoisting it would change PHP's evaluation order; \
-         assign it to a local variable first",
-    )
-}

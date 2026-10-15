@@ -171,3 +171,58 @@ echo K::$s, '|', K::$a[0];",
     );
     assert_eq!(out, "xS|SS");
 }
+
+/// Review round 1: operands PHP has already evaluated when an include of the same statement
+/// runs keep the value they had then, even when the included file writes them: an array
+/// element (`INIT_ARRAY`), a static property (`FETCH_STATIC_PROP_R`), a dimension read, a
+/// method receiver and a dynamic callee are snapshotted in front of the include, while a
+/// variable operand of a binary operator is read when the operator runs, after it.
+#[test]
+fn test_include_keeps_operands_evaluated_before_it() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php class K { public static int $p = 1; }
+class O { function __construct(public string $n) {} function m($v) { return $this->n . \"->m($v)\"; } }
+$x = 1; $arr = [$x, require 'setx.php']; echo implode(',', $arr), '|';
+$x = 1; echo $x + require 'setx.php', '|';
+echo K::$p + require 'setk.php', '|';
+$a = [1]; $a[0] = $a[0] + require 'seta.php'; echo $a[0], '|';
+$a = [1]; $a[0] += require 'seta.php'; echo $a[0], '|';
+$o = new O('first'); $fn = function ($v) { return \"fn1($v)\"; };
+echo $o->m(require 'seto.php'), '|';
+$o = new O('first'); $fn = function ($v) { return \"fn1($v)\"; };
+echo $fn(require 'seto.php');",
+            ),
+            ("setx.php", "<?php $x = 2; return 10;"),
+            ("setk.php", "<?php K::$p = 100; return 10;"),
+            ("seta.php", "<?php $a[0] = 100; return 10;"),
+            (
+                "seto.php",
+                "<?php $o = new O('second'); $fn = function ($v) { return \"fn2($v)\"; }; return 5;",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1,10|12|11|11|110|first->m(5)|fn1(5)");
+}
+
+/// Review round 1: an effectful operand before an include is materialized in order instead of
+/// being refused: `f(g(), require F, h())` runs `g`, the file, then `h`.
+#[test]
+fn test_include_after_effectful_operand_keeps_order() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function g() { echo 'g '; return 1; } function h() { echo 'h '; return 3; }
+function f($a, $b, $c) { echo \"f $a $b $c\"; }
+f(g(), require 'ret5.php', h());",
+            ),
+            ("ret5.php", "<?php echo '[ret5] '; return 5;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "g [ret5] h f 1 5 3");
+}
