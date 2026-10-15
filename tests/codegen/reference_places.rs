@@ -462,3 +462,25 @@ $r = f(); $r[0] = 9; var_dump($r);
     );
     assert_eq!(out, "array(2) {\n  [0]=>\n  &int(9)\n  [1]=>\n  &int(9)\n}\n");
 }
+
+/// A literal with by-reference elements and string or computed keys evaluated in a loop frees
+/// every key it creates (review round 2, probes `ln1`/`ln2`): the keys are written directly or
+/// through a hidden key local that is never re-typed, and a place binding releases its key.
+#[test]
+fn test_reference_literal_string_keys_do_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 10; $i++) {
+    $y = 5;
+    $l = ["w" => &$y];
+    $m = ["w" => 1, "v" => &$y];
+    $n = [&$y, "x" . $i => 3, "w" => &$y, "w" => 4];
+    $t = []; $k = "w"; $t[$k] = &$y; $k = null;
+}
+echo count($l) + count($m) + count($n) + count($t), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

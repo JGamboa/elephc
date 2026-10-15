@@ -143,6 +143,12 @@ fn lower_bind_element(
         Some(span),
     );
     release_transient_ref_receiver_aliases(ctx, &receiver_aliases, span);
+    // The bind BORROWS its key. A computed key is an owned temporary, and a key read from a
+    // local whose frame storage widens to `Mixed` (a hidden key local later unset, or any
+    // local re-typed afterwards) is materialized by codegen as an owned detached string, so
+    // the key is released here; ownership finalization prunes the release when the read
+    // stays a borrow. Without it the string leaked once per execution.
+    crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
     // A property read that is not addressable storage arrives as an owning temporary, exactly
     // as in `lower_ref_assign_array_elem`; the bind retains the cell, not the container.
     if matches!(

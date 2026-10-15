@@ -787,6 +787,8 @@ enum LiteralEntry {
     Positional(LiteralValue),
     /// `K => V` or `K => &S`.
     Keyed(Expr, LiteralValue),
+    /// `&S` without a key, filed under its exact automatic key.
+    PositionalReference(i64, Expr),
     /// `...$s`.
     Spread(Expr),
 }
@@ -814,8 +816,7 @@ fn push_positional_entry(
                 return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
             };
             *has_reference = true;
-            let key = Expr::new(ExprKind::IntLiteral(key), source.span);
-            entries.push(LiteralEntry::Keyed(key, LiteralValue::Reference(source)));
+            entries.push(LiteralEntry::PositionalReference(key, source));
         }
         None => entries.push(LiteralEntry::Positional(LiteralValue::Value(value.clone()))),
     }
@@ -880,7 +881,8 @@ fn take_reference_array_element(
 /// The literal therefore becomes, in a hidden table local:
 ///
 /// - `$t[] = V` for a key-less value;
-/// - `$k = K; $v = V; <break>; $t[$k] = $v` for a keyed value, where `<break>` rebinds the
+/// - `<break>; $t[K] = V` for a keyed value (a computed `K` is first settled into a hidden
+///   local at its own position), where `<break>` rebinds the
 ///   entry to a fresh cell first (`$t[$k] = &$fresh; unset($fresh)`) whenever an earlier element
 ///   was a reference whose key it may repeat, so the write replaces the reference instead of
 ///   writing through it;
@@ -915,6 +917,7 @@ fn build_reference_literal(entries: Vec<LiteralEntry>, span: Span) -> Result<Exp
     // Literal keys bound to a reference so far (normalized), and whether a computed key was.
     let mut reference_keys: Vec<String> = Vec::new();
     let mut computed_reference_key = false;
+    let key_temp = |index: usize| crate::names::generated_local_name(&format!("{stem}_k{index}"));
     for (index, entry) in entries.into_iter().enumerate() {
         let temp = |kind: &str, temps: &mut Vec<String>| {
             let name = crate::names::generated_local_name(&format!("{stem}_{kind}{index}"));
@@ -930,32 +933,33 @@ fn build_reference_literal(entries: Vec<LiteralEntry>, span: Span) -> Result<Exp
             }
             LiteralEntry::Keyed(key, LiteralValue::Value(value)) => {
                 let normalized = literal_key_identity(&key);
-                let key_temp = temp("k", &mut temps);
-                let value_temp = temp("v", &mut temps);
-                let (key_span, value_span) = (key.span, value.span);
-                prelude.push(Stmt::new(StmtKind::Assign { name: key_temp.clone(), value: key }, key_span));
-                prelude.push(Stmt::new(StmtKind::Assign { name: value_temp.clone(), value }, value_span));
+                let key_span = key.span;
                 let may_repeat_reference = match &normalized {
                     Some(identity) => computed_reference_key || reference_keys.contains(identity),
                     None => computed_reference_key || !reference_keys.is_empty(),
+                };
+                // Without a break the write evaluates its own key, then its value, in php's
+                // order; with one the key is needed twice, so it is settled first.
+                let key = if may_repeat_reference {
+                    settle_literal_key(key, key_temp(index), &mut prelude)
+                } else {
+                    key
                 };
                 if may_repeat_reference {
                     let fresh = temp("f", &mut temps);
                     // Each synthetic statement that binds or unsets a hidden local sits at its own
                     // source position: local binding decisions are keyed by position.
                     prelude.push(crate::parser::stmt::lower_place_ref_assign(
-                        element(var(&key_temp, key_span), key_span),
+                        element(key.clone(), key_span),
                         var(&fresh, key_span),
                         key_span,
                     )?);
-                    prelude.push(unset_stmt(vec![var(&fresh, value_span)], value_span));
+                    prelude.push(unset_stmt(vec![var(&fresh, value.span)], value.span));
                 }
+                // The value is evaluated by the write itself, after its (settled) key; the
+                // break above touches only the hidden table, which nothing else can observe.
                 prelude.push(Stmt::new(
-                    StmtKind::ArrayAssign {
-                        array: table.clone(),
-                        index: var(&key_temp, span),
-                        value: var(&value_temp, span),
-                    },
+                    StmtKind::ArrayAssign { array: table.clone(), index: key, value },
                     span,
                 ));
             }
@@ -965,16 +969,18 @@ fn build_reference_literal(entries: Vec<LiteralEntry>, span: Span) -> Result<Exp
                     None => computed_reference_key = true,
                 }
                 let at = source.span;
-                let key_temp = temp("k", &mut temps);
-                let key_span = key.span;
-                prelude.push(Stmt::new(StmtKind::Assign { name: key_temp.clone(), value: key }, key_span));
+                let key = settle_literal_key(key, key_temp(index), &mut prelude);
                 // The source is bound here, at its own position: a non-variable source goes
                 // through a hidden cell local inside `lower_place_ref_assign`.
-                prelude.push(crate::parser::stmt::lower_place_ref_assign(
-                    element(var(&key_temp, at), at),
-                    source,
-                    at,
-                )?);
+                prelude.push(crate::parser::stmt::lower_place_ref_assign(element(key, at), source, at)?);
+            }
+            LiteralEntry::PositionalReference(key, source) => {
+                computed_reference_key = true;
+                let at = source.span;
+                // The automatic key is exact; it is settled into an integer hidden local, which
+                // keeps a list-shaped table a list.
+                let key = settle_literal_key(Expr::new(ExprKind::IntLiteral(key), at), key_temp(index), &mut prelude);
+                prelude.push(crate::parser::stmt::lower_place_ref_assign(element(key, at), source, at)?);
             }
             LiteralEntry::Positional(LiteralValue::Reference(source)) => {
                 // `push_positional_entry` files every key-less reference under its key.
@@ -1000,6 +1006,32 @@ fn build_reference_literal(entries: Vec<LiteralEntry>, span: Span) -> Result<Exp
 /// Name stem of the result marker of a by-reference array literal; lowering moves the hidden
 /// table into the expression's value when it sees it.
 pub(crate) const REFERENCE_LITERAL_VALUE_STEM: &str = "__elephc_ref_literal_value_";
+
+/// Returns the key expression a literal element's writes use. A constant key is used as is (it
+/// can be evaluated again for free). Any other key is evaluated once, at its own position, into
+/// a hidden local the caller unsets afterwards.
+///
+/// The hidden key local is deliberately NOT unset afterwards: it only ever holds an int or a
+/// string (no destructor, no reference), it is released by its next assignment, and unsetting
+/// it would re-type its frame slot to `mixed`, which turns every read of it into an owned
+/// detached copy that the writes consuming it do not release.
+fn settle_literal_key(
+    key: Expr,
+    name: String,
+    prelude: &mut Vec<crate::parser::ast::Stmt>,
+) -> Expr {
+    // Only a string literal is used as is: an integer key written straight into a still-empty
+    // table decides its storage as a hash, which a list-shaped literal must not become.
+    if matches!(key.kind, ExprKind::StringLiteral(_)) && explicit_integer_array_key(&key).is_none() {
+        return key;
+    }
+    let key_span = key.span;
+    prelude.push(crate::parser::ast::Stmt::new(
+        crate::parser::ast::StmtKind::Assign { name: name.clone(), value: key },
+        key_span,
+    ));
+    Expr::new(ExprKind::Variable(name), key_span)
+}
 
 /// `unset(...)` as a statement.
 fn unset_stmt(args: Vec<Expr>, span: Span) -> crate::parser::ast::Stmt {
