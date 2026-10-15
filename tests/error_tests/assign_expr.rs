@@ -84,12 +84,6 @@ fn test_error_null_coalesce_assign_call_dimension() {
     );
 }
 
-/// Verifies capturing a possibly undefined local by value in `use()` is refused explicitly
-/// rather than copying whatever its slot holds.
-#[test]
-fn test_error_use_capture_of_possibly_undefined_local() {
-    expect_error(
-        "<?php function f($v) { return $v; } function t($a) { if ($a && ($r = f(5))) { } $g = function () use ($r) { return $r; }; return $g(); } t(true);",
-        "Capturing a possibly undefined variable in use() is not supported",
-    );
-}
+// Capturing a possibly undefined local (`use ($r)`, `use (&$r)`, an arrow function) compiles
+// with PHP's semantics now (review P2c r3, R3-1/R3-2): see
+// `codegen::assign_expr::test_maybe_undefined_closure_captures`.

@@ -442,3 +442,97 @@ fn test_condition_edge_local_can_be_retyped_in_the_region() {
     );
     assert_eq!(out, "5x\ns\n5x\n5x\ns\nno\n6x\n");
 }
+
+/// Verifies closures capture a possibly undefined local with PHP's semantics (review P2c r3,
+/// R3-1/R3-2): `use (&$r)` creates it as null, `use ($r)` captures null (after a warning), and an
+/// arrow function keeps it undefined in its body, defined-flag included.
+#[test]
+fn test_maybe_undefined_closure_captures() {
+    let out = compile_and_run(
+        r#"<?php
+        // Closures capture a possibly undefined local with PHP's semantics (review P2c r3).
+        function h04($a) { if ($a) { $r = 5; } $c = function () use (&$r) { $r = 6; }; $c(); echo $r, "\n"; }
+        h04(true); h04(false);
+        function nw($a) { if ($a) { $r = 5; } $c = function () use (&$r) { }; $c(); var_dump($r, isset($r)); }
+        nw(true); nw(false);
+        function rd($a) { if ($a) { $r = "s"; } $c = function () use (&$r) { return $r ?? "u"; }; echo $c(), "\n"; var_dump($r); }
+        rd(true); rd(false);
+        function bv($a) { if ($a) { $r = "x"; } $g = @function () use ($r) { return [isset($r), $r ?? "u"]; }; var_dump($g()); }
+        bv(true); bv(false);
+        function h05($a) { if ($a) { $r = 5; } $c = fn() => $r ?? "u"; echo $c(), "\n"; }
+        h05(true); h05(false);
+        function ar($a) { if ($a) { $r = "s"; } $c = fn() => isset($r) ? "Y" : "N"; echo $c(), "\n"; }
+        ar(true); ar(false);
+        function nest($a) { if ($a) { $r = 7; } $c = fn() => fn() => $r ?? "nu"; echo ($c())(), "\n"; }
+        nest(true); nest(false);
+        "#,
+    );
+    assert_eq!(
+        out,
+        "6\n6\nint(5)\nbool(true)\nNULL\nbool(false)\ns\nstring(1) \"s\"\nu\nNULL\narray(2) {\n  [0]=>\n  bool(true)\n  [1]=>\n  string(1) \"x\"\n}\narray(2) {\n  [0]=>\n  bool(false)\n  [1]=>\n  string(1) \"u\"\n}\n5\nu\nY\nN\n7\nnu\n"
+    );
+}
+
+/// Verifies the defined-flag follows `unset` in loops, `try`/`catch`/`finally`, `switch`
+/// fallthrough and `match` arms (review P2c r3, R3-3).
+#[test]
+fn test_maybe_undefined_locals_across_unset_try_switch_match() {
+    let out = compile_and_run(
+        r#"<?php
+        // The defined-flag follows unset in loops, try/catch/finally, switch and match (review P2c r3).
+        function v2() { foreach ([1, 2, 3] as $x) { if ($x == 2) { unset($z); } echo $z ?? "u", " "; $z = $x; } echo "\n"; }
+        v2();
+        function v3() { foreach ([1, 2, 3] as $x) { echo isset($z) ? "Y" : "N"; $z = "s$x"; if ($x == 1) { unset($z); } } echo "\n"; }
+        v3();
+        function v4() { $z = 1; while (true) { if ($z == 1) { unset($z); break; } } echo $z ?? "u", "\n"; }
+        v4();
+        function v5() { $z = "a"; for ($i = 0; $i < 3; $i++) { echo $z ?? "u", " "; unset($z); } echo "\n"; }
+        v5();
+        function t($a) { try { if ($a) throw new Exception("x"); $t = "tried"; } catch (Exception $e) { } echo $t ?? "u", "\n"; }
+        t(true); t(false);
+        function c($a) { try { if ($a) throw new Exception("x"); } catch (Exception $e) { } echo isset($e) ? "Y" : "N", "\n"; }
+        c(true); c(false);
+        function f($a) { try { if ($a) throw new Exception("x"); $t = 1; } catch (Exception $e) { $c = 2; } finally { $fin = 3; } echo $t ?? "u", $c ?? "u", $fin ?? "u", "\n"; }
+        f(true); f(false);
+        function g($a) { try { $t = "pre"; if ($a) throw new Exception("x"); $t2 = "post"; } catch (Exception $e) { echo $t ?? "u", $t2 ?? "u", "|"; } echo $t2 ?? "u", "\n"; }
+        g(true); g(false);
+        function r($a) { try { if ($a) { return "ret\n"; } $q = 1; } finally { echo $q ?? "u", "|"; } return "end\n"; }
+        echo r(true); echo r(false);
+        function sw($a) { switch ($a) { case 1: $s = "one"; break; default: break; } echo $s ?? "u", "\n"; }
+        sw(1); sw(2);
+        function ft($a) { switch ($a) { case 1: $s = "one"; case 2: $s2 = "two"; break; default: $d = "d"; } echo $s ?? "u", $s2 ?? "u", $d ?? "u", "\n"; }
+        ft(1); ft(2); ft(3);
+        function m($a) { $m = match ($a) { 1 => ($z = "one"), default => "d" }; echo $m, $z ?? "u", "\n"; }
+        m(1); m(2);
+        "#,
+    );
+    assert_eq!(
+        out,
+        "u u 2 \nNNY\nu\na u u \nu\ntried\nY\nN\nu23\n1u3\npreu|u\npost\nu|ret\n1|end\none\nu\nonetwou\nutwou\nuud\noneone\ndu\n"
+    );
+}
+
+/// Verifies `empty()`/`isset()` on a possibly undefined `ArrayAccess` local keep the
+/// `offsetExists`-first route (the flagged read is boxed `mixed`) and answer like an undefined
+/// container when the local was never assigned (review P2c r3, R3-3 follow-up).
+#[test]
+fn test_maybe_undefined_array_access_receiver_probes() {
+    let out = compile_and_run(
+        r#"<?php
+        class Box implements ArrayAccess {
+            public function offsetExists(mixed $offset): bool { echo "E"; return $offset === "p"; }
+            public function offsetGet(mixed $offset): mixed { echo "G"; return 0; }
+            public function offsetSet(mixed $offset, mixed $value): void {}
+            public function offsetUnset(mixed $offset): void {}
+        }
+        function t($a) {
+            if ($a) { $b = new Box(); }
+            echo empty($b["q"]) ? "|empty\n" : "|set\n";
+            echo empty($b["p"]) ? "|empty\n" : "|set\n";
+            echo isset($b["p"]) ? "|set\n" : "|unset\n";
+        }
+        t(true); t(false);
+        "#,
+    );
+    assert_eq!(out, "E|empty\nEG|empty\nE|set\n|empty\n|empty\n|unset\n");
+}

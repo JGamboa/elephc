@@ -36,6 +36,11 @@ pub(super) fn lower_flagged_read(
     // Defined: the slot holds the value the last store left, in the representation the flow
     // types name here.
     ctx.builder.position_at_end(defined_block);
+    // A loop body may read, before its own store, what an earlier iteration stored: the slot
+    // is declared here as boxed storage, which the later stores widen to.
+    if !ctx.local_slots.contains_key(name) && !ctx.loop_stack.is_empty() {
+        ctx.declare_local(name, PhpType::Mixed);
+    }
     ctx.mark_local_initialized(name);
     let value = if ctx.local_slots.contains_key(name) {
         let loaded = ctx.load_local(name, Some(expr.span));
@@ -82,4 +87,41 @@ fn null_mixed(ctx: &mut LoweringContext<'_, '_>, span: Span) -> LoweredValue {
     let null = ctx.builder.emit_const_null();
     let null = LoweredValue { value: null, ir_type: crate::ir::IrType::I64 };
     ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span))
+}
+
+/// Gives a maybe-undefined local boxed `mixed` storage and stores PHP null into it when its
+/// defined-flag is clear: what `use (&$x)` does to an undefined `$x` (review P2c r3, R3-1).
+/// The local is defined afterwards (the store sets the flag).
+pub(super) fn define_null_if_undefined(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
+    let Some(flag) = ctx.maybe_undefined_flags.get(name).cloned() else {
+        return;
+    };
+    if ctx.is_ref_bound_local(name) {
+        return;
+    }
+    // Frame layout applies the final slot representation to every earlier store.
+    let slot = ctx.declare_local(name, PhpType::Mixed);
+    ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
+    ctx.set_local_type(name, PhpType::Mixed);
+    let flag_value = ctx.load_local(&flag, Some(span));
+    let undefined_block = ctx.builder.create_named_block("maybe_undef.define_null", Vec::new());
+    let merge = ctx.builder.create_named_block("maybe_undef.defined_merge", Vec::new());
+    let split_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: flag_value.value,
+        then_target: merge,
+        then_args: Vec::new(),
+        else_target: undefined_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(undefined_block);
+    let mut undefined_initialized = split_initialized.clone();
+    undefined_initialized.remove(&slot);
+    ctx.restore_initialized_slots(undefined_initialized);
+    let null = null_mixed(ctx, span);
+    ctx.store_local(name, null, PhpType::Mixed, Some(span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(split_initialized);
+    ctx.mark_local_initialized(name);
 }

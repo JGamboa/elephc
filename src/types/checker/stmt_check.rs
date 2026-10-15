@@ -44,12 +44,12 @@ impl Checker {
         // maybe-undefined locals here (see `condition_edges`); `if` joins its arms itself.
         let optional_region = match &stmt.kind {
             StmtKind::While { .. } | StmtKind::For { .. } | StmtKind::Foreach { .. } => Some(true),
-            StmtKind::DoWhile { .. }
-            | StmtKind::Switch { .. }
-            | StmtKind::Try { .. }
-            | StmtKind::IncludeOnceGuard { .. } => Some(false),
+            StmtKind::DoWhile { .. } | StmtKind::IncludeOnceGuard { .. } => Some(false),
+            // `switch` and `try` join their own exits (`control_flow`).
             _ => None,
         };
+        let unset_region = optional_region.is_some()
+            || matches!(&stmt.kind, StmtKind::Switch { .. } | StmtKind::Try { .. });
         let region_before = optional_region.map(|_| {
             (
                 self.maybe_undefined_locals.clone(),
@@ -80,6 +80,14 @@ impl Checker {
                 mark_new,
                 env,
             );
+        }
+        // A `break` or `continue` can leave right after an `unset` the joins above never saw.
+        if unset_region {
+            for name in super::condition_edges::unset_locals_in(std::slice::from_ref(stmt)) {
+                if env.contains_key(&name) {
+                    self.mark_maybe_undefined(&name);
+                }
+            }
         }
         self.strict_types = outer_strict_types;
         result

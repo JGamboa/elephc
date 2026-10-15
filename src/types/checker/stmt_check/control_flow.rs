@@ -24,6 +24,7 @@ use crate::parser::ast::{
 };
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::condition_edges::{SwitchMaybeUndefined, TryMaybeUndefined};
 use super::super::{Checker, SavedNarrowingOrigin};
 
 const FS_CURRENT_AS_SELF: i64 = 16;
@@ -38,6 +39,25 @@ const FS_SKIP_DOTS: i64 = 4096;
 /// header/body read is checked. EIR lowering later consumes the recorded contract for the same
 /// loop span rather than repeating expression inference.
 fn stabilize_loop_storage(
+    checker: &mut Checker,
+    loop_span: crate::span::Span,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    condition: Option<&Expr>,
+    env: &mut TypeEnv,
+    packed_counter: Option<&str>,
+) {
+    stabilize_loop_storage_contracts(checker, loop_span, body, update, condition, env, packed_counter);
+    // A local the body unsets may be undefined when an iteration starts (review P2c r3, R3-3),
+    // whether or not the walk has bound it yet (a later iteration reads what an earlier one
+    // stored).
+    for name in crate::types::checker::condition_edges::unset_locals_in(body) {
+        checker.mark_maybe_undefined(&name);
+    }
+}
+
+/// Records the loop's fixed-point storage contracts (see [`stabilize_loop_storage`]).
+fn stabilize_loop_storage_contracts(
     checker: &mut Checker,
     loop_span: crate::span::Span,
     body: &[Stmt],
@@ -549,6 +569,11 @@ impl Checker {
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
                 stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
+                // Every iteration binds both loop variables before the body runs.
+                if let Some(key_var) = key_var {
+                    self.maybe_undefined_locals.remove(key_var);
+                }
+                self.maybe_undefined_locals.remove(value_var);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -572,6 +597,7 @@ impl Checker {
                     }
                 }
                 self.break_continue_depth += 1;
+                let mut maybe_undefined = SwitchMaybeUndefined::enter(self, env);
                 for (_, body) in cases {
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
@@ -583,7 +609,9 @@ impl Checker {
                         .filter(|name| !invalidated.contains(*name))
                         .cloned()
                         .collect();
+                    maybe_undefined.start_body(self, env);
                     errors.extend(self.check_body(body, env));
+                    maybe_undefined.end_body(self, body, env);
                 }
                 if let Some(body) = default {
                     let invalidated = self
@@ -595,8 +623,11 @@ impl Checker {
                         .into_iter()
                         .filter(|name| !invalidated.contains(name))
                         .collect();
+                    maybe_undefined.start_body(self, env);
                     errors.extend(self.check_body(body, env));
+                    maybe_undefined.end_body(self, body, env);
                 }
+                maybe_undefined.finish(self, default.is_some(), env);
                 self.break_continue_depth -= 1;
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -1013,13 +1044,16 @@ impl Checker {
             } => {
                 let mut errors = Vec::new();
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                let mut maybe_undefined = TryMaybeUndefined::enter(self, env);
                 for s in try_body {
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
+                maybe_undefined.end_try(self, try_body, env);
                 for catch_clause in catches {
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
+                    maybe_undefined.start_catch(self, env);
                     // The handler binds its variable (see `condition_edges`).
                     if let Some(variable) = &catch_clause.variable {
                         self.maybe_undefined_locals.remove(variable);
@@ -1058,7 +1092,9 @@ impl Checker {
                             errors.extend(error.flatten());
                         }
                     }
+                    maybe_undefined.end_catch(self, &catch_clause.body, env);
                 }
+                maybe_undefined.join(self, env);
                 if let Some(body) = finally_body {
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
@@ -1071,7 +1107,9 @@ impl Checker {
                         .collect();
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);
+                    let finally_entry = maybe_undefined.start_finally(self);
                     errors.extend(self.check_body(body, env));
+                    maybe_undefined.end_finally(self, finally_entry);
                     self.finally_break_continue_bases.pop();
                 }
                 self.callable_array_targets.clear();

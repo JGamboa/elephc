@@ -47,6 +47,15 @@ pub(crate) fn init_frame_flags(ctx: &mut LoweringContext<'_, '_>) {
     names.sort();
     for name in names {
         let flag = crate::names::generated_local_name(&format!("__elephc_defined_{}", name));
+        // An arrow function receives the flag of a possibly undefined capture with it.
+        if ctx
+            .local_slots
+            .get(&flag)
+            .is_some_and(|slot| ctx.slot_is_initialized(*slot))
+        {
+            ctx.maybe_undefined_flags.insert(name, flag);
+            continue;
+        }
         ctx.declare_local(&flag, PhpType::Bool);
         // A local already bound on entry (a parameter, a capture) is defined.
         let defined = ctx

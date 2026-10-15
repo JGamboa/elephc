@@ -265,22 +265,42 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
+                // Only the selected arm runs (review P2c r3, R3-3): each arm starts from the
+                // entry marks, and a local only some arms introduce may be undefined after it.
+                let marks_entry = self.maybe_undefined_locals.clone();
+                let mut marks_joined = marks_entry.clone();
+                let mut arm_envs = Vec::new();
                 for (conditions, result) in arms {
+                    self.maybe_undefined_locals = marks_entry.clone();
                     let mut arm_env = env.clone();
                     for condition in conditions {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
                     self.infer_type_with_assignment_effects(result, &mut arm_env)?;
                     merge_array_storage_effects(env, &arm_env);
+                    marks_joined.extend(self.maybe_undefined_locals.iter().cloned());
+                    arm_envs.push(arm_env);
                 }
                 if let Some(default) = default {
+                    self.maybe_undefined_locals = marks_entry.clone();
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
                     merge_array_storage_effects(env, &default_env);
+                    marks_joined.extend(self.maybe_undefined_locals.iter().cloned());
+                    arm_envs.push(default_env);
+                }
+                self.maybe_undefined_locals = marks_joined;
+                if !arm_envs.is_empty() {
+                    let arm_refs = arm_envs.iter().collect::<Vec<_>>();
+                    self.join_arm_only_locals(env, &arm_refs);
                 }
                 // Result type comes from the Mixed-aware match merge in `infer_type`
                 // (assignment effects must not reintroduce the Str-absorbing syntactic join).
-                self.infer_type(expr, env)
+                // Re-inferring the arms for the result type must not clear the join's marks.
+                let marks = self.maybe_undefined_locals.clone();
+                let ty = self.infer_type(expr, env);
+                self.maybe_undefined_locals = marks;
+                ty
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
@@ -511,6 +531,12 @@ impl Checker {
                                         .insert(var.clone());
                                 }
                             } else {
+                                // The binding survives the `unset` (a branch, a loop body), so
+                                // the name may be undefined from here (review P2c r3, R3-3):
+                                // its later reads answer from the defined-flag `unset` clears.
+                                if env.contains_key(var) {
+                                    self.mark_maybe_undefined(var);
+                                }
                                 // This visit RE-DECIDES the site. The checker walks a body more
                                 // than once (top level twice, method bodies to stability, a
                                 // function body once per call-site re-specialization), and only
