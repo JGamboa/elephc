@@ -39,6 +39,14 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     let lhs = &tokens[start..assign_pos];
+    if let Some(split) = find_mid_chain_append(lhs) {
+        if op != AssignmentOperator::Assign {
+            // `$a[][0] .= v` reads the new element PHP has no value for.
+            return Err(CompileError::new(span, "Cannot use [] for reading"));
+        }
+        return parse_mid_chain_append_assignment(tokens, pos, start, split, assign_pos, span)
+            .map(Some);
+    }
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
@@ -127,6 +135,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
                     span,
                 )
                 .map(Some);
+            }
+            // `$this[] = v;` on an ArrayAccess `$this` is `$this->offsetSet(null, v)`, which the
+            // local push lowering dispatches for an object receiver.
+            ExprKind::This => StmtKind::ArrayPush { array: "this".to_string(), value: rhs },
+            // `$this->{$property}[] = v;` (Mailable): pushes onto the slot the name selects.
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                dynamic_property_push_stmt(*object, *property, rhs, span)
             }
             // `call()[] = v;`: the expression form already appends to a call temporary.
             other => {
@@ -219,6 +234,14 @@ pub(crate) fn lower_nested_append_assignment(
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
     let target = lowerer.stabilize_array_target(target);
+    // PHP fetches a dynamic property for writing only after the right-hand side ran, so a
+    // right-hand side that appends to the same property must not be overwritten by a copy
+    // read before it.
+    let value = if dynamic_property_rooted(&target) && !can_replay_assignment_target(&value) {
+        lowerer.stabilize_unconditionally(value)
+    } else {
+        value
+    };
     let temp = lowerer.next_nested_append_temp_name();
     lowerer.stmts.push(Stmt::new(
         StmtKind::Assign {
@@ -239,10 +262,19 @@ pub(crate) fn lower_nested_append_assignment(
     Ok(lowerer.finish(write_back))
 }
 
+/// Returns whether an append target's base chain is rooted in `$obj->{$name}`.
+fn dynamic_property_rooted(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::DynamicPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => dynamic_property_rooted(array),
+        _ => false,
+    }
+}
+
 /// Builds the statement that writes `value` back into an already-stabilized
 /// assignment target. Supports the same local, property, static property, and
 /// array target families as postfix assignment lowering.
-fn assignment_target_store_stmt(
+pub(crate) fn assignment_target_store_stmt(
     target: Expr,
     value: Expr,
     span: Span,
@@ -261,6 +293,19 @@ fn assignment_target_store_stmt(
                 value,
             })
         }
+        ExprKind::DynamicPropertyAccess { object, property } => Ok(StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::DynamicPropertyAccess { object, property },
+                    target.span,
+                )),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        ))),
         ExprKind::ArrayAccess { array, index } => match array.kind {
             ExprKind::Variable(array) => Ok(StmtKind::ArrayAssign {
                 array,
@@ -399,6 +444,14 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     let lhs = &tokens[start..assign_pos];
+    if let Some(split) = find_mid_chain_append(lhs) {
+        if op != AssignmentOperator::Assign {
+            // `$a[][0] .= v` reads the new element PHP has no value for.
+            return Err(CompileError::new(span, "Cannot use [] for reading"));
+        }
+        return parse_mid_chain_append_assignment(tokens, pos, start, split, assign_pos, span)
+            .map(Some);
+    }
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
@@ -543,6 +596,212 @@ fn parse_statement_assignment_lhs(tokens: &[SpannedToken], pos: &mut usize) -> O
             | ExprKind::ExprCall { .. }
     )
     .then_some(expr)
+}
+
+/// One dimension written after a mid-chain `[]`.
+enum AppendedDimension {
+    /// `[]`: one more new element.
+    Append,
+    /// `[key]` of the new element.
+    Key(Expr),
+}
+
+/// Returns the offset in `lhs` of the first top-level `[]` that more dimensions follow
+/// (`$body['p'][]['to'] = v`), or `None` when `[]` is absent or only ends the target.
+fn find_mid_chain_append(lhs: &[SpannedToken]) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, (token, _)) in lhs.iter().enumerate() {
+        match token {
+            Token::LParen | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBrace => depth = depth.saturating_sub(1),
+            Token::LBracket => {
+                if depth == 0
+                    && index > 0
+                    && matches!(lhs.get(index + 1).map(|(token, _)| token), Some(Token::RBracket))
+                    && index + 2 < lhs.len()
+                {
+                    return Some(index);
+                }
+                depth += 1;
+            }
+            Token::RBracket => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Lowers `$place[]<dims> = v;` where only `[key]` / `[]` dimensions follow the first `[]`
+/// (SendGridHandler's `$body['personalizations'][]['to'][]['email'] = $r`, `$s[][] = v`).
+///
+/// Every `[]` creates a fresh element, so everything after the first one writes into a new
+/// value: the statement is `$place[] = <dims applied to null>`, and writing `[k]` / `[]` into
+/// null builds `[k => …]` / `[…]`. The nested literal evaluates the keys in source order and
+/// then the value, as PHP does.
+fn parse_mid_chain_append_assignment(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    start: usize,
+    split: usize,
+    assign_pos: usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let place_tokens = &tokens[start..start + split];
+    let mut place_pos = 0;
+    let Some(place) = parse_statement_assignment_lhs(place_tokens, &mut place_pos) else {
+        return Err(CompileError::new(span, "Cannot use [] for reading"));
+    };
+    // Parse the dimensions that follow the first `[]` against the full token stream.
+    let mut dims = Vec::new();
+    let mut cursor = start + split + 2;
+    while cursor < assign_pos {
+        if tokens[cursor].0 != Token::LBracket {
+            // `$a[]->p = v` / `$a[]::$x = v`: PHP has no element to fetch for reading.
+            return Err(CompileError::new(span, "Cannot use [] for reading"));
+        }
+        cursor += 1;
+        if matches!(tokens.get(cursor).map(|(token, _)| token), Some(Token::RBracket)) {
+            dims.push(AppendedDimension::Append);
+            cursor += 1;
+            continue;
+        }
+        let key = parse_expr(tokens, &mut cursor)?;
+        if !matches!(tokens.get(cursor).map(|(token, _)| token), Some(Token::RBracket)) {
+            return Err(CompileError::new(span, "Expected ']'"));
+        }
+        cursor += 1;
+        dims.push(AppendedDimension::Key(key));
+    }
+    if cursor != assign_pos {
+        return Err(CompileError::new(span, "Cannot use [] for reading"));
+    }
+    *pos = assign_pos + 1;
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    let element = dims.into_iter().rev().fold(rhs, |inner, dim| {
+        let inner_span = inner.span;
+        match dim {
+            AppendedDimension::Append => Expr::new(ExprKind::ArrayLiteral(vec![inner]), inner_span),
+            AppendedDimension::Key(key) => {
+                Expr::new(ExprKind::ArrayLiteralAssoc(vec![(key, inner)]), inner_span)
+            }
+        }
+    });
+    mid_chain_append_stmt(place, element, span)
+}
+
+/// `$place[]<dims> = v` as `$place[] = <literal>`, guarded against an object place.
+///
+/// On an ArrayAccess object PHP fetches the new element through `offsetGet(null)` and writes
+/// into what it returns (normally nothing, with an "Indirect modification" notice); appending
+/// the literal would call `offsetSet(null, …)` instead. The parser cannot see the place's type,
+/// so an object place throws an explicit `Error` at run time. The place's effectful parts are
+/// evaluated once, before the check.
+fn mid_chain_append_stmt(place: Expr, element: Expr, span: Span) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let place = match place.kind {
+        ExprKind::Variable(_) | ExprKind::This => place,
+        _ => lowerer.stabilize_array_base(place),
+    };
+    let call = |name: &str, args: Vec<Expr>| {
+        Expr::new(
+            ExprKind::FunctionCall { name: crate::names::Name::unqualified(name), args },
+            span,
+        )
+    };
+    let is_object_place = if matches!(place.kind, ExprKind::This) {
+        Expr::new(ExprKind::BoolLiteral(true), span)
+    } else {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(call("isset", vec![place.clone()])),
+                op: crate::parser::ast::BinOp::And,
+                right: Box::new(call("is_object", vec![place.clone()])),
+            },
+            span,
+        )
+    };
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(
+                ExprKind::StringLiteral(
+                    "elephc: a write through `[]` into an object (`$obj[][...] = v`) is not supported: PHP fetches the new element with offsetGet(); write the element explicitly"
+                        .to_string(),
+                ),
+                span,
+            )],
+        },
+        span,
+    );
+    let guard_name = crate::names::generated_local_name(&format!(
+        "__elephc_mid_append_guard_{}_{}",
+        span.line, span.col
+    ));
+    lowerer.stmts.push(Stmt::new(
+        StmtKind::Assign {
+            name: guard_name,
+            value: Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(is_object_place),
+                    then_expr: Box::new(Expr::new(ExprKind::Throw(Box::new(error)), span)),
+                    else_expr: Box::new(Expr::new(ExprKind::Null, span)),
+                },
+                span,
+            ),
+        },
+        span,
+    ));
+    let push = append_to_place_stmt(place, element, span)?;
+    lowerer.stmts.push(push);
+    Ok(Stmt::new(StmtKind::Synthetic(lowerer.stmts), span))
+}
+
+/// Builds the statement for `$place[] = value` from an already-parsed place.
+pub(crate) fn append_to_place_stmt(place: Expr, element: Expr, span: Span) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_nullsafe_write(&place, span)?;
+    if crate::parser::expr::is_dynamic_class_member_read(&place) {
+        return Err(CompileError::new(
+            span,
+            crate::parser::expr::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+        ));
+    }
+    let place_span = place.span;
+    let stmt = match place.kind {
+        ExprKind::Variable(array) => StmtKind::ArrayPush { array, value: element },
+        ExprKind::PropertyAccess { object, property } => {
+            StmtKind::PropertyArrayPush { object, property, value: element }
+        }
+        ExprKind::This => StmtKind::ArrayPush { array: "this".to_string(), value: element },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            dynamic_property_push_stmt(*object, *property, element, span)
+        }
+        kind @ ExprKind::ArrayAccess { .. } => {
+            return lower_nested_append_assignment(Expr::new(kind, place_span), element, span);
+        }
+        other => StmtKind::ExprStmt(crate::parser::expr::append_assignment_expr(
+            Expr::new(other, place_span),
+            element,
+            span,
+        )?),
+    };
+    Ok(Stmt::new(stmt, span))
+}
+
+/// `$obj->{$name}[] = v` as `__elephc_dynamic_property_push($obj, $name, v)`.
+///
+/// A read-append-write-back through the runtime name would store a boxed array into whatever
+/// slot the name selects, which a slot refined to a raw array cannot hold. The primitive instead
+/// dispatches on the name in `ir_lower` and pushes onto the selected slot with its own static
+/// type; the arguments keep PHP's order (object, name, value, then the fetch for writing).
+fn dynamic_property_push_stmt(object: Expr, property: Expr, value: Expr, span: Span) -> StmtKind {
+    StmtKind::ExprStmt(Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("__elephc_dynamic_property_push"),
+            args: vec![object, property, value],
+        },
+        span,
+    ))
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
@@ -1028,6 +1287,8 @@ impl EffectfulTargetLowerer {
                 },
                 span,
             ),
+            // `$this->{$name}[] = v`: the property itself is the appended array.
+            ExprKind::DynamicPropertyAccess { .. } => self.stabilize_array_base(expr),
             _ => self.stabilize(expr),
         }
     }
@@ -1049,6 +1310,13 @@ impl EffectfulTargetLowerer {
                 ExprKind::PropertyAccess {
                     object: Box::new(self.stabilize_array_base(*object)),
                     property,
+                },
+                span,
+            ),
+            ExprKind::DynamicPropertyAccess { object, property } => Expr::new(
+                ExprKind::DynamicPropertyAccess {
+                    object: Box::new(self.stabilize_array_base(*object)),
+                    property: Box::new(self.stabilize(*property)),
                 },
                 span,
             ),

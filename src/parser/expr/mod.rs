@@ -15,6 +15,7 @@ pub(crate) use assignment_targets::{
     DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
 };
 mod calls;
+mod dynamic_calls;
 mod prefix;
 mod prefix_complex;
 mod pratt;

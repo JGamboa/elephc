@@ -303,6 +303,11 @@ pub(super) fn parse_prefix(
         Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
             let this = Expr::new(ExprKind::This, span);
             *pos += 2;
+            if super::calls::parse_first_class_callable_parens(tokens, pos)? {
+                // `$this(...)`: the Closure of the invokable current object.
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                return Ok(expr_first_class_callable(this, span));
+            }
             let args = parse_args(tokens, pos, span)?;
             let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
             Ok(Expr::new(
@@ -549,13 +554,20 @@ fn parse_variable(
 /// The fully qualified name keeps namespace resolution from looking for a namespaced function
 /// of the same name.
 fn variable_first_class_callable(name: String, span: Span) -> Expr {
+    expr_first_class_callable(Expr::new(ExprKind::Variable(name), span), span)
+}
+
+/// Builds the internal Closure conversion behind `<expr>(...)` for any runtime callable value:
+/// `($this->callback)(...)`, `call()(...)`, `$this(...)`, `$obj->$method(...)` (as the array
+/// `[$obj, $method]`).
+pub(super) fn expr_first_class_callable(callable: Expr, span: Span) -> Expr {
     Expr::new(
         ExprKind::FunctionCall {
             name: Name::from_parts(
                 crate::names::NameKind::FullyQualified,
                 vec!["__elephc_closure_from_callable".to_string()],
             ),
-            args: vec![Expr::new(ExprKind::Variable(name), span)],
+            args: vec![callable],
         },
         span,
     )
@@ -594,6 +606,11 @@ fn parse_group_or_cast(
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         let call_span = tokens[*pos].1.span;
         *pos += 1;
+        if super::calls::parse_first_class_callable_parens(tokens, pos)? {
+            // `($this->callback)(...)`: Closure conversion of the grouped runtime value.
+            let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+            return Ok(expr_first_class_callable(inner, call_span));
+        }
         let args = parse_args(tokens, pos, call_span)?;
         let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(

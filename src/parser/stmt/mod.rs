@@ -37,6 +37,7 @@ pub(crate) use params::{
     type_arguments_end,
 };
 pub(crate) use assign::{
+    append_to_place_stmt, assignment_target_store_stmt,
     can_replay_assignment_target, lower_nested_append_assignment, lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };

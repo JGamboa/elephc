@@ -163,6 +163,24 @@ fn parse_expr_bp_inner(
                         *pos += 1;
                         Expr::new(ExprKind::Variable(name), var_span)
                     }
+                    // PHP 8 semi-reserved keywords as method / constant names after a dynamic
+                    // receiver too: `$factory::new()` (Eloquent Factory), `$cls::list()`.
+                    Some((ref token, name_span))
+                        if !matches!(token, Token::LBrace)
+                            && crate::parser::keyword_name::bareword_name_from_token(
+                                token,
+                                &tokens[*pos].1,
+                            )
+                            .is_some() =>
+                    {
+                        let name = crate::parser::keyword_name::bareword_name_from_token(
+                            token,
+                            &tokens[*pos].1,
+                        )
+                        .expect("matched above");
+                        *pos += 1;
+                        Expr::new(ExprKind::StringLiteral(name), name_span)
+                    }
                     Some((Token::LBrace, _)) => {
                         *pos += 1;
                         let member = parse_expr(tokens, pos)?;
@@ -225,9 +243,34 @@ fn parse_expr_bp_inner(
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                             *pos += 1; // consume '('
+                            if parse_first_class_callable_parens(tokens, pos)? {
+                                if nullsafe {
+                                    return Err(CompileError::new(
+                                        arrow_span,
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                    ));
+                                }
+                                let arrow_span = crate::parser::expr::span_through_prev_token(
+                                    tokens, *pos, arrow_span,
+                                );
+                                lhs = super::dynamic_calls::dynamic_method_first_class_callable(
+                                    lhs, property, arrow_span,
+                                );
+                                continue;
+                            }
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
+                            if !nullsafe && super::dynamic_calls::has_named_args(&dynamic_args) {
+                                // The method is only named at run time: bind the names there.
+                                lhs = super::dynamic_calls::dynamic_method_call_with_named_args(
+                                    lhs,
+                                    property,
+                                    dynamic_args,
+                                    arrow_span,
+                                )?;
+                                continue;
+                            }
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
                             if nullsafe {
                                 lhs = Expr::new(
@@ -359,9 +402,19 @@ fn parse_expr_bp_inner(
                         | ExprKind::FunctionCall { .. }
                         | ExprKind::MethodCall { .. }
                         | ExprKind::StaticMethodCall { .. }
+                        // `[$class, 'method']()` calls the callable array literal.
+                        | ExprKind::ArrayLiteral(_)
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        // `call()(...)`, `$a['k'](...)`, `[$o, 'm'](...)`: the callee is a runtime
+                        // value, converted like `$var(...)` (`Closure::fromCallable` semantics).
+                        let call_span =
+                            crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+                        lhs = super::prefix::expr_first_class_callable(lhs, call_span);
+                        continue;
+                    }
                     let args = parse_args(tokens, pos, call_span)?;
                     let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
                     lhs = Expr::new(

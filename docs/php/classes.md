@@ -711,7 +711,13 @@ $static = "version";
 echo $class::$static();           // 1.0 — both class and method dynamic
 ```
 
-`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. A dynamic method name on a literal class also works (`ClassName::$name(...)`). Arguments are forwarded positionally. Nullsafe dynamic method calls (`$obj?->$name(...)` and `$obj?->{$expr}(...)`) short-circuit like other `?->` chains: if the receiver is `null`, the method-name expression and arguments are not evaluated and the result is `null`. **Named arguments are rejected** in dynamic calls because the target method — and therefore its parameter names — is not known at compile time.
+`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. Arguments are forwarded positionally. Nullsafe dynamic method calls (`$obj?->$name(...)` and `$obj?->{$expr}(...)`) short-circuit like other `?->` chains: if the receiver is `null`, the method-name expression and arguments are not evaluated and the result is `null`.
+
+A runtime method name on a class named in the source — `self::$method(...)`, `static::{'is' . $kind}(...)`, `parent::{$m}(...)`, `ClassName::$name(...)` — dispatches on the name over the methods that class declares or inherits, and each match runs exactly like the named call (`static::m()` keeps late static binding, `self::`/`parent::` forward it, an instance method runs on `$this`). Note that `self::$method(...)` calls the method *named by* `$method`; only without parentheses is `self::$method` a static property. Inaccessible methods, a missing `$this`, too few arguments and unknown names throw PHP's `Error`/`ArgumentCountError` (unknown names fall back to `__call`/`__callStatic` first). Under `static::`, a static method only a subclass declares runs on that subclass when its body never observes the called class, or when the called class is that subclass; otherwise, and for a by-reference parameter or a subclass-only instance method, the call throws an explicit elephc `Error`.
+
+Named arguments work in `$obj->$name(...)` / `$obj->{$expr}(...)`: the call becomes `call_user_func_array([$obj, $name], $args)` with the names as string keys, so they bind against the method resolved at run time (unknown names and overwrites raise PHP's `Error`). One unpacked list may precede them; two unpacked lists next to a named argument are rejected at compile time. Named arguments stay **rejected** in nullsafe and static dynamic calls (`$obj?->$m(...)`, `$class::$m(...)`, `self::$m(...)`).
+
+Any callable value can be called or turned into a Closure directly: `[$class, 'method']()`, `($this->callback)(...)`, `$this(...)`, `make()(...)`, `$obj->$method(...)`.
 
 ## Anonymous classes (`new class {}`)
 

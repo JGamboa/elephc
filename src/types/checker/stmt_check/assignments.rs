@@ -11,6 +11,7 @@
 mod arrays;
 mod locals;
 mod properties;
+pub(crate) use properties::{refine_array_slots_for_dynamic_array_write, refine_array_slots_for_dynamic_push};
 mod properties_null_coalesce;
 mod static_properties;
 

@@ -307,7 +307,14 @@ impl Scanner<'_> {
             }
             // `$class::m()` dispatches over every class declaring `m`, static or instance.
             "__elephc_dynamic_static_call" => {
-                self.literal_class_or_hazard(first);
+                match first.map(|arg| &arg.kind) {
+                    // `self::$m()` / `C::{expr}()`: the receiver class is named in the source.
+                    Some(ExprKind::ClassConstant { .. } | ExprKind::StringLiteral(_)) => {
+                        let classes = self.expr_classes(first.expect("matched above"));
+                        self.usage.classes.extend(classes);
+                    }
+                    _ => self.literal_class_or_hazard(first),
+                }
                 match args.get(1).map(|arg| &arg.kind) {
                     Some(ExprKind::StringLiteral(method)) => {
                         let method = php_symbol_key(method);

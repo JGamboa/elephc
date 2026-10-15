@@ -33,6 +33,8 @@ pub(super) use locals::{
     parse_typed_assign,
 };
 pub(crate) use postfix::{
+    append_to_place_stmt,
+    assignment_target_store_stmt,
     can_replay_assignment_target,
     lower_nested_append_assignment,
     lower_postfix_incdec_assignment,

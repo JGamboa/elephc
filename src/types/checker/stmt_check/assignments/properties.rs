@@ -603,6 +603,152 @@ fn refine_object_property_type(
     update_inherited_property_slot_type(checker, class_name, property, refined_ty);
 }
 
+/// Refines the array slots a runtime-named push (`$obj->{$name}[] = v`) can reach.
+///
+/// `__elephc_dynamic_property_push` lowers to one arm per visible property of the receiver's
+/// class, each pushing onto that slot with its own static type. The checker never sees those
+/// arms, so every array slot here is refined exactly as `$obj->slot[] = v` would refine it: an
+/// untyped list widens its element type, an untyped associative slot widens its key to include
+/// integers and its value type. Non-array slots keep their type (their arm throws PHP's Error or
+/// goes through boxed storage), so a class without such a push compiles exactly as before.
+pub(crate) fn refine_array_slots_for_dynamic_push(
+    checker: &mut Checker,
+    class_name: &str,
+    val_ty: &PhpType,
+    span: Span,
+) {
+    // The lowering also has arms for slots only a subclass declares.
+    let mut classes: Vec<String> = checker
+        .classes
+        .keys()
+        .filter(|other| other.as_str() == class_name || checker.is_subclass_of(other, class_name))
+        .cloned()
+        .collect();
+    classes.sort();
+    for class in classes {
+        refine_array_slots_of_class_for_dynamic_push(checker, &class, val_ty, span);
+    }
+}
+
+/// Refines the array slots a runtime-named array write (`$obj->{$name} = [...]`) can reach.
+///
+/// An untyped list slot merges a list value's element type, an untyped associative slot merges
+/// an associative value's key and value types. A slot of the other array kind, a typed slot or
+/// a non-array slot keeps its type: the lowering stores there only through the boxed runtime
+/// write, exactly as before.
+pub(crate) fn refine_array_slots_for_dynamic_array_write(
+    checker: &mut Checker,
+    class_name: &str,
+    val_ty: &PhpType,
+) {
+    let mut classes: Vec<String> = checker
+        .classes
+        .keys()
+        .filter(|other| other.as_str() == class_name || checker.is_subclass_of(other, class_name))
+        .cloned()
+        .collect();
+    classes.sort();
+    for class in classes {
+        let names: Vec<String> = match checker.classes.get(&class) {
+            Some(info) => {
+                let mut names: Vec<String> =
+                    info.properties.iter().map(|(name, _)| name.clone()).collect();
+                names.sort();
+                names.dedup();
+                names
+            }
+            None => continue,
+        };
+        for name in names {
+            if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, &class, &name) {
+                continue;
+            }
+            let Some(info) = checker.classes.get(&class) else { break };
+            if info.visible_property_is_declared(&name) {
+                continue;
+            }
+            let Some((_, (_, prop_ty))) = info.visible_property(&name) else { continue };
+            let prop_ty = prop_ty.clone();
+            let merge = |checker: &Checker, current: &PhpType, incoming: &PhpType| {
+                if current == incoming || matches!(incoming, PhpType::Never) {
+                    current.clone()
+                } else if matches!(current, PhpType::Never) {
+                    incoming.clone()
+                } else {
+                    checker.merge_array_element_type(current, incoming).unwrap_or(PhpType::Mixed)
+                }
+            };
+            let updated = match (&prop_ty, val_ty) {
+                (PhpType::Array(current), PhpType::Array(incoming)) => {
+                    PhpType::Array(Box::new(merge(checker, current, incoming)))
+                }
+                (
+                    PhpType::AssocArray { key, value },
+                    PhpType::AssocArray { key: incoming_key, value: incoming_value },
+                ) => PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(*key.clone(), *incoming_key.clone())),
+                    value: Box::new(merge(checker, value, incoming_value)),
+                },
+                _ => continue,
+            };
+            if updated != prop_ty {
+                update_object_property_type(checker, &class, &name, false, updated);
+            }
+        }
+    }
+}
+
+/// Refines one class's array slots for `refine_array_slots_for_dynamic_push`.
+fn refine_array_slots_of_class_for_dynamic_push(
+    checker: &mut Checker,
+    class_name: &str,
+    val_ty: &PhpType,
+    span: Span,
+) {
+    let names: Vec<String> = match checker.classes.get(class_name) {
+        Some(info) => {
+            let mut names: Vec<String> = info.properties.iter().map(|(name, _)| name.clone()).collect();
+            names.sort();
+            names.dedup();
+            names
+        }
+        None => return,
+    };
+    for name in names {
+        if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, &name) {
+            continue;
+        }
+        let Some(info) = checker.classes.get(class_name) else { return };
+        let declared = info.visible_property_is_declared(&name);
+        let Some((_, (_, prop_ty))) = info.visible_property(&name) else { continue };
+        let prop_ty = prop_ty.clone();
+        let updated = match &prop_ty {
+            PhpType::Array(_) => match updated_array_property_push_type(
+                checker, &prop_ty, declared, class_name, &name, val_ty, span,
+            ) {
+                Ok(updated) => updated,
+                // The arm throws an explicit Error for a value the declared element type refuses.
+                Err(_) => continue,
+            },
+            PhpType::AssocArray { key, value } if !declared => {
+                let merged_value = if value.as_ref() == val_ty {
+                    *value.clone()
+                } else {
+                    checker.merge_array_element_type(value, val_ty).unwrap_or(PhpType::Mixed)
+                };
+                PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                    value: Box::new(merged_value),
+                }
+            }
+            _ => continue,
+        };
+        if updated != prop_ty {
+            update_object_property_type(checker, class_name, &name, declared, updated);
+        }
+    }
+}
+
 /// Keeps copies of one inherited property slot in the same storage shape.
 ///
 /// Class layouts copy an ancestor's property metadata before method bodies are checked. A

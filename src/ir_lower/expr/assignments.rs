@@ -425,6 +425,11 @@ pub(super) fn lower_dynamic_property_assign(
         ctx, property, span,
     );
     let value = lower_expr(ctx, value);
+    // A name that selects a declared slot taking the value's exact representation is stored
+    // with that slot's static name, so a refined raw slot keeps its representation (the boxed
+    // runtime write below refuses it). Every other name keeps the runtime write.
+    let (object, property, value, merge) =
+        super::dynamic_property_push::lower_dynamic_assign_static_arms(ctx, object, property, value, span);
     // The NAME is only known at run time, so a statically known receiver can still land this
     // value on any slot in its runtime-class subtree. Typed or representation-incompatible
     // slots need the boxed runtime guard. An all-untyped subtree whose refined slots already
@@ -459,6 +464,10 @@ pub(super) fn lower_dynamic_property_assign(
     crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
         ctx, &PhpType::Mixed, value, span,
     );
+    if let Some(merge) = merge {
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(merge);
+    }
 }
 
 /// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.

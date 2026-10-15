@@ -246,6 +246,27 @@ fn test_float_literal() {
     assert_eq!(t[1], Token::FloatLiteral(3.14));
 }
 
+/// Verifies PHP's trailing-dot float `0.` before a closing delimiter (`?float $x = 0.)`),
+/// while `1.'x'` keeps lexing as an integer concatenation.
+#[test]
+fn test_trailing_dot_float_before_delimiter() {
+    let t = tokens("<?php f(0.);");
+    assert_eq!(t[3], Token::FloatLiteral(0.0));
+    assert_eq!(t[4], Token::RParen);
+    let t = tokens("<?php [2., 3];");
+    assert_eq!(t[2], Token::FloatLiteral(2.0));
+    let t = tokens("<?php f(0.\n    );");
+    assert_eq!(t[3], Token::FloatLiteral(0.0));
+    let t = tokens("<?php $l < 0. || $l > 1.;");
+    assert_eq!(t[3], Token::FloatLiteral(0.0));
+    assert_eq!(t[4], Token::OrOr);
+    let t = tokens("<?php 1. 'x';");
+    assert_eq!(t[1], Token::IntLiteral(1));
+    let t = tokens("<?php 1.'x';");
+    assert_eq!(t[1], Token::IntLiteral(1));
+    assert_eq!(t[2], Token::Dot);
+}
+
 /// Verifies `.5` (dot-prefix float without leading zero) tokenizes as
 /// `FloatLiteral(0.5)`.
 #[test]
