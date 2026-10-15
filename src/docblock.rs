@@ -872,6 +872,25 @@ mod tests {
         assert_eq!(*variadic_type, Some(TypeExpr::Named(Name::unqualified("T"))));
     }
 
+    /// A docblock still binds after inline HTML and a close tag: the open tag and `?>` that
+    /// frame the HTML are transparent to the gap scan.
+    #[test]
+    fn binds_a_docblock_after_inline_html_and_close_tags() {
+        let source = "<p>html</p>\n<?php // c ?>\nmore\n<?php\n/** @template T */\nclass Box {}\n";
+        let StmtKind::ClassDecl { generics, .. } = &program_of(source)
+            .into_iter()
+            .find(|stmt| matches!(stmt.kind, StmtKind::ClassDecl { .. }))
+            .expect("class")
+            .kind
+        else {
+            panic!("expected a class declaration");
+        };
+        assert_eq!(
+            generics.as_ref().expect("class became a template").type_params[0].name,
+            "T"
+        );
+    }
+
     /// Tagless files retain generic annotations across attributes with nonstructural brackets.
     #[test]
     fn applies_generic_docblocks_after_attributes_in_lfc_sources() {

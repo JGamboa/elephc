@@ -48,10 +48,20 @@ fn test_consecutive_comments() {
 
 // --- Complex tokens ---
 
-/// Verifies missing `<?php` open tag produces a lex error.
+/// Verifies a source with no open tag is inline HTML (PHP prints it), not a lex error.
 #[test]
-fn test_missing_open_tag() {
-    assert!(tokenize("echo \"hi\";").is_err());
+fn test_missing_open_tag_is_inline_html() {
+    let t = tokens("echo \"hi\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("echo \"hi\";".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
 }
 
 /// Verifies an unterminated double-quoted string produces a lex error.
