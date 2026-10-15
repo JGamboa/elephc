@@ -83,3 +83,7 @@ fn test_error_null_coalesce_assign_call_dimension() {
         "Compound assignment to a dimension of a call result",
     );
 }
+
+// Capturing a possibly undefined local (`use ($r)`, `use (&$r)`, an arrow function) compiles
+// with PHP's semantics now (review P2c r3, R3-1/R3-2): see
+// `codegen::assign_expr::test_maybe_undefined_closure_captures`.
