@@ -280,6 +280,12 @@ fn test_new_with_expression_class_name_parses_as_dynamic_new() {
     assert!(matches!(name_expr.kind, ExprKind::MethodCall { .. }));
     assert_eq!(args.len(), 1);
 
+    let value = sole_value("<?php $x = new $this->class();");
+    let ExprKind::NewDynamic { name_expr, .. } = &value.kind else {
+        panic!("Expected NewDynamic, got {:?}", value.kind);
+    };
+    assert!(matches!(&name_expr.kind, ExprKind::PropertyAccess { property, .. } if property == "class"));
+
     let value = sole_value("<?php $x = new static::$classes[static::class]($m);");
     let ExprKind::NewDynamic { name_expr, .. } = &value.kind else {
         panic!("Expected NewDynamic, got {:?}", value.kind);

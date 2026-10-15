@@ -67,30 +67,30 @@ pub(super) fn hoist_value_includes(
         | StmtKind::Echo(value)
         | StmtKind::Throw(value)
         | StmtKind::Return(Some(value))
-        | StmtKind::Assign { value, .. }
+        | StmtKind::ListUnpack { value, .. } => hoister.visit(value)?,
+        StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. }
         | StmtKind::StaticPropertyAssign { value, .. }
-        | StmtKind::StaticPropertyArrayPush { value, .. }
-        | StmtKind::ListUnpack { value, .. } => hoister.visit(value)?,
+        | StmtKind::StaticPropertyArrayPush { value, .. } => hoister.visit_assigned(value)?,
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             hoister.visit(index)?;
-            hoister.visit(value)?;
+            hoister.visit_assigned(value)?;
         }
         StmtKind::NestedArrayAssign { target, value } => {
             hoister.visit(target)?;
-            hoister.visit(value)?;
+            hoister.visit_assigned(value)?;
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             hoister.visit(object)?;
-            hoister.visit(value)?;
+            hoister.visit_assigned(value)?;
         }
         StmtKind::PropertyArrayAssign { object, index, value, .. } => {
             hoister.visit(object)?;
             hoister.visit(index)?;
-            hoister.visit(value)?;
+            hoister.visit_assigned(value)?;
         }
         // Only the expression evaluated once, before any body, can be hoisted. An `elseif`
         // condition, a `case` value or a loop condition runs conditionally or repeatedly and is
@@ -171,6 +171,26 @@ struct Hoister {
 }
 
 impl Hoister {
+    /// Visits the value of an assignment statement.
+    ///
+    /// A compound assignment (`K::$a[0] .= require F`) arrives as `<target> <op> <rhs>`, with the
+    /// target read on the left. php-src's `ASSIGN_*_OP` evaluates the right operand BEFORE it
+    /// reads the target, so that read is not an effect in front of the include: only the right
+    /// operand is walked. The read is recognised by shape (a variable, property or static
+    /// property, or a dimension of one with an inert index), which an explicit
+    /// `$a[0] = $a[0] . require F` shares; there the read happens first in PHP, and only a file
+    /// that writes `$a[0]` itself could tell the difference.
+    fn visit_assigned(&mut self, value: &mut Expr) -> Result<(), CompileError> {
+        if let ExprKind::BinaryOp { left, op, right } = &mut value.kind {
+            if !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce) && is_place_read(left) {
+                self.visit(right)?;
+                self.effect_seen = true;
+                return Ok(());
+            }
+        }
+        self.visit(value)
+    }
+
     /// Visits `expr` in PHP evaluation order, replacing each hoistable include (or conditional
     /// holding one) by a hidden temporary.
     fn visit(&mut self, expr: &mut Expr) -> Result<(), CompileError> {
@@ -529,6 +549,17 @@ fn is_inert(expr: &Expr) -> bool {
             | ExprKind::MagicConstant(_)
             | ExprKind::ClassConstant { .. }
     )
+}
+
+/// Whether `expr` reads a storage place without computing anything: a variable, `$this`, a
+/// static property, a named property of a place, or a dimension of a place with an inert index.
+fn is_place_read(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_place_read(object),
+        ExprKind::ArrayAccess { array, index } => is_place_read(array) && is_inert(index),
+        _ => false,
+    }
 }
 
 /// `$name`

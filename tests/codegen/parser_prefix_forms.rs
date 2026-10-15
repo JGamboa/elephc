@@ -98,6 +98,8 @@ class Collection { public function __construct(public array $items = []) {} }
 class Model
 {
     protected static array $classes = [];
+    public string $class = Other::class;
+    public function viaProp() { return new $this->class('k'); }
     public function getPivotClass(): string { return Pivot::class; }
     public function pivot() { return (new ($this->getPivotClass())('x')); }
     public static function boot(): void { static::$classes[static::class] = Collection::class; }
@@ -105,6 +107,7 @@ class Model
 }
 $m = new Model();
 echo get_class($m->pivot()), ' ', $m->pivot()->tag, ' ', (new ($m->getPivotClass()))->tag, "\n";
+echo $m->viaProp()->tag, "\n";
 Model::boot();
 echo count($m->collect([1, 2, 3])->items), "\n";
 $c = true;
@@ -120,6 +123,7 @@ try {
     assert_eq!(
         out,
         r#"Pivot x p
+k
 3
 Other
 p

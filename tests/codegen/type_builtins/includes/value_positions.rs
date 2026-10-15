@@ -162,11 +162,12 @@ fn test_static_property_include_value() {
             (
                 "main.php",
                 "<?php class K { public static $s = 'x'; public static $a = []; }
-K::$s .= include 'str.php'; K::$a['k'] = require 'str.php'; echo K::$s, '|', K::$a['k'];",
+K::$s .= include 'str.php'; K::$a[] = require 'str.php'; K::$a[0] .= require 'str.php';
+echo K::$s, '|', K::$a[0];",
             ),
             ("str.php", "<?php return 'S';"),
         ],
         "main.php",
     );
-    assert_eq!(out, "xS|S");
+    assert_eq!(out, "xS|SS");
 }

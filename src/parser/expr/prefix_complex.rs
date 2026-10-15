@@ -1083,10 +1083,18 @@ fn parse_new_variable_reference_tail(
     let mut extended = false;
     loop {
         let span = expr.span;
+        // `->class`, `->list`...: PHP 8's semi-reserved rule makes any keyword a property name
+        // here too (faker's `new $this->class()`).
+        let arrow_member = match (tokens.get(*pos), tokens.get(*pos + 1)) {
+            (Some((Token::Arrow | Token::QuestionArrow, _)), Some((token, metadata))) => {
+                crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+            }
+            _ => None,
+        };
         match (tokens.get(*pos).map(|(t, _)| t), tokens.get(*pos + 1).map(|(t, _)| t)) {
-            (Some(Token::Arrow | Token::QuestionArrow), Some(Token::Identifier(property))) => {
+            (Some(Token::Arrow | Token::QuestionArrow), Some(_)) if arrow_member.is_some() => {
                 let nullsafe = matches!(tokens[*pos].0, Token::QuestionArrow);
-                let property = property.clone();
+                let property = arrow_member.expect("guarded by the match arm");
                 *pos += 2;
                 let object = Box::new(expr);
                 expr = Expr::new(
