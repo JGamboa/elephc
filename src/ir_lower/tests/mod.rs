@@ -173,6 +173,7 @@ fn try_lower_source_at_for_target(
     // lowered to a call of the return-coercion helper, so the helper must be declared.
     let ast = crate::return_coerce_prelude::inject(ast, &mut prelude_inventory)
         .expect("return-coercion prelude injection failed");
+    let ast = crate::variable_variables::desugar(ast).expect("variable_variables desugar failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver rather than by the checker, so a plain

@@ -342,6 +342,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::variable_variables::desugar(resolved).expect("variable_variables desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let error = match elephc::types::check_with_target(&resolved, target()) {
         Ok(_) => panic!("source unexpectedly passed type checking"),
@@ -410,6 +411,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::variable_variables::desugar(resolved).expect("variable_variables desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -526,6 +528,7 @@ fn compile_and_run_files_with_defines_per_argv(
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::variable_variables::desugar(resolved).expect("variable_variables desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -620,6 +623,7 @@ pub(crate) fn compile_files_error_message(
         let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
+        let resolved = elephc::variable_variables::desugar(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target()).map_err(|e| e.message.clone())?;
         Ok(())
@@ -665,6 +669,7 @@ pub(crate) fn check_files_diagnostics(
         let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::func_args::desugar(resolved).map_err(|e| e.message.clone())?;
+        let resolved = elephc::variable_variables::desugar(resolved).map_err(|e| e.message.clone())?;
         let resolved = elephc::optimize::fold_constants(resolved);
         // No generic instantiation runs on this path, so the checker has nothing to answer and
         // no templates to infer from: the fixture compiles the program as written.
@@ -724,6 +729,7 @@ pub(crate) fn compile_files_fails_with_defines(
         let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved)?;
         let resolved = elephc::func_args::desugar(resolved)?;
+        let resolved = elephc::variable_variables::desugar(resolved)?;
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target())?;
         Ok(())
@@ -755,6 +761,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::variable_variables::desugar(resolved).expect("variable_variables desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");

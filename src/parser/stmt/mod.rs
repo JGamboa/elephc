@@ -200,6 +200,9 @@ fn parse_stmt_dispatch(
         Token::Function => params::parse_function_decl(tokens, pos, span),
         // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
         Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
+        // `$$name = v;`, `$$name[k] = v;`, `${expr}->m();`: a variable variable starts an
+        // ordinary expression statement over the frame-access shape.
+        Token::Dollar => simple::parse_expr_stmt(tokens, pos, span),
         // Any expression is a statement in PHP, including one that opens with a literal, a
         // predefined constant, a magic constant or a prefix operator: `0 > $T && $T += 0x40;`
         // (symfony/polyfill-intl-normalizer) or `! $x && f();`. None of these tokens can begin

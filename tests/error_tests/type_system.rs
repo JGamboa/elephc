@@ -1046,13 +1046,13 @@ fn test_error_static_type_outside_class() {
     );
 }
 
-/// Verifies that variable variables (`$$name`) are rejected with an explanatory message, since
-/// elephc allocates locals to fixed compile-time slots with no runtime variable-name table.
+/// Verifies that a variable variable with a runtime name is rejected in top-level code, where
+/// main's locals cannot be dispatched by name (functions and methods support it).
 #[test]
 fn test_error_variable_variables_unsupported() {
     expect_error(
         "<?php $x = \"y\"; $$x = 1;",
-        "Variable variables (`$$name`) are not supported",
+        "Variable variables with a non-literal name are only supported inside functions and methods",
     );
 }
 
