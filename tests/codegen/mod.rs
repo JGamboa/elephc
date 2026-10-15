@@ -74,6 +74,7 @@ mod pcntl;
 mod xml;
 mod arrays;
 mod parser_expr;
+mod parser_prefix_forms;
 mod assign_expr;
 mod return_coercion;
 mod calendar;
