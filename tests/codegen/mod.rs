@@ -75,6 +75,7 @@ mod xml;
 mod arrays;
 mod parser_expr;
 mod assign_expr;
+mod inline_html;
 mod return_coercion;
 mod calendar;
 mod call_counters;

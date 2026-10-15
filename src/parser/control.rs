@@ -751,6 +751,10 @@ pub fn parse_switch(
     } else {
         expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
     }
+    // PHP's grammar allows one `;` before the first case (`switch (x): ?>` lexes `?>` as `;`).
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+    }
     // The case list ends at `}` in the brace form and at `endswitch` in the alternative form.
     let close = if alternative {
         Token::EndSwitch
