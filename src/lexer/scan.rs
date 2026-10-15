@@ -10,6 +10,7 @@
 //! - Keywords touched by `\` inside a qualified name are emitted as identifiers (PHP 8 T_NAME_QUALIFIED).
 
 use super::cursor::Cursor;
+use super::inline_html;
 use super::literals;
 use super::token::{spanned, SpannedToken, Token, TokenMetadata};
 use crate::errors::CompileError;
@@ -44,19 +45,19 @@ pub(super) fn scan_tokens_in_source(
     let mut tokens = Vec::new();
 
     let span = cursor.span();
+    // The parser's structural boundary token: a PHP file starts in HTML mode, so it is
+    // synthesized at the start and any leading text follows as `echo "text";`.
+    tokens.push(spanned(Token::OpenTag, span));
     if mode.requires_open_tag() {
-        skip_whitespace_and_comments(&mut cursor);
-        let span = cursor.span();
-        if cursor.remaining().starts_with("<?php") {
-            for _ in 0..5 {
-                cursor.advance();
+        // PHP CLI skips a leading shebang line.
+        if cursor.remaining().starts_with("#!") {
+            while let Some(ch) = cursor.advance() {
+                if ch == '\n' {
+                    break;
+                }
             }
-            tokens.push(spanned(Token::OpenTag, span));
-        } else {
-            return Err(CompileError::new(span, "Expected '<?php' at start of file"));
         }
-    } else {
-        tokens.push(spanned(Token::OpenTag, span));
+        inline_html::scan_inline_html(&mut cursor, &mut tokens);
     }
 
     // `cursor.remaining().len()` right after a `\` token, so the next word can tell whether
@@ -76,7 +77,14 @@ pub(super) fn scan_tokens_in_source(
         }
 
         let span = cursor.span();
-        if matches!(mode, SourceMode::Lfc)
+        if mode.requires_open_tag() && cursor.remaining().starts_with("?>") {
+            // `?>` is an implicit `;`; the text after it is inline HTML up to the next tag.
+            tokens.push(spanned(Token::Semicolon, span));
+            inline_html::consume_close_tag(&mut cursor);
+            inline_html::scan_inline_html(&mut cursor, &mut tokens);
+            backslash_end = None;
+            word_end = None;
+        } else if matches!(mode, SourceMode::Lfc)
             && (cursor.remaining().starts_with("<?php")
                 || cursor.remaining().starts_with("?>"))
         {
@@ -229,17 +237,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
         if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
             // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
@@ -260,6 +264,17 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         break;
+    }
+}
+
+/// Skips a `//` or `#` line comment: through its newline, or up to (not including) a `?>`, which
+/// ends a PHP line comment and closes the PHP block.
+fn skip_line_comment(cursor: &mut Cursor) {
+    while !cursor.remaining().starts_with("?>") {
+        match cursor.advance() {
+            Some('\n') | None => break,
+            Some(_) => {}
+        }
     }
 }
 

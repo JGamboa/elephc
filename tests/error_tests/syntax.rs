@@ -9,12 +9,8 @@
 
 use super::*;
 
-/// Verifies the error diagnostic for missing open tag.
-#[test]
-fn test_error_missing_open_tag() {
-    // PHP code starting outside an open tag produces a "missing open tag" error.
-    expect_error("echo \"hi\";", "<?php");
-}
+// A source without an open tag is no longer an error: PHP treats it as inline HTML and prints it
+// (see `tests/codegen/inline_html.rs`).
 
 /// Verifies the error diagnostic for unterminated string.
 #[test]

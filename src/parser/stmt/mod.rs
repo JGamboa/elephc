@@ -354,6 +354,12 @@ fn parse_stmt_dispatch(
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
         }
+        // PHP's empty statement. The lexer emits it for every `?>` close tag (an implicit `;`),
+        // so `if (...): ?>HTML<?php endif;` and `<?php } ?>` parse like any other `;`.
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token at statement position: {:?}", other),
