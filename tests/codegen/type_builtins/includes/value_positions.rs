@@ -226,3 +226,31 @@ f(g(), require 'ret5.php', h());",
     );
     assert_eq!(out, "g [ret5] h f 1 5 3");
 }
+
+/// Review round 2: an array literal fetches a variable KEY when it adds the element, after the
+/// element's value, so a key the included value writes is the new one; a computed key runs
+/// before the value; an earlier element and a later include keep PHP's order too.
+#[test]
+fn test_array_literal_variable_key_is_read_after_its_value() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function k($s) { echo \"[k$s]\"; return \"k$s\"; }
+$x = 'oldx'; $i = 1;
+echo json_encode(['a' => 0, $x => require 'f.php']), '|';
+echo json_encode([$i => require 'f.php']), '|';
+$x = 'oldx'; echo json_encode([k(1) => require 'f.php', $x => k(2)]), '|';
+$x = 'oldx'; echo json_encode([$x => 'first', 'z' => require 'f.php']), '|';
+$x = 'oldx'; echo json_encode([$x => require 'f.php', 'b' => require 'g.php']);",
+            ),
+            ("f.php", "<?php echo '[f]'; $x = 'NEWX'; $i = 9; return 'V';"),
+            ("g.php", "<?php $x = 'LATER'; return 'W';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "[f]{\"a\":0,\"NEWX\":\"V\"}|[f]{\"9\":\"V\"}|[k1][f][k2]{\"k1\":\"V\",\"NEWX\":\"k2\"}|[f]{\"oldx\":\"first\",\"z\":\"V\"}|[f]{\"NEWX\":\"V\",\"b\":\"W\"}"
+    );
+}

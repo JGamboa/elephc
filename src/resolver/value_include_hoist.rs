@@ -38,7 +38,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{ArrayEntry, BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::contains::expr_has_includes;
@@ -359,15 +359,15 @@ impl Hoister {
             }
             ExprKind::ArrayLiteralAssoc(entries) => {
                 for (key, value) in entries {
-                    self.visit(key)?;
-                    self.visit(value)?;
+                    self.visit_entry(key, value)?;
                 }
                 Ok(())
             }
             ExprKind::ArrayLiteralMixed(entries) => {
                 for entry in entries {
-                    for value in entry.exprs_mut() {
-                        self.visit(value)?;
+                    match entry {
+                        ArrayEntry::Keyed(key, value) => self.visit_entry(key, value)?,
+                        ArrayEntry::Spread(value) | ArrayEntry::Value(value) => self.visit(value)?,
                     }
                 }
                 Ok(())
@@ -480,6 +480,23 @@ impl Hoister {
                  assign it to a local variable first",
             )),
         }
+    }
+
+    /// Visits one `key => value` element of an array literal.
+    ///
+    /// php-src compiles the key first, then the value, then `ADD_ARRAY_ELEMENT`, which fetches a
+    /// CV key only when it runs (MEASURED: `[k(1) => require F]` calls `k` before the file, and
+    /// `[$x => require F]` uses the `$x` the file wrote). So a computed key is an ordinary
+    /// operand before the value, while a variable key is read AFTER the value, yet still before
+    /// any later element: its read is recorded after the value's events, which snapshots it in
+    /// front of a later include only.
+    fn visit_entry(&mut self, key: &mut Expr, value: &mut Expr) -> Result<(), CompileError> {
+        if matches!(key.kind, ExprKind::Variable(_)) {
+            self.visit(value)?;
+            return self.completed(key, Ctx::Eager);
+        }
+        self.visit(key)?;
+        self.visit(value)
     }
 
     /// Visits call arguments in order.
