@@ -443,3 +443,31 @@ echo count($x), "\n";
     );
     assert_eq!(out, "1\n");
 }
+
+/// Mirrors `probes/fcc/rejection_lifetime.php` (review round 2): a caught rejection releases the boxed input,
+/// so 200k rejections stay within the default heap and every receiver is destructed.
+#[test]
+fn test_fcc_variable_probe_rejection_lifetime() {
+    let out = compile_and_run(
+        r#"<?php
+// A rejected conversion caught by try/catch releases its input: no heap growth, receivers destructed.
+class A { public static int $alive = 0;
+  public function __construct() { self::$alive++; }
+  private function priv() {}
+  public function __destruct() { self::$alive--; } }
+function viaVar(mixed $v) { try { $v(...); } catch (Error $e) { return 1; } return 0; }
+$fails = 0;
+for ($i = 0; $i < 200000; $i++) {
+    $a = new A; $arr = [$a, 'priv'];
+    try { $arr(...); } catch (Error $e) { $fails++; }
+    $s = 'nope_fn' . ($i % 3);
+    try { $s(...); } catch (Error $e) { $fails++; }
+    try { Closure::fromCallable([new A, 'priv']); } catch (TypeError $e) { $fails++; }
+    $fails += viaVar([$a, 'priv']);
+}
+unset($a, $arr);
+echo $fails, " alive=", A::$alive, "\n";
+"#,
+    );
+    assert_eq!(out, "800000 alive=1\n");
+}

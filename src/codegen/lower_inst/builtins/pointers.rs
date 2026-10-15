@@ -174,9 +174,15 @@ pub(crate) fn lower_elephc_normalize_callable(
 ) -> Result<()> {
     ensure_arg_count(inst, "__elephc_normalize_callable", 1)?;
     let value = expect_operand(inst, 0)?;
-    let conversion = match inst.immediate {
-        Some(Immediate::I64(mode)) => Some(ClosureConversionMode::from_immediate(mode)?),
-        _ => None,
+    let (conversion, owns_operand_box) = match inst.immediate {
+        Some(Immediate::I64(mode)) => (
+            Some(ClosureConversionMode::from_immediate(
+                mode & !crate::builtins::callables::__elephc_closure_from_callable::MODE_OWNS_OPERAND_BOX,
+            )?),
+            mode & crate::builtins::callables::__elephc_closure_from_callable::MODE_OWNS_OPERAND_BOX
+                != 0,
+        ),
+        _ => (None, false),
     };
     match ctx.value_php_type(value)? {
         PhpType::Callable => {
@@ -186,13 +192,19 @@ pub(crate) fn lower_elephc_normalize_callable(
         PhpType::Mixed | PhpType::Union(_) if conversion.is_some() => {
             let (string_message, invalid_message) =
                 conversion.expect("guarded conversion mode").messages();
-            super::super::callables::emit_runtime_mixed_callable_descriptor_value_for_conversion(
-                ctx,
-                value,
-                "__elephc_closure_from_callable",
-                string_message,
-                invalid_message,
-            )?;
+            if owns_operand_box {
+                ctx.callable_rejection_release = Some(value);
+            }
+            let selected =
+                super::super::callables::emit_runtime_mixed_callable_descriptor_value_for_conversion(
+                    ctx,
+                    value,
+                    "__elephc_closure_from_callable",
+                    string_message,
+                    invalid_message,
+                );
+            ctx.callable_rejection_release = None;
+            selected?;
         }
         other if conversion.is_some() => {
             return Err(CodegenIrError::unsupported(format!(

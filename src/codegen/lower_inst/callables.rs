@@ -405,12 +405,22 @@ pub(in crate::codegen) const FCC_NOT_CALLABLE_MESSAGE: &str = "Value is not call
 ///
 /// The first-class-callable conversion messages above raise `Error`; every other callable
 /// rejection keeps raising `TypeError`.
-fn emit_callable_rejection(ctx: &mut FunctionContext<'_>, message: &'static str) {
+///
+/// A first-class-callable conversion that boxed its typed input itself registers that box in
+/// `FunctionContext::callable_rejection_release`; it is released here, before the throw, because
+/// the conversion's ordinary release after the selector never runs on this path.
+fn emit_callable_rejection(ctx: &mut FunctionContext<'_>, message: &'static str) -> Result<()> {
+    if let Some(owned_box) = ctx.callable_rejection_release {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_reg(owned_box, result_reg)?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
     if message == FCC_UNDEFINED_FUNCTION_MESSAGE || message == FCC_NOT_CALLABLE_MESSAGE {
         super::exceptions::emit_error(ctx, message);
     } else {
         super::exceptions::emit_type_error(ctx, message);
     }
+    Ok(())
 }
 
 /// Returns whether a receiver statically typed `class_name` may select a `method_key` body other
@@ -686,7 +696,7 @@ fn emit_runtime_mixed_callable_descriptor_value_scoped(
             ctx.emitter.label(&next_label);
         }
         if let Some(message) = invalid_type_error {
-            emit_callable_rejection(ctx, message);
+            emit_callable_rejection(ctx, message)?;
         } else {
             emit_runtime_callable_array_no_match_abort(ctx);
         }
@@ -726,7 +736,7 @@ fn emit_runtime_mixed_callable_descriptor_value_scoped(
             ctx.emitter.label(&next_label);
         }
         if let Some(message) = invalid_type_error {
-            emit_callable_rejection(ctx, message);
+            emit_callable_rejection(ctx, message)?;
         } else if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
             abi::emit_jump(ctx.emitter, &fatal_label);
@@ -743,7 +753,7 @@ fn emit_runtime_mixed_callable_descriptor_value_scoped(
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
     }
     if let Some(message) = invalid_type_error {
-        emit_callable_rejection(ctx, message);
+        emit_callable_rejection(ctx, message)?;
     } else {
         emit_mixed_callable_not_callable_fatal(ctx, op_name);
     }
@@ -1238,7 +1248,7 @@ fn emit_runtime_string_descriptor_value_impl(
     ctx.emitter.label(&miss_label);
     if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        emit_callable_rejection(ctx, message);
+        emit_callable_rejection(ctx, message)?;
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -1304,7 +1314,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx.emitter.label(&miss_label);
     if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        emit_callable_rejection(ctx, message);
+        emit_callable_rejection(ctx, message)?;
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -2252,7 +2262,7 @@ fn emit_boxed_callable_array_selector_slots(
             ctx.emitter.instruction(&format!("je {}", string_label));           // synthesize string-tagged selectors from typed slots
         }
     }
-    emit_callable_array_shape_error(ctx, type_error);
+    emit_callable_array_shape_error(ctx, type_error)?;
 
     ctx.emitter.label(&mixed_label);
     emit_unbox_mixed_callable_array_slot(ctx, source, 0)?;
@@ -2407,8 +2417,7 @@ fn emit_require_mixed_callable_array_pair(
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_load_callable_array_base(ctx, source, array_reg)?;
-    emit_require_callable_array_pair_in_reg(ctx, array_reg, type_error);
-    Ok(())
+    emit_require_callable_array_pair_in_reg(ctx, array_reg, type_error)
 }
 
 /// Verifies a string callable array has exactly two elements before loading its
@@ -2419,8 +2428,7 @@ fn emit_require_string_callable_array_pair(
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(callable, array_reg)?;
-    emit_require_callable_array_pair_in_reg(ctx, array_reg, None);
-    Ok(())
+    emit_require_callable_array_pair_in_reg(ctx, array_reg, None)
 }
 
 /// Emits the target-aware length check for a loaded indexed-array pointer.
@@ -2428,7 +2436,7 @@ fn emit_require_callable_array_pair_in_reg(
     ctx: &mut FunctionContext<'_>,
     array_reg: &str,
     type_error: Option<&'static str>,
-) {
+) -> Result<()> {
     let valid_label = ctx.next_label("callable_array_pair_valid");
     let invalid_label = ctx.next_label("callable_array_pair_invalid");
     match ctx.emitter.target.arch {
@@ -2447,17 +2455,22 @@ fn emit_require_callable_array_pair_in_reg(
         }
     }
     ctx.emitter.label(&invalid_label);
-    emit_callable_array_shape_error(ctx, type_error);
+    emit_callable_array_shape_error(ctx, type_error)?;
     ctx.emitter.label(&valid_label);
+    Ok(())
 }
 
 /// Uses a catchable builtin diagnostic for malformed pairs without changing legacy call behavior.
-fn emit_callable_array_shape_error(ctx: &mut FunctionContext<'_>, type_error: Option<&'static str>) {
+fn emit_callable_array_shape_error(
+    ctx: &mut FunctionContext<'_>,
+    type_error: Option<&'static str>,
+) -> Result<()> {
     if let Some(message) = type_error {
-        emit_callable_rejection(ctx, message);
+        emit_callable_rejection(ctx, message)?;
     } else {
         emit_runtime_callable_array_no_match_abort(ctx);
     }
+    Ok(())
 }
 
 /// Preserves the tag and payload returned by `__rt_mixed_unbox`.

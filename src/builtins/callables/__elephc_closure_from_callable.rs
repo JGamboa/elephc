@@ -29,6 +29,9 @@ use crate::types::PhpType;
 pub(crate) const MODE_FIRST_CLASS_CALLABLE: i64 = 1;
 /// `Closure::fromCallable($callable)`: a non-callable value throws `TypeError`.
 pub(crate) const MODE_FROM_CALLABLE: i64 = 2;
+/// Mode flag: the operand is a box this conversion created, so a rejection must release it
+/// before throwing (the `Release` emitted after the conversion only runs on success).
+pub(crate) const MODE_OWNS_OPERAND_BOX: i64 = 4;
 
 builtin! {
     contract: "__elephc_closure_from_callable",
@@ -93,7 +96,7 @@ pub(crate) fn lower_closure_conversion(
     let result = ctx.emit_value(
         Op::NormalizeCallable,
         vec![operand],
-        Some(Immediate::I64(mode)),
+        Some(Immediate::I64(if boxed { mode | MODE_OWNS_OPERAND_BOX } else { mode })),
         PhpType::Callable,
         Op::NormalizeCallable.default_effects(),
         Some(call.span),
