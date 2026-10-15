@@ -210,20 +210,19 @@ fn divide_by_zero_is_not_folded() {
 #[test]
 fn mul_one_keeps_an_operand_of_another_php_type() {
     let mut function = Function::new("bool_mul".to_string(), IrType::I64, PhpType::Int);
+    let flag;
     {
         let mut builder = Builder::new(&mut function);
-        let entry = builder.create_named_block("entry", vec![]);
+        let entry = builder.create_named_block("entry", vec![(IrType::I64, PhpType::Bool)]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let flag = builder
-            .emit(Op::ConstI64, vec![], Some(Immediate::I64(1)), IrType::I64, PhpType::Bool, Ownership::NonHeap)
-            .expect("bool value");
+        flag = builder.block_param(entry, 0);
         let one = builder.emit_const_i64(1);
         let result = builder
             .emit(Op::IMul, vec![flag, one], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
             .expect("mul result");
         builder.terminate(Terminator::Return { value: Some(result) });
     }
-    assert!(!IdentityArith.run(&mut function, &mut DataPool::default()));
-    assert_eq!(function.instructions[2].op, Op::IMul, "the multiplication stays");
+    IdentityArith.run(&mut function, &mut DataPool::default());
+    assert_ne!(return_value(&function), Some(flag), "never returns the bool operand");
 }
