@@ -77,7 +77,7 @@ echo inner();",
 }
 
 /// `??=` with an include value runs the file only while the target is null, for a static
-/// property (Carbon `Language::$languagesNames`), a function `static` and a local.
+/// property (Carbon `Language::$languagesNames`) and a local.
 #[test]
 fn test_null_coalesce_assign_include() {
     let out = compile_and_run_files(
@@ -85,10 +85,8 @@ fn test_null_coalesce_assign_include() {
             (
                 "main.php",
                 "<?php class Language { protected static $names;
-    public static function names(): array { static::$names ??= require 'table.php'; return static::$names; } }
+    public static function names() { static::$names ??= require 'table.php'; return static::$names; } }
 echo Language::names()['t'], Language::names()['t'], '|';
-function parents(): array { static $parents; $parents ??= require 'table.php'; return $parents; }
-echo parents()['t'], parents()['t'], '|';
 $local = null; $local ??= require 'num.php'; $local ??= require 'table.php'; echo $local;",
             ),
             ("table.php", "<?php echo '[t]'; return ['t' => 7];"),
@@ -96,7 +94,25 @@ $local = null; $local ??= require 'num.php'; $local ??= require 'table.php'; ech
         ],
         "main.php",
     );
-    assert_eq!(out, "[t]77|[t]77|32");
+    assert_eq!(out, "[t]77|32");
+}
+
+/// An include on the lazy side of `?:`, `&&` and `||` runs only when PHP evaluates that side.
+#[test]
+fn test_include_in_short_circuit_operands() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $e = ''; $a = $e ?: require 'num.php'; $b = 'set' ?: require 'num.php';
+$t = true && require 'num.php'; $f = false && require 'num.php'; $o = true || require 'num.php';
+echo $a, '|', $b, '|'; var_dump($t, $f, $o);",
+            ),
+            ("num.php", "<?php echo '[n]'; return 32;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[n][n]32|set|bool(true)\nbool(false)\nbool(true)\n");
 }
 
 /// An include in a ternary branch runs only when that branch is taken.

@@ -149,3 +149,73 @@ fn test_error_include_property_path_is_explicitly_rejected() {
 
 // --- INF/NAN function errors ---
 
+
+/// Verifies a runtime-dynamic path keeps its diagnostic when the include is an EXPRESSION in
+/// any position (Laravel's `(fn () => require $path)()`, `tap(require $x, ...)`,
+/// `$cache[$p] ??= require $p`): the parser accepts them, the resolver refuses the path.
+#[test]
+fn test_error_include_expression_dynamic_path_is_rejected() {
+    for src in [
+        "<?php function load($path) { return (fn () => require $path)(); }",
+        "<?php function load($path) { return array_merge(require $path, []); }",
+        "<?php function load($path) { static $c = []; return $c[$path] ??= require $path; }",
+        "<?php function load($f) { return file_exists($f) ? (include $f) : false; }",
+    ] {
+        expect_runtime_dynamic_include_path_error(src, "is resolved at runtime");
+    }
+}
+
+/// Verifies an include that would have to run after an effectful operand of the same statement
+/// is a compile error rather than a reordering (hoisting it in front would run the file first).
+#[test]
+fn test_error_include_after_effectful_operand_is_rejected() {
+    let err = resolve_files_error(
+        &[
+            ("main.php", "<?php function f() { echo 'f'; return 1; } $x = f() + require 'a.php';"),
+            ("a.php", "<?php return 2;"),
+        ],
+        "main.php",
+    );
+    assert!(
+        err.message.contains("would change PHP's evaluation order"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+/// Verifies includes in positions whose statements cannot be expanded (a loop condition, an
+/// `elseif`, a nested `for` clause, a `match` arm) fail with a clear diagnostic instead of
+/// reaching the checker.
+#[test]
+fn test_error_include_expression_in_unsupported_position() {
+    for (src, expected) in [
+        ("<?php while (include 'a.php') { break; }", "not supported in this position yet"),
+        (
+            "<?php $c = 0; if ($c) {} elseif (require 'a.php') { echo 1; }",
+            "not supported in this position yet",
+        ),
+        ("<?php for ($i = 1 + include 'a.php'; false; ) {}", "not supported in this position yet"),
+        ("<?php $v = match (1) { 1 => require 'a.php', default => 0 };", "`match` arm"),
+    ] {
+        let err = resolve_files_error(&[("main.php", src), ("a.php", "<?php return 1;")], "main.php");
+        assert!(err.message.contains(expected), "{src}: unexpected error message: {}", err.message);
+    }
+}
+
+/// Verifies `static $x; $x ??= require F;` is refused: the conditional hoist leaves a `mixed`
+/// value, which elephc does not persist into an untyped `static` local.
+#[test]
+fn test_error_include_coalesce_into_static_local_is_rejected() {
+    let err = resolve_files_error(
+        &[
+            ("main.php", "<?php function p() { static $q; $q ??= require 'a.php'; return $q; } p();"),
+            ("a.php", "<?php return [1];"),
+        ],
+        "main.php",
+    );
+    assert!(
+        err.message.contains("assigned to `static $q`"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
