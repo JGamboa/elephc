@@ -9,6 +9,12 @@
 
 use super::*;
 
+/// Adds PHP's public `name` property to a member reflection owner.
+fn with_reflection_name_property(mut class: FlattenedClass) -> FlattenedClass {
+    add_reflection_name_property(&mut class);
+    class
+}
+
 /// Injects the built-in reflection types into `class_map` after verifying none are already
 /// declared. Each type is a dummy shell; runtime population happens in codegen. Returns an error
 /// if any reflection name is already in use.
@@ -134,7 +140,7 @@ pub(crate) fn inject_builtin_reflection(
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
         "ReflectionMethod".to_string(),
-        builtin_reflection_owner_class(
+        with_reflection_name_property(builtin_reflection_owner_class(
             "ReflectionMethod",
             true,
             vec![
@@ -146,18 +152,18 @@ pub(crate) fn inject_builtin_reflection(
                     false,
                 ),
             ],
-        ),
+        )),
     );
     class_map.insert(
         "ReflectionProperty".to_string(),
-        builtin_reflection_owner_class(
+        with_reflection_name_property(builtin_reflection_owner_class(
             "ReflectionProperty",
             true,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
                 ("property_name", Some(TypeExpr::Str), None, false),
             ],
-        ),
+        )),
     );
     class_map.insert(
         "ReflectionParameter".to_string(),

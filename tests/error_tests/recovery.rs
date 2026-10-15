@@ -426,15 +426,6 @@ fn test_parser_recovery_after_consumed_semicolon_keeps_next_statement() {
     assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
 }
 
-/// Verifies `$callback(...)` reports a targeted message instead of "Unexpected token: RParen".
-#[test]
-fn test_error_first_class_callable_on_variable_is_rejected_clearly() {
-    expect_error(
-        "<?php $f = 'strlen'; $g = $f(...);",
-        "First-class callable syntax on a variable",
-    );
-}
-
 /// Verifies an expression-position append through a dynamic property name is rejected with a
 /// targeted message (an append to a variable or property is now supported).
 #[test]

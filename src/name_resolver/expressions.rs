@@ -432,7 +432,8 @@ pub(super) fn resolve_expr(
                         if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
                             && !symbols.declares_class_like(&name.as_canonical())
                 )
-                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+                // `'Class::method'` is converted when the call runs, like any other value.
+                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(name) if !name.contains("::"))
             {
                 let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
                     unreachable!("Closure::fromCallable literal guard must hold")
@@ -445,6 +446,22 @@ pub(super) fn resolve_expr(
                         symbols,
                     ),
                 )))
+            } else if method_key == "fromcallable"
+                && resolved_args.len() == 1
+                && !matches!(&resolved_args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+                && matches!(
+                    &resolved_receiver,
+                    StaticReceiver::Named(name)
+                        if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
+                            && !symbols.declares_class_like(&name.as_canonical())
+                )
+            {
+                // A runtime callable value: build the Closure from whatever it names when the
+                // call runs, throwing PHP's TypeError when it names nothing callable.
+                ExprKind::FunctionCall {
+                    name: resolved_name("__elephc_closure_from_callable_type_error".to_string()),
+                    args: resolved_args,
+                }
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,

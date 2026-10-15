@@ -895,6 +895,7 @@ fn validate_opcode_rules(
         DynamicPropUnset => check_count(inst_id, inst, 2, "2"),
         CallablePtr
         | NormalizeCallable
+        | CallableReflectionMeta
         | PdoAdapterAddr
         | DynamicClassHasConstructor
         | DynamicPdoStatementClassStatus

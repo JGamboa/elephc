@@ -956,6 +956,27 @@ fn test_parse_first_class_callable_function() {
 }
 
 #[test]
+// Verifies that `<?php $g = $cb(...);` parses to the internal Closure conversion over the
+// variable, the `Closure::fromCallable($cb)` semantics PHP gives first-class callable syntax
+// on a runtime value.
+/// Verifies that parse first class callable on a variable.
+fn test_parse_first_class_callable_on_variable() {
+    let stmts = parse_source("<?php $g = $cb(...);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FunctionCall { name, args } => {
+                assert_eq!(name.as_str(), "__elephc_closure_from_callable");
+                assert!(name.is_fully_qualified());
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0].kind, ExprKind::Variable("cb".to_string()));
+            }
+            other => panic!("Expected the Closure conversion call, got {:?}", other),
+        },
+        other => panic!("Expected assignment, got {:?}", other),
+    }
+}
+
+#[test]
 // Verifies that `<?php echo __FUNCTION__;` parses an echo statement whose expression is
 // the magic constant `MagicConstant::Function`.
 /// Verifies that parse dunder function magic constant.

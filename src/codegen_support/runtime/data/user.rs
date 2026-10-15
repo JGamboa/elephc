@@ -2846,8 +2846,9 @@ fn emit_user_wrapper_vtable(
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
-/// Only public instance methods are included. Each method name is emitted as an
-/// ASCII label; the table is indexed by class_id at runtime.
+/// Public instance methods and public static methods are included: PHP accepts
+/// `[$object, 'staticMethod']` as a callable. Each method name is emitted as an ASCII
+/// label; the table is indexed by class_id at runtime.
 fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
     let mut public_methods: Vec<&String> = class_info
         .methods
@@ -2859,7 +2860,14 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
         })
         .collect();
+    public_methods.extend(class_info.static_methods.keys().filter(|method_name| {
+        class_info
+            .static_method_visibilities
+            .get(*method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+    }));
     public_methods.sort();
+    public_methods.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     for method_name in &public_methods {
         out.push_str(&format!(
             ".globl _class_callable_method_name_{0}_{1}\n_class_callable_method_name_{0}_{1}:\n    .ascii \"{2}\"\n",

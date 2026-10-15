@@ -3378,6 +3378,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew
+                    // Normalization returns its own reference to the descriptor (a retained
+                    // existing Closure or a freshly bound one); the consumer must take it over.
+                    | Op::NormalizeCallable
                     | Op::BufferNew
                     | Op::GeneratorNew
                     | Op::CatchBind
