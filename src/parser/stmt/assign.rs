@@ -12,7 +12,6 @@ mod compound;
 mod list;
 mod locals;
 mod postfix;
-mod scoped_include;
 mod simple;
 
 pub(crate) use list::{

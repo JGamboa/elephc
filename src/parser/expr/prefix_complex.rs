@@ -946,6 +946,7 @@ pub(super) fn parse_new_object(
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
         if let Some(name_expr) = parse_new_static_property_reference(tokens, pos, &receiver, span) {
+            let name_expr = extend_new_class_reference(tokens, pos, name_expr)?;
             return finish_dynamic_new(tokens, pos, name_expr, span);
         }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
@@ -1008,6 +1009,21 @@ pub(super) fn parse_new_object(
         ));
     }
 
+    // `new (expr)(args)`: PHP 8's `class_name_reference: '(' expr ')'`. The expression yields
+    // the class name at runtime, exactly like `new $var`, so it shares the dynamic `new`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        *pos += 1;
+        let name_expr = parse_expr(tokens, pos)?;
+        if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::RParen)) {
+            return Err(CompileError::new(
+                span,
+                "Expected ')' after the class-name expression of 'new'",
+            ));
+        }
+        *pos += 1;
+        return finish_dynamic_new(tokens, pos, name_expr, span);
+    }
+
     let (class_name, type_args) = crate::parser::stmt::parse_inherited_name(
         tokens,
         pos,
@@ -1017,6 +1033,7 @@ pub(super) fn parse_new_object(
     if type_args.is_empty() {
         let receiver = StaticReceiver::Named(class_name.clone());
         if let Some(name_expr) = parse_new_static_property_reference(tokens, pos, &receiver, span) {
+            let name_expr = extend_new_class_reference(tokens, pos, name_expr)?;
             return finish_dynamic_new(tokens, pos, name_expr, span);
         }
     }
@@ -1066,10 +1083,18 @@ fn parse_new_variable_reference_tail(
     let mut extended = false;
     loop {
         let span = expr.span;
+        // `->class`, `->list`...: PHP 8's semi-reserved rule makes any keyword a property name
+        // here too (faker's `new $this->class()`).
+        let arrow_member = match (tokens.get(*pos), tokens.get(*pos + 1)) {
+            (Some((Token::Arrow | Token::QuestionArrow, _)), Some((token, metadata))) => {
+                crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+            }
+            _ => None,
+        };
         match (tokens.get(*pos).map(|(t, _)| t), tokens.get(*pos + 1).map(|(t, _)| t)) {
-            (Some(Token::Arrow | Token::QuestionArrow), Some(Token::Identifier(property))) => {
+            (Some(Token::Arrow | Token::QuestionArrow), Some(_)) if arrow_member.is_some() => {
                 let nullsafe = matches!(tokens[*pos].0, Token::QuestionArrow);
-                let property = property.clone();
+                let property = arrow_member.expect("guarded by the match arm");
                 *pos += 2;
                 let object = Box::new(expr);
                 expr = Expr::new(
@@ -1109,6 +1134,24 @@ fn parse_new_variable_reference_tail(
         extended = true;
     }
     Ok(extended.then_some(expr))
+}
+
+/// Extends a `new C::$prop` class-name reference with the `[dim]`, `->prop` and `::$prop` links
+/// PHP's `new_variable` grammar allows after it, as in `new static::$classes[static::class]($m)`
+/// (Eloquent `HasCollection`).
+fn extend_new_class_reference(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    name_expr: Expr,
+) -> Result<Expr, CompileError> {
+    let mut probe = *pos;
+    match parse_new_variable_reference_tail(tokens, &mut probe, name_expr.clone())? {
+        Some(extended) => {
+            *pos = probe;
+            Ok(extended)
+        }
+        None => Ok(name_expr),
+    }
 }
 
 /// Finishes `new <name expression>` with optional constructor arguments as a dynamic `new`.

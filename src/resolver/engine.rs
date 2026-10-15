@@ -106,6 +106,24 @@ pub(super) fn resolve_stmts(
             result.extend(expanded);
             continue;
         }
+        // An include anywhere else in the statement's own expressions (an argument, an operand,
+        // a `??=` value...) is bound to a hidden local first: each hoisted `$tmp = include F;`
+        // goes through this loop (and is expanded above), then the rewritten statement is
+        // resolved as usual.
+        let stmt = match super::value_include_hoist::hoist_value_includes(&stmt, &state.static_locals)? {
+            Some((hoisted, rewritten)) => {
+                result.extend(resolve_stmts(
+                    hoisted,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?);
+                rewritten
+            }
+            None => stmt,
+        };
 
         let stmt = resolve_stmt_exprs(
             stmt,
@@ -132,6 +150,10 @@ pub(super) fn resolve_stmts(
                     discard_first_include_return(&mut resolved);
                     result.extend(resolved);
                 }
+            }
+            StmtKind::StaticVar { name, .. } => {
+                state.static_locals.insert(name.clone());
+                result.push(stmt);
             }
             StmtKind::ConstDecl { name, value } => {
                 if let Ok(s) = fold_include_path(value, state) {
