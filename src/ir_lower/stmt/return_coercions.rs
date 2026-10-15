@@ -107,16 +107,19 @@ fn verify_declared_scalar_return(
     let numeric = source.codegen_repr() == PhpType::Float
         || source.is_int_float_union()
         || value_expr.is_some_and(|expr| expr_is_numeric(ctx, expr));
+    // A plain `int` declaration from any `mixed` source also takes the boundary op: it verifies
+    // every tag inline (numeric strings through php-src's `is_numeric_string` classifier, so an
+    // out-of-range spelling throws) and names an object's class, exactly like the helper.
+    if mask == rc::MASK_INT && (numeric || source.codegen_repr() == PhpType::Mixed) {
+        return Some(emit_int_return_boundary(ctx, value, span, strict, mask));
+    }
     if numeric {
-        if mask == rc::MASK_INT {
-            return Some(emit_int_return_boundary(ctx, value, span, strict));
-        }
         if mask == rc::MASK_FLOAT {
             // int widens to float in both modes and a float passes, so the cast is exact.
             return Some(coerce_return_scalar_source(ctx, value, span, coerce_to_float));
         }
         if mask == rc::MASK_INT | rc::MASK_NULL && ctx.return_type == IrType::TaggedScalar {
-            let verified = emit_int_return_boundary(ctx, value, span, strict);
+            let verified = emit_int_return_boundary(ctx, value, span, strict, mask);
             return Some(coerce_to_tagged_scalar(ctx, verified, span));
         }
     }
@@ -197,12 +200,17 @@ fn emit_int_return_boundary(
     value: LoweredValue,
     span: Option<Span>,
     strict: bool,
+    mask: u32,
 ) -> LoweredValue {
     let source = ctx.builder.value_php_type(value.value).codegen_repr();
     if source == PhpType::Int {
         return value;
     }
-    let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        ctx.owner_name(),
+        crate::return_coerce_prelude::declared_type_name(mask)
+    );
     let data = ctx.intern_string(&prefix);
     let immediate = if strict {
         Immediate::ProfiledData { data, strict_php: true }

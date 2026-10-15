@@ -18,8 +18,8 @@ use crate::ir::Instruction;
 
 use super::super::context::FunctionContext;
 use super::enums::{
-    emit_mixed_tag_branch, emit_move_reg, emit_string_result_to_int_checked,
-    emit_throw_int_arg_type_error,
+    emit_mixed_tag_branch, emit_move_reg, emit_throw_int_arg_type_error,
+    emit_throw_type_error_from_string_result,
 };
 use super::store_if_result;
 use crate::codegen::{CodegenIrError, Result};
@@ -55,12 +55,14 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     };
     // The same verification guards a family-boxed `int` PARAMETER on method entry
     // (`ir_lower::stmt::coerce_boxed_family_param`), whose PHP message says "given".
-    let is_argument = ctx
+    let prefix_text = ctx
         .module
         .data
         .strings
         .get(data_id.as_raw() as usize)
-        .is_some_and(|prefix| prefix.contains("(): Argument #"));
+        .cloned()
+        .unwrap_or_default();
+    let is_argument = prefix_text.contains("(): Argument #");
     let word = |ty: &str| -> String {
         format!("{} {}", ty, if is_argument { "given" } else { "returned" })
     };
@@ -135,8 +137,14 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     emit_mixed_tag_branch(ctx, tag_reg, 5, &l_array);
     emit_mixed_tag_branch(ctx, tag_reg, 9, &l_resource);
     emit_mixed_tag_branch(ctx, tag_reg, 10, &l_callable);
-    // Any other tag is an object-like value; each arm throws and never falls through.
-    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("object"));
+    // Any other tag is an object; php-src names its class ("C returned"), read from the same
+    // class-name table `get_class()` uses. Each arm throws and never falls through.
+    emit_move_reg(ctx, tag_reg, lo_reg);
+    super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, tag_reg, "object");
+    super::runtime_class_messages::emit_concat_static_prefix(ctx, &prefix_text);
+    super::runtime_class_messages::emit_concat_static_suffix(ctx, &word(""));
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    emit_throw_type_error_from_string_result(ctx);
     // int / bool: the payload is already the integer value.
     ctx.emitter.label(&l_scalar);
     emit_move_reg(ctx, tag_reg, lo_reg);
@@ -149,16 +157,29 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&l_float_fail);
     emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("float"));
-    // string: move the payload ptr/len into the string-result regs, then coerce strictly.
+    // string: php-src's `is_numeric_string` verdict. `__rt_str_numeric_value` answers the tag
+    // (0 int, 2 float) in the int-result register, the exact int or the double bits in the
+    // payload-low register, and a whole-string status in the payload-high register. An integer
+    // spelling that overflows comes back as a float, so `"9223372036854775808"` and `"1e100"`
+    // fail the float range check and throw instead of saturating.
     ctx.emitter.label(&l_string);
-    let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
-    emit_move_reg(ctx, string_ptr_reg, lo_reg);
-    emit_move_reg(ctx, string_len_reg, hi_reg);
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    // The pointer moves first: on AArch64 the length argument register is the payload register.
+    emit_move_reg(ctx, arg0, lo_reg);
+    emit_move_reg(ctx, arg1, hi_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_str_numeric_value");
     let string_invalid = ctx.next_label("ret_boundary_int_string_invalid");
-    emit_string_result_to_int_checked(ctx, &string_invalid);
+    let string_int = ctx.next_label("ret_boundary_int_string_int");
+    emit_branch_if_nonzero(ctx, hi_reg, &string_invalid);
+    emit_mixed_tag_branch(ctx, tag_reg, 0, &string_int);
+    emit_float_bits_to_float_result(ctx, lo_reg);
+    emit_float_result_fits_i64_or_jump(ctx, &string_invalid);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&string_int);
+    emit_move_reg(ctx, tag_reg, lo_reg);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&string_invalid);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
     emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, &word("string"));
     if strict {
         ctx.emitter.label(&l_bool_strict);

@@ -427,3 +427,77 @@ echo (new C())->n(), " ", (new C())->pc(), "\n";
         "P P,P|C\n"
     );
 }
+
+/// Verifies a coercive `int` return from a `mixed` array element (the inline boundary op): ints,
+/// bools, integral floats and numeric strings coerce, out-of-range and non-numeric strings throw
+/// "string returned" instead of saturating, and an object names its class.
+#[test]
+fn test_return_coercion_weak_int_from_mixed_property_inline() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+class Bag { private array $items = []; public function set(int $k, $v): void { $this->items[$k] = $v; } public function get(int $k): int { return $this->items[$k]; } }
+$b = new Bag();
+foreach ([7, true, 2.0, " 12", "12 ", "9223372036854775807", "9223372036854775808", "1e100", "-1e100", "12abc", "", null, [1], new Box()] as $i => $v) {
+  $b->set($i, $v);
+  try { var_dump($b->get($i)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(7)\nint(1)\nint(2)\nint(12)\nint(12)\nint(9223372036854775807)\nBag::get(): Return value must be of type int, string returned\nBag::get(): Return value must be of type int, string returned\nBag::get(): Return value must be of type int, string returned\nBag::get(): Return value must be of type int, string returned\nBag::get(): Return value must be of type int, string returned\nBag::get(): Return value must be of type int, null returned\nBag::get(): Return value must be of type int, array returned\nBag::get(): Return value must be of type int, Box returned\n"
+    );
+}
+
+/// Verifies the arithmetic fast path of a `?int` return names `?int` in its `TypeError`.
+#[test]
+fn test_return_coercion_nullable_int_arithmetic_message() {
+    let out = compile_and_run(
+        r#"<?php
+function nadd(?int $a): ?int { return $a + 1; }
+var_dump(nadd(null), nadd(4));
+try { nadd(PHP_INT_MAX); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(5)\nnadd(): Return value must be of type ?int, float returned\n"
+    );
+}
+
+/// Verifies `"-0.0"` returned through `int|float` or `float` keeps its sign, like php.
+#[test]
+fn test_return_coercion_negative_zero_float_string() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $v): int|float { return $v; }
+function g(mixed $v): float { return $v; }
+var_dump(f("-0.0"), g("-0.0"), f("-0"), f("1.50"), f("-1e3"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "float(-0)\nfloat(-0)\nint(0)\nfloat(1.5)\nfloat(-1000)\n"
+    );
+}
+
+/// Verifies a `__toString()` that throws during a coercive string return surfaces as the return
+/// `TypeError`, with the original exception as its previous, like php.
+#[test]
+fn test_return_coercion_throwing_tostring_chains_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Thrower { public function __toString(): string { throw new RuntimeException("boom"); } }
+function s(mixed $v): string { return $v; }
+function ns(mixed $v): ?string { return $v; }
+foreach (['s', 'ns'] as $f) {
+  try { $f(new Thrower()); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), " | previous: ", get_class($e->getPrevious()), " ", $e->getPrevious()->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: s(): Return value must be of type string, Thrower returned | previous: RuntimeException boom\nTypeError: ns(): Return value must be of type ?string, Thrower returned | previous: RuntimeException boom\n"
+    );
+}

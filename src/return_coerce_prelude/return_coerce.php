@@ -52,7 +52,8 @@ function __elephc_return_coerce(mixed $value, int $mask, bool $strict, string $p
                     return (float) $number;
                 }
                 if (($mask & 2) !== 0) {
-                    return $number;
+                    // `(float)` keeps the spelling's sign: `"-0.0" + 0` is `+0.0` in IEEE.
+                    return (float) $value;
                 }
                 if (__elephc_return_float_fits_int($number)) {
                     return (int) $number;
@@ -86,7 +87,13 @@ function __elephc_return_coerce(mixed $value, int $mask, bool $strict, string $p
         // php-src `zend_parse_arg_str_weak()`: coercive mode converts an object with
         // `__toString()` when the declaration accepts a string.
         if (!$strict && ($mask & 4) !== 0 && $value instanceof Stringable) {
-            return (string) $value;
+            // A throwing `__toString()` surfaces as the return `TypeError`, with the original
+            // exception chained as its previous (php-src's `zend_verify_return_error`).
+            try {
+                return (string) $value;
+            } catch (Throwable $error) {
+                throw new TypeError($prefix . get_class($value) . " returned", 0, $error);
+            }
         }
         throw new TypeError($prefix . get_class($value) . " returned");
     }
