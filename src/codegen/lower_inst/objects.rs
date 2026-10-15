@@ -234,7 +234,7 @@ pub(super) use fiber_dynamic_entry::{
 pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
-    lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
+    lower_bind_prop_ref_cell, lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;

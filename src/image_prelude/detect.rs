@@ -610,6 +610,9 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_image(index) || expr_refs_image(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_image(target) || expr_refs_image(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_image(target) || expr_refs_image(value)
         }

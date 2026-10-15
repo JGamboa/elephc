@@ -91,6 +91,11 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             .with_side_effects()
             .with_may_throw()
             .with_writes_globals(),
+        StmtKind::RefAssignPlace { target, source } => expr_effect(target)
+            .combine(expr_effect(source))
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals(),
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }

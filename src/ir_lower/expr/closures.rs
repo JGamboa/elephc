@@ -445,6 +445,14 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         // `$name = &$x` rebinds the name; `$x = &$name` aliases it, and the alias can be stored
         // through afterwards, so either side counts.
         StmtKind::RefAssign { target, source } => target == name || expr_writes_local(source, name),
+        // `$name[k] = &$x` stores into `$name`; `$o->p = &$name` puts `$name` in a reference set
+        // the place can write through later. Either side counts.
+        StmtKind::RefAssignPlace { target, source } => {
+            reference_place_root_is(target, name)
+                || expr_writes_local(target, name)
+                || expr_is_variable(source, name)
+                || expr_writes_local(source, name)
+        }
         StmtKind::Foreach { array, key_var, value_var, body, .. } => {
             value_var == name
                 || key_var.as_deref() == Some(name)
@@ -701,6 +709,15 @@ fn expr_is_variable(expr: &Expr, name: &str) -> bool {
     matches!(&expr.kind, ExprKind::Variable(variable) if variable == name)
 }
 
+/// Returns true when an array-element reference place (`$name[a][b]`) is rooted at `name`.
+fn reference_place_root_is(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(variable) => variable == name,
+        ExprKind::ArrayAccess { array, .. } => reference_place_root_is(array, name),
+        _ => false,
+    }
+}
+
 /// Returns true when an `instanceof` target can store into the local named `name`.
 fn instance_of_target_writes_local(target: &InstanceOfTarget, name: &str) -> bool {
     match target {
@@ -742,6 +759,9 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_contains_eval_call(index) || expr_contains_eval_call(value)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_contains_eval_call(target) || expr_contains_eval_call(source)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_contains_eval_call(target) || expr_contains_eval_call(value)

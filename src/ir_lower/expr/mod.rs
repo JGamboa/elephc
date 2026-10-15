@@ -80,6 +80,7 @@ mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod reference_places;
 mod reference_returns;
 use reference_returns::{
     begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
@@ -202,6 +203,7 @@ pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
+pub(crate) use reference_places::{install_escaping_ref_params, lower_ref_assign_place};
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,

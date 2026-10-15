@@ -523,6 +523,10 @@ pub(crate) struct Checker {
     /// Unconditional reference unsets that may retire a promoted ordinary local's binding.
     /// These do not relax escaped-reference type checking or ordinary kill eligibility.
     pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
+    /// By-reference parameters a body binds into a property or array element
+    /// (`$this->p = &$param`), as (parameter name, position). See
+    /// `CheckResult::escaping_ref_params`.
+    pub escaping_ref_params: HashSet<(String, usize)>,
     /// Removed detach keys still participate in cross-file ambiguity checks.
     pub retired_ref_detach_sites: HashSet<(Span, String)>,
     /// Statement-form assignments the checker re-bound to a fresh binding of an incompatible
@@ -1331,6 +1335,7 @@ fn check_types_on_compiler_stack(
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_ref_detach_sites: checker.local_ref_detach_sites,
+        escaping_ref_params: checker.escaping_ref_params,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
     })

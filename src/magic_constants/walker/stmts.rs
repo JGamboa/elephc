@@ -181,6 +181,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             index: walk_expr(index, pass),
             value: walk_expr(value, pass),
         },
+        StmtKind::RefAssignPlace { target, source } => StmtKind::RefAssignPlace {
+            target: walk_expr(target, pass),
+            source: walk_expr(source, pass),
+        },
         StmtKind::NestedArrayAssign { target, value } => StmtKind::NestedArrayAssign {
             target: walk_expr(target, pass),
             value: walk_expr(value, pass),

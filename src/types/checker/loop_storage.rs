@@ -650,6 +650,13 @@ fn collect_value_assignment_stmt<'a>(
             collect_value_assignments_from_expr(source, out);
             out.push((target, AssignedValue::Opaque));
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            collect_value_assignments_from_expr(target, out);
+            collect_value_assignments_from_expr(source, out);
+            if let ExprKind::Variable(name) = &source.kind {
+                out.push((name, AssignedValue::Opaque));
+            }
+        }
         StmtKind::ListUnpack { vars, value } => {
             collect_value_assignments_from_expr(value, out);
             out.extend(

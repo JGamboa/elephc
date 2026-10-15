@@ -770,6 +770,15 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_obj_next");                                  // continue with the next property
 
     emitter.label("__rt_vd_obj_value");
+    // -- a shared reference property prints PHP's `&` marker before its value --
+    emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
+    emitter.instruction("ldr x0, [x11, #24]");                                  // load the property value tag
+    emitter.instruction(&format!("tst x0, #{}", crate::codegen_support::sentinels::REFERENCE_PROPERTY_TAG_FLAG)); // does the slot alias a reference?
+    emitter.instruction("b.eq __rt_vd_obj_value_load");                         // plain slots print no marker
+    emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
+    emitter.instruction("ldr x0, [x13]");                                       // the cell (or borrowed address) the slot holds
+    emitter.instruction("bl __rt_vd_mark_reference");                           // arm `&` when the reference is shared
+    emitter.label("__rt_vd_obj_value_load");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes/objects (tags 4/5/6) on its own --
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
@@ -777,6 +786,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x0", "x1", "x2");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_var_dump_value");                              // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 
@@ -852,10 +862,18 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_value_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
+    emitter.instruction(&format!("test QWORD PTR [r11 + 24], {}", crate::codegen_support::sentinels::REFERENCE_PROPERTY_TAG_FLAG)); // does the slot alias a reference?
+    emitter.instruction("jz __rt_vd_obj_value_load_x86");                       // plain slots print no marker
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // the cell (or borrowed address) the slot holds
+    emitter.instruction("call __rt_vd_mark_reference");                         // arm `&` when the reference is shared
+    emitter.label("__rt_vd_obj_value_load_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_var_dump_value");                            // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 

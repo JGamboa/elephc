@@ -154,6 +154,13 @@ pub struct CheckResult {
     /// Unlike binding kills, these preserve the checker's escaped-reference type restrictions.
     /// Lowering keeps the old capture storage type and retires only this binding's cell owner.
     pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
+    /// By-reference parameters whose body binds them into a property or array element
+    /// (`$this->p = &$param`), as (parameter name, position). The binding needs a managed
+    /// reference cell, so every call site whose argument is a plain local promotes that local
+    /// before the call instead of lending its frame slot. Keyed by name and position rather than
+    /// by callee because call sites see only the selected signature; a spurious match only
+    /// promotes a local that did not need it.
+    pub escaping_ref_params: HashSet<(String, usize)>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> the SET of local NAMES re-bound at that position, so EIR lowering mints a
     /// new slot there. Read by `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the

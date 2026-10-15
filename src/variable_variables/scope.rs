@@ -124,6 +124,19 @@ impl Visitor for Collector {
             StmtKind::ArrayAssign { array, index, .. } if array == FRAME_LOCAL => {
                 self.frame.frame_writes.push(index.clone());
             }
+            StmtKind::RefAssignPlace { target, source } => {
+                if let ExprKind::Variable(name) = &source.kind {
+                    let name = name.clone();
+                    self.frame.add_opaque(&name);
+                }
+                for place in [target, source] {
+                    if let Some(root) = super::place_frame_root(place) {
+                        if let Some(name) = super::frame_access_name(root) {
+                            self.frame.frame_writes.push(name.clone());
+                        }
+                    }
+                }
+            }
             StmtKind::NestedArrayAssign { target, .. } => {
                 if let Some(root) = super::place_frame_root(target) {
                     if let Some(name) = super::frame_access_name(root) {

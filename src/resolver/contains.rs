@@ -42,6 +42,9 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_has_includes(index) || expr_has_includes(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_has_includes(target) || expr_has_includes(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
         }

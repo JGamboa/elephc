@@ -12,6 +12,7 @@ mod compound;
 mod list;
 mod locals;
 mod postfix;
+mod reference_places;
 mod simple;
 
 pub(crate) use list::{
@@ -45,3 +46,4 @@ pub(super) use postfix::{
     try_parse_scoped_property_assignment,
 };
 pub(super) use simple::parse_variable_stmt;
+pub(crate) use reference_places::lower_place_ref_assign;

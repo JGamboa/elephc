@@ -1103,6 +1103,7 @@ pub(super) fn reference_assignment_expr(
         ExprKind::Variable(_)
             | ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::FunctionCall { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticMethodCall { .. }

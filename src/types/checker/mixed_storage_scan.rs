@@ -858,6 +858,12 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
             disqualify_root(facts, source);
             collect_expr(checker, source, depth, facts);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            disqualify_root(facts, target);
+            disqualify_root(facts, source);
+            collect_expr(checker, target, depth, facts);
+            collect_expr(checker, source, depth, facts);
+        }
         StmtKind::ArrayAssign { array, index, value } => {
             disqualify(facts, array);
             collect_expr(checker, index, depth, facts);

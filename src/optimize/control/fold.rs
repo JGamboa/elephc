@@ -38,6 +38,11 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             value: fold_expr(value),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
+        // Only the place's index expressions fold; the source stays an lvalue, like `RefAssign`.
+        StmtKind::RefAssignPlace { target, source } => StmtKind::RefAssignPlace {
+            target: fold_expr(target),
+            source,
+        },
         StmtKind::If {
             condition,
             then_body,
