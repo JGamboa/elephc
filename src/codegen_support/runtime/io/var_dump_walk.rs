@@ -890,9 +890,51 @@ pub fn emit_var_dump_pad(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_pad_loop");                                  // continue padding
 
     emitter.label("__rt_vd_pad_done");
+    abi::emit_symbol_address(emitter, "x0", "_vd_ref_mark");                    // resolve the pending reference-marker flag
+    emitter.instruction("ldr x1, [x0]");                                        // is this value line a shared reference?
+    emitter.instruction("cbz x1, __rt_vd_pad_exit");                            // ordinary values print no marker
+    emitter.instruction("str xzr, [x0]");                                       // the marker belongs to this one line
+    abi::emit_symbol_address(emitter, "x1", "_vd_amp");                         // buffer = PHP's `&` reference marker
+    emitter.instruction("mov x2, #1");                                          // the marker is one byte
+    emitter.instruction("bl __rt_vd_write");                                    // write `&` between the indentation and the value
+    emitter.label("__rt_vd_pad_exit");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the pad frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emit_vd_mark_reference_aarch64(emitter);
+}
+
+/// `__rt_vd_mark_reference`: arm `_vd_ref_mark` when a reference slot is shared.
+///
+/// Input: x0 = the pointer a reference property slot or tag-11 entry holds. A managed cell is
+/// shared when another owner holds it (refcount above one, as PHP prints `&` only for a
+/// reference with more than one holder); a pointer that is not a managed cell is a by-reference
+/// promoted property's borrow of a caller variable, which is shared by construction. Leaf helper:
+/// clobbers only x9-x11.
+fn emit_vd_mark_reference_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_vd_mark_reference");
+    abi::emit_symbol_address(emitter, "x9", "_heap_buf");                       // resolve the managed heap base
+    emitter.instruction("cmp x0, x9");                                          // below the heap: a borrowed caller address
+    emitter.instruction("b.lo __rt_vd_mark_reference_set");                     // borrowed storage is always shared
+    abi::emit_symbol_address(emitter, "x10", "_heap_off");                      // resolve the heap bump offset
+    emitter.instruction("ldr x10, [x10]");                                      // load the heap extent
+    emitter.instruction("add x10, x9, x10");                                    // compute the heap end
+    emitter.instruction("cmp x0, x10");                                         // beyond the heap: a borrowed caller address
+    emitter.instruction("b.hs __rt_vd_mark_reference_set");                     // borrowed storage is always shared
+    emitter.instruction("ldrb w11, [x0, #-8]");                                 // read the allocation's heap kind
+    emitter.instruction(&format!("cmp w11, #{}", crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND)); // is this a managed reference cell?
+    emitter.instruction("b.ne __rt_vd_mark_reference_set");                     // an interior borrow is shared with its owner
+    emitter.instruction("ldr w11, [x0, #-12]");                                 // read the cell's owner count
+    emitter.instruction("cmp w11, #1");                                         // does any other owner share this reference?
+    emitter.instruction("b.ls __rt_vd_mark_reference_done");                    // a sole owner prints as a plain value
+    emitter.label("__rt_vd_mark_reference_set");
+    abi::emit_symbol_address(emitter, "x9", "_vd_ref_mark");                    // resolve the pending reference-marker flag
+    emitter.instruction("mov x10, #1");                                         // request the marker on the next value line
+    emitter.instruction("str x10, [x9]");                                       // arm the marker for `__rt_vd_pad`
+    emitter.label("__rt_vd_mark_reference_done");
+    emitter.instruction("ret");                                                 // return to the walker
 }
 
 /// Emits the Linux x86_64 variant of `__rt_vd_pad`.
@@ -922,9 +964,42 @@ fn emit_var_dump_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_pad_loop_x86");                            // continue padding
 
     emitter.label("__rt_vd_pad_done_x86");
+    abi::emit_symbol_address(emitter, "rax", "_vd_ref_mark");                   // resolve the pending reference-marker flag
+    emitter.instruction("cmp QWORD PTR [rax], 0");                              // is this value line a shared reference?
+    emitter.instruction("je __rt_vd_pad_exit_x86");                             // ordinary values print no marker
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // the marker belongs to this one line
+    abi::emit_symbol_address(emitter, "rsi", "_vd_amp");                        // buffer = PHP's `&` reference marker
+    emitter.instruction("mov rdx, 1");                                          // the marker is one byte
+    emitter.instruction("call __rt_vd_write");                                  // write `&` between the indentation and the value
+    emitter.label("__rt_vd_pad_exit_x86");
     emitter.instruction("add rsp, 16");                                         // release the pad frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+
+    emit_vd_mark_reference_x86_64(emitter);
+}
+
+/// x86_64 variant of `__rt_vd_mark_reference` (input: rdi). Clobbers only r9-r11.
+fn emit_vd_mark_reference_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_vd_mark_reference");
+    abi::emit_symbol_address(emitter, "r9", "_heap_buf");                       // resolve the managed heap base
+    emitter.instruction("cmp rdi, r9");                                         // below the heap: a borrowed caller address
+    emitter.instruction("jb __rt_vd_mark_reference_set_x86");                   // borrowed storage is always shared
+    abi::emit_symbol_address(emitter, "r10", "_heap_off");                      // resolve the heap bump offset
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the heap extent
+    emitter.instruction("add r10, r9");                                         // compute the heap end
+    emitter.instruction("cmp rdi, r10");                                        // beyond the heap: a borrowed caller address
+    emitter.instruction("jae __rt_vd_mark_reference_set_x86");                  // borrowed storage is always shared
+    emitter.instruction(&format!("cmp BYTE PTR [rdi - 8], {}", crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND)); // is this a managed reference cell?
+    emitter.instruction("jne __rt_vd_mark_reference_set_x86");                  // an interior borrow is shared with its owner
+    emitter.instruction("cmp DWORD PTR [rdi - 12], 1");                         // does any other owner share this reference?
+    emitter.instruction("jbe __rt_vd_mark_reference_done_x86");                 // a sole owner prints as a plain value
+    emitter.label("__rt_vd_mark_reference_set_x86");
+    abi::emit_symbol_address(emitter, "r9", "_vd_ref_mark");                    // resolve the pending reference-marker flag
+    emitter.instruction("mov QWORD PTR [r9], 1");                               // arm the marker for `__rt_vd_pad`
+    emitter.label("__rt_vd_mark_reference_done_x86");
+    emitter.instruction("ret");                                                 // return to the walker
 }
 
 /// `__rt_vd_indent_push` / `__rt_vd_indent_pop`: widen / narrow `_vd_indent` by
@@ -1692,7 +1767,16 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("str xzr, [sp, #72]");                                  // assume the entry is not a shared reference
+    emitter.instruction("cmp x5, #11");                                         // does the entry belong to a PHP reference set?
+    emitter.instruction("b.ne __rt_vd_hash_plain");                             // plain entries print no marker
+    emitter.instruction("ldr w9, [x3, #-12]");                                  // read the entry cell's owner count
+    emitter.instruction("cmp w9, #1");                                          // is the reference shared with another holder?
+    emitter.instruction("cset x9, hi");                                         // PHP marks only a reference with several holders
+    emitter.instruction("str x9, [sp, #72]");                                   // remember the marker until the value line
+    emitter.label("__rt_vd_hash_plain");
+    emitter.instruction("bl __rt_hash_entry_deref");                            // replace a reference cell with the value it owns
     emitter.instruction("str x0, [sp, #8]");                                    // save the next iterator cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #40]");                                   // save key len (-1 sentinel for integer keys)
@@ -1713,6 +1797,11 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_var_dump_emit_indexed_key");                   // emit `<indent>[N]=>\n`
 
     emitter.label("__rt_vd_hash_after_key");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the shared-reference marker request
+    emitter.instruction("cbz x9, __rt_vd_hash_value");                          // plain entries print no marker
+    abi::emit_symbol_address(emitter, "x10", "_vd_ref_mark");                   // resolve the pending reference-marker flag
+    emitter.instruction("str x9, [x10]");                                       // arm `&` for the value line below
+    emitter.label("__rt_vd_hash_value");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes (tags 4/5) on its own --
     emitter.instruction("ldr x0, [sp, #64]");                                   // value tag → value renderer
@@ -1757,7 +1846,15 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload iterator cursor
-    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next");                            // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // assume the entry is not a shared reference
+    emitter.instruction("cmp r9, 11");                                          // does the entry belong to a PHP reference set?
+    emitter.instruction("jne __rt_vd_hash_plain_x86");                          // plain entries print no marker
+    emitter.instruction("cmp DWORD PTR [rcx - 12], 1");                         // is the reference shared with another holder?
+    emitter.instruction("jbe __rt_vd_hash_plain_x86");                          // PHP marks only a reference with several holders
+    emitter.instruction("mov QWORD PTR [rbp - 80], 1");                         // remember the marker until the value line
+    emitter.label("__rt_vd_hash_plain_x86");
+    emitter.instruction("call __rt_hash_entry_deref");                          // replace a reference cell with the value it owns
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save key len (-1 sentinel for integer keys)
@@ -1777,6 +1874,11 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_var_dump_emit_indexed_key");                 // emit `<indent>[N]=>\n`
 
     emitter.label("__rt_vd_hash_after_key_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // was the entry a shared reference?
+    emitter.instruction("je __rt_vd_hash_value_x86");                           // plain entries print no marker
+    abi::emit_symbol_address(emitter, "r10", "_vd_ref_mark");                   // resolve the pending reference-marker flag
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // arm `&` for the value line below
+    emitter.label("__rt_vd_hash_value_x86");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes (tags 4/5) on its own --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // value tag → value renderer

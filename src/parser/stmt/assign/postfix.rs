@@ -78,6 +78,18 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     crate::parser::expr::reject_nullsafe_write(&lhs_expr, span)?;
 
     *pos = assign_pos + 1;
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        if is_append {
+            return Err(CompileError::new(
+                span,
+                "Appending a reference (`$a[] = &$x`) is not supported; use an explicit key",
+            ));
+        }
+        return super::reference_places::parse_place_ref_assign(tokens, pos, lhs_expr, span)
+            .map(Some);
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if !is_append && crate::parser::expr::is_call_dimension_place(&lhs_expr) {

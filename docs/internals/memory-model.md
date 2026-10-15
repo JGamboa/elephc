@@ -697,6 +697,54 @@ elephc --heap-debug heavy.php            # enable runtime heap verification
 
 The minimum is 64KB.
 
+### Binding a place by reference
+
+`$o->p = &$x`, `$a[$k] = &$x` (at any depth) and the by-reference array literal elements
+`[&$x]` / `['k' => &$x]` all lower to one statement, `StmtKind::RefAssignPlace`, whose source is
+always a plain variable: the parser first binds any other source (`&$pipes[0]`,
+`&$this->stream`) to a hidden local with the ordinary `$tmp = &<source>`, evaluating the
+place's computed indices into hidden locals before it so PHP's target-first order holds, and
+unsets the hidden locals afterwards. A literal with reference elements is built with `null` in
+each reference slot and then bound element by element, which is why its reference sources are
+limited to side-effect-free places and its keys to ones that can be named again.
+
+The model is the one the rest of this section uses: a PHP reference set is ONE managed
+reference cell (heap kind `REFERENCE_CELL_HEAP_KIND`). Locals own it through their alias and
+owner slots, reference properties hold it in their slot (GC tag 11), and hash entries hold it as
+runtime value tag 11. Binding a place gives the source a cell (promoting a plain local in place,
+which keeps its identity; an undefined source is first defined as null, like PHP's `&$v`),
+RETAINS that cell into the place and only then releases what the place held before
+(`BindPropRefCell`, `BindArrayElemRefCell` → `__rt_hash_entry_bind_reference`). The release
+runs after the place is republished because it can run a destructor that observes it.
+Consequences, all pinned by `tests/codegen/reference_places.rs` and `probes/references`:
+
+- a write through either side lands in the shared cell, and `unset` of one side releases only
+  that side's owner;
+- an array copy shares a reference element while it has other holders, and separates it when
+  the copy's table is the sole holder, as PHP's `zend_array_dup` does;
+- object walkers (`var_dump`, `print_r`, `var_export`, `serialize`, `json_encode`,
+  `get_object_vars`/`(array)`, `unserialize`) follow a reference property's slot through
+  `REFERENCE_PROPERTY_TAG_FLAG` in the descriptor tag, and `var_dump` prints PHP's `&` marker
+  for an element or property whose cell has more than one owner.
+
+Cells are typed, PHP references are not. A hash entry cell always holds a boxed `Mixed`, so an
+element place widens its source local to `Mixed` storage; a property cell holds the property's
+storage representation, so an UNTYPED property that becomes part of a reference set is widened
+to boxed storage (PHP `array` when both sides are arrays, `mixed` otherwise), and a declared one
+must agree with its source. A disagreement is a compile-time refusal, never a reinterpreted
+payload.
+
+A by-reference parameter's address belongs to the caller and may be a frame slot or an array
+interior, so it cannot be co-owned by a place that outlives the call. The checker records every
+by-reference parameter a body binds into a place (`CheckResult::escaping_ref_params`), and a
+call whose argument is a plain local lends that local as a managed cell of the parameter's
+representation. A call that still hands over an unmanaged address (a dynamic callable whose
+signature is not resolved at the call) is caught at the binding by `LoadLocalRefCellPtr`,
+which accepts only a live managed cell and otherwise raises the catchable
+`Error: Cannot bind a reference to storage that has no independent reference cell` before
+anything is published. Superglobals, `global` aliases and static properties live in
+program-global storage with no cell and are refused at compile time as place sources.
+
 ## Array layout
 
 Arrays are heap-allocated with a 24-byte header followed by contiguous elements:

@@ -460,6 +460,9 @@ fn stmt_refs_xml(stmt: &Stmt) -> bool {
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_xml(index) || expr_refs_xml(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_xml(target) || expr_refs_xml(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_xml(target) || expr_refs_xml(value)
         }

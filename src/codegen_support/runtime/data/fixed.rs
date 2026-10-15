@@ -637,6 +637,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
     out.push_str(".globl _borrowed_reference_return_msg\n_borrowed_reference_return_msg:\n    .ascii \"Cannot return a reference to storage that has no independent reference cell\"\n");
+    out.push_str(".globl _unmanaged_reference_bind_msg\n_unmanaged_reference_bind_msg:\n    .ascii \"Cannot bind a reference to storage that has no independent reference cell\"\n");
+    out.push_str(".globl _reference_bind_scalar_container_msg\n_reference_bind_scalar_container_msg:\n    .ascii \"Cannot use a scalar value as an array\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
@@ -1418,6 +1420,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // builtin sets it to 2 around a top-level array body and back to 0 after;
     // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
     out.push_str(&comm_directive("_vd_indent", 8, target));
+    // _vd_ref_mark: set right before a value line whose slot is a SHARED PHP reference (an
+    // element or property whose reference cell has another owner); `__rt_vd_pad` consumes it
+    // and prints PHP's `&` marker after the indentation (`["p"]=>\n  &int(1)`).
+    out.push_str(&comm_directive("_vd_ref_mark", 8, target));
+    out.push_str(".globl _vd_amp\n_vd_amp:\n    .ascii \"&\"\n");
     // var_dump object delimiters: `object(` + class name + `)#` + the PHP object
     // handle + ` (` + initialized property count + `) {\n` opens an object on its
     // value line; the shared `_vd_brace_close` closes it. The handle is the same

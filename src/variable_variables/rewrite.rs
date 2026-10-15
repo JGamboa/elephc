@@ -1295,6 +1295,11 @@ fn definitely_assigned(stmt: &Stmt) -> Vec<String> {
         | StmtKind::ArrayPush { array: name, .. }
         | StmtKind::StaticVar { name, .. } => vec![name.clone()],
         StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => vars.clone(),
+        // `$a[k] = &$v` defines `$v` (as null) when it did not exist.
+        StmtKind::RefAssignPlace { source, .. } => match &source.kind {
+            ExprKind::Variable(name) => vec![name.clone()],
+            _ => Vec::new(),
+        },
         StmtKind::ExprStmt(Expr {
             kind: ExprKind::Assignment { target, .. },
             ..

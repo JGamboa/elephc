@@ -410,6 +410,14 @@ impl Scanner<'_> {
                     self.forget_variable(source);
                 }
             }
+            StmtKind::RefAssignPlace { target, source } => {
+                self.scan_assignment_target(target);
+                self.scan_expr(target);
+                self.scan_expr(source);
+                if let ExprKind::Variable(source) = &source.kind {
+                    self.forget_variable(source);
+                }
+            }
             StmtKind::ListUnpack { vars, value } => {
                 self.scan_expr(value);
                 for variable in vars {

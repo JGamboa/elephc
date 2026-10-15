@@ -146,6 +146,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
+        StmtKind::RefAssignPlace { target, source } => {
+            crate::ir_lower::expr::lower_ref_assign_place(ctx, target, source, stmt.span)
+        }
         StmtKind::If {
             condition,
             then_body,

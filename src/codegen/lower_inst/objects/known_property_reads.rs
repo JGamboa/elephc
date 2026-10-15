@@ -232,6 +232,57 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     store_ref_cell_pointer_result(ctx, inst)
 }
 
+/// Lowers `BindPropRefCell` (`$obj->prop = &$x`): the reference property's slot adopts the
+/// source's managed cell.
+///
+/// The new cell is retained BEFORE the slot's previous cell is released (rebinding a property to
+/// the cell it already holds is then a net no-op), and the slot is republished before that
+/// release runs, because the release can run a destructor that reads the property. Only
+/// object-owned reference properties reach here: lowering refuses a by-reference promoted
+/// constructor property, whose slot borrows a caller address it does not own.
+pub(in crate::codegen::lower_inst) fn lower_bind_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let cell = expect_operand(inst, 1)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let Some(slot) = typed_receiver_reference_slot(ctx, object, &property, inst)? else {
+        return Ok(());
+    };
+    let owned = ctx
+        .module
+        .class_infos
+        .get(&slot.class_name)
+        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+    if !slot.is_reference || !owned {
+        return Err(CodegenIrError::unsupported(format!(
+            "bind_prop_ref_cell on {}::${}, which does not own a reference cell",
+            slot.class_name, slot.property
+        )));
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(cell, result_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                         // the property becomes one more owner of the reference set
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    let old_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, old_reg, base_reg, slot.offset);  // take the previous cell out of the property slot
+    let new_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, new_reg);
+    abi::emit_store_to_address(ctx.emitter, new_reg, base_reg, slot.offset);   // publish the shared cell in the property slot
+    move_scratch_to_result(ctx, old_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");                     // drop the property's share of its previous cell
+    Ok(())
+}
+
+/// Moves a scratch register into the integer result register for a unary runtime call.
+fn move_scratch_to_result(ctx: &mut FunctionContext<'_>, source: &str) {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result, source);
+}
+
 /// Lowers `LoadPropRefCellChecked`: the by-reference-return form of the load above, which hands
 /// the caller a cell it will dereference with the callee's DECLARED result representation.
 ///

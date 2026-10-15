@@ -556,6 +556,52 @@ pub(super) fn refined_untyped_property_assignment_type(
     }
 }
 
+/// Widens an UNTYPED property's storage to `Mixed` because a PHP reference now shares it.
+///
+/// A reference can carry any value into the property from another holder, so no narrower
+/// inferred representation stays sound once the property's cell is shared with a local, another
+/// property or an array element. A declared property keeps its declared storage.
+pub(super) fn widen_referenced_untyped_property(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+    source_ty: &PhpType,
+) {
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        return;
+    }
+    let needs_widening: Option<PhpType> = {
+        let Some(class_info) = checker.classes.get(class_name) else {
+            return;
+        };
+        if class_info.visible_property_is_declared(property) {
+            return;
+        }
+        let Some(slot) = class_info.visible_property_index(property) else {
+            return;
+        };
+        let current = &class_info.properties[slot].1;
+        // Arrays on both sides keep PHP's `array` contract (boxed, so still one Mixed-shaped
+        // cell), which keeps `$this->p['k'] = ...` writes legal; anything else becomes `mixed`.
+        let widened = if is_array_like(current) && is_array_like(source_ty) {
+            PhpType::php_array()
+        } else {
+            PhpType::Mixed
+        };
+        (current.codegen_repr() != PhpType::Mixed || (*current != widened && widened.is_php_array()))
+            .then_some(widened)
+    };
+    if let Some(widened) = needs_widening {
+        update_inherited_property_slot_type(checker, class_name, property, widened);
+    }
+}
+
+/// Whether a property or source type is an array, PHP's declared `array`, or still unset.
+fn is_array_like(ty: &PhpType) -> bool {
+    ty.is_php_array()
+        || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Void | PhpType::Never)
+}
+
 /// Refines the inferred type of an object property after a write, for properties without declared types.
 ///
 /// Delegates the type decision to `refined_untyped_property_assignment_type`; see its

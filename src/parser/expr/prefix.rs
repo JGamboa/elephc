@@ -648,6 +648,10 @@ fn parse_array_literal_with_terminator(
     let mut first = true;
     let mut next_auto_key = 0i64;
     let mut auto_key_initialized = false;
+    // By-reference elements (`[&$x]`, `['k' => &$x]`) are bound after the literal is built, so
+    // each one needs the key it was given, which must therefore be knowable here.
+    let mut refs: Vec<ReferenceElement> = Vec::new();
+    let mut keys_known = true;
     while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
             if tokens[*pos].0 != Token::Comma {
@@ -676,19 +680,40 @@ fn parse_array_literal_with_terminator(
             } else {
                 elems.push(spread);
             }
+            keys_known = false;
             first = false;
             continue;
         }
-        reject_reference_array_element(tokens, pos, closing)?;
-        let expr = parse_expr(tokens, pos)?;
+        let element_ref = take_reference_array_element(tokens, pos, closing)?;
+        let expr = match &element_ref {
+            Some(source) => Expr::new(ExprKind::Null, source.span),
+            None => parse_expr(tokens, pos)?,
+        };
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+            if let Some(source) = &element_ref {
+                return Err(CompileError::new(source.span, "An array key cannot be a reference"));
+            }
             if !is_assoc {
                 promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
             }
             is_assoc = true;
             *pos += 1;
-            reject_reference_array_element(tokens, pos, closing)?;
-            let value = parse_expr(tokens, pos)?;
+            let value_ref = take_reference_array_element(tokens, pos, closing)?;
+            let value = match &value_ref {
+                Some(source) => Expr::new(ExprKind::Null, source.span),
+                None => parse_expr(tokens, pos)?,
+            };
+            if let Some(source) = value_ref {
+                if !mixed_elems.is_empty() || !reference_element_key_is_stable(&expr) {
+                    return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
+                }
+                refs.push(ReferenceElement { key: expr.clone(), source });
+            }
+            if explicit_integer_array_key(&expr).is_none()
+                && !matches!(expr.kind, ExprKind::StringLiteral(_))
+            {
+                keys_known = false;
+            }
             update_next_auto_key_from_explicit_key(
                 &expr,
                 &mut next_auto_key,
@@ -700,6 +725,13 @@ fn parse_array_literal_with_terminator(
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
         } else if is_assoc {
+            if let Some(source) = element_ref {
+                if !mixed_elems.is_empty() || !keys_known {
+                    return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
+                }
+                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), source.span);
+                refs.push(ReferenceElement { key, source });
+            }
             if mixed_elems.is_empty() {
                 let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
                 assoc_elems.push((key, expr));
@@ -711,6 +743,13 @@ fn parse_array_literal_with_terminator(
             next_auto_key += 1;
             auto_key_initialized = true;
         } else {
+            if let Some(source) = element_ref {
+                if !keys_known {
+                    return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
+                }
+                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), source.span);
+                refs.push(ReferenceElement { key, source });
+            }
             elems.push(expr);
             next_auto_key += 1;
             auto_key_initialized = true;
@@ -724,65 +763,141 @@ fn parse_array_literal_with_terminator(
         ));
     }
     *pos += 1;
-    if !mixed_elems.is_empty() {
-        Ok(Expr::new(ExprKind::ArrayLiteralMixed(mixed_elems), span))
+    let literal = if !mixed_elems.is_empty() {
+        Expr::new(ExprKind::ArrayLiteralMixed(mixed_elems), span)
     } else if is_assoc {
-        Ok(Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span))
+        Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span)
     } else {
-        Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
+        Expr::new(ExprKind::ArrayLiteral(elems), span)
+    };
+    if refs.is_empty() {
+        return Ok(literal);
     }
+    bind_reference_elements(literal, refs, span)
 }
 
-/// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
-/// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
-///
-/// PHP stores such an element as a reference cell that aliases the source variable's storage,
-/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
-/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
-/// construct cannot be honoured without either silently copying or leaving the array holding a
-/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
-///
-/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
-/// after it and does not report cascading errors for the remaining elements.
-fn reject_reference_array_element(
+/// One by-reference element of an array literal: the key it occupies and the place it aliases.
+struct ReferenceElement {
+    key: Expr,
+    source: Expr,
+}
+
+/// Diagnostic for a by-reference element whose key cannot be named again after the literal.
+const UNSUPPORTED_REFERENCE_ELEMENT_KEY: &str = "A by-reference array element (`&$x`) is only \
+     supported where its key is known: after a literal or variable key, or at a position not \
+     preceded by a spread or a computed key";
+
+/// Diagnostic for a by-reference element whose source has side effects.
+const UNSUPPORTED_REFERENCE_ELEMENT_SOURCE: &str = "A by-reference array element must alias a \
+     variable, a property, a static property or an element with a literal or variable index \
+     (`[&$x]`, `[&$this->p]`, `[&$a['k']]`)";
+
+/// Consumes `&<place>` at an element position and returns the place; `None` when the element is
+/// not a reference. `&$this` is returned as `None` with only the `&` consumed: `$this` cannot be
+/// reassigned, so PHP wraps a temporary copy of the handle in a reference that only the array
+/// holds, and a reference with a single holder is indistinguishable from the value (the first
+/// copy of the array dereferences it, and a write through the element never reaches `$this`).
+fn take_reference_array_element(
     tokens: &[SpannedToken],
     pos: &mut usize,
     closing: &Token,
-) -> Result<(), CompileError> {
+) -> Result<Option<Expr>, CompileError> {
     let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
-        return Ok(());
+        return Ok(None);
     };
     let span = metadata.span;
-    skip_to_array_literal_end(tokens, pos, closing);
-    Err(CompileError::new(
-        span,
-        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
-         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
-         to alias an existing array element",
-    ))
+    *pos += 1;
+    if matches!(tokens.get(*pos), Some((Token::This, _)))
+        && matches!(tokens.get(*pos + 1), Some((token, _)) if token == &Token::Comma || token == closing)
+    {
+        return Ok(None);
+    }
+    let source = parse_expr(tokens, pos)?;
+    if !is_side_effect_free_reference_place(&source) {
+        return Err(CompileError::new(span, UNSUPPORTED_REFERENCE_ELEMENT_SOURCE));
+    }
+    Ok(Some(source))
 }
 
-/// Advances `pos` past the remainder of the current array literal, including its `closing`
-/// token, tracking nested `[`/`(` pairs so inner literals and calls are skipped whole.
-///
-/// Stops at end-of-input if the literal is unterminated, leaving `pos` at `Eof`.
-fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: &Token) {
-    let mut depth = 0usize;
-    while let Some((token, _)) = tokens.get(*pos) {
-        match token {
-            Token::Eof => return,
-            Token::LBracket | Token::LParen => depth += 1,
-            Token::RBracket | Token::RParen => {
-                if depth == 0 && token == closing {
-                    *pos += 1;
-                    return;
-                }
-                depth = depth.saturating_sub(1);
-            }
-            _ => {}
+/// Whether an explicit key can be evaluated again to bind its element after the literal.
+fn reference_element_key_is_stable(key: &Expr) -> bool {
+    matches!(
+        key.kind,
+        ExprKind::IntLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::Variable(_)
+    ) || explicit_integer_array_key(key).is_some()
+}
+
+/// Whether a reference source names storage without running code, so binding it after the other
+/// elements are evaluated (rather than in its source position) is unobservable.
+fn is_side_effect_free_reference_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(object.kind, ExprKind::This) || is_side_effect_free_reference_place(object)
         }
-        *pos += 1;
+        ExprKind::ArrayAccess { array, index } => {
+            matches!(
+                index.kind,
+                ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_)
+            ) && is_side_effect_free_reference_place(array)
+        }
+        _ => false,
     }
+}
+
+/// Builds `[..., &$x, ...]` as: the literal with `null` in each reference slot into a hidden
+/// local, then `$tmp[key] = &$x` for each reference element (the ordinary place-reference
+/// binding), and the hidden local as the expression's value. The value is a copy-on-write share
+/// of the same table, so every bound element keeps its reference.
+fn bind_reference_elements(
+    literal: Expr,
+    refs: Vec<ReferenceElement>,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    let table = crate::names::generated_local_name(&format!(
+        "__elephc_ref_literal_{}_{}",
+        span.line, span.col
+    ));
+    let result = crate::names::generated_local_name(&format!(
+        "__elephc_ref_literal_value_{}_{}",
+        span.line, span.col
+    ));
+    let mut prelude = vec![crate::parser::ast::Stmt::new(
+        crate::parser::ast::StmtKind::Assign {
+            name: table.clone(),
+            value: literal,
+        },
+        span,
+    )];
+    for element in refs {
+        let source_span = element.source.span;
+        let place = Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::new(ExprKind::Variable(table.clone()), source_span)),
+                index: Box::new(element.key),
+            },
+            source_span,
+        );
+        prelude.push(crate::parser::stmt::lower_place_ref_assign(
+            place,
+            element.source,
+            source_span,
+        )?);
+    }
+    Ok(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
+            value: Box::new(Expr::new(ExprKind::Variable(table), span)),
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        },
+        span,
+    ))
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.

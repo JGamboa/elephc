@@ -70,6 +70,10 @@ pub(super) fn walk_stmt_children<V: Visitor + ?Sized>(v: &mut V, stmt: &mut Stmt
             v.expr(index);
             v.expr(value);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            v.expr(target);
+            v.expr(source);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             v.expr(target);
             v.expr(value);

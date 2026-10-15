@@ -121,6 +121,7 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        escaping_ref_params: std::collections::HashSet::new(),
         requested_instantiations: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),

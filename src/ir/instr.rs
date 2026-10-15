@@ -1002,6 +1002,21 @@ pub enum Op {
     /// PHP address-of operation, a missing key warns and returns no cell without inserting null.
     /// Operands: array, index. No immediate.
     LoadArrayElemRefCellExisting,
+    /// Loads the reference-cell pointer a ref-bound local's slot holds, for binding it into a
+    /// property or array element (`$o->p = &$x`, `$a[k] = &$x`). A `LocalSlotPair` immediate
+    /// (alias slot, owner slot) names a cell this frame owns; a bare `LocalSlot` names a
+    /// borrowed address (a by-reference parameter), which the backend validates as a live
+    /// managed cell at run time and otherwise raises a catchable `Error`. Result: `Pointer`.
+    LoadLocalRefCellPtr,
+    /// Makes an object's reference property slot hold the given managed cell (`$o->p = &$x`):
+    /// retains the new cell, publishes it, then releases the previous one. Operands: object,
+    /// cell pointer. Immediate: property name data id.
+    BindPropRefCell,
+    /// Makes an array element hold the given managed cell (`$a[k] = &$x`). The container is
+    /// normalized to boxed-Mixed hash storage exactly like `LoadArrayElemRefCell` (separating a
+    /// shared table and inserting a missing key), the entry's previous value or cell is released
+    /// and the entry is stamped tag 11 over the retained cell. Operands: array, index, cell.
+    BindArrayElemRefCell,
     /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
     /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
@@ -1338,6 +1353,10 @@ impl Op {
             BindRefCellPtr | AdoptRefCellPtr => {
                 E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            // The borrowed form validates the address and raises a catchable `Error`.
+            LoadLocalRefCellPtr => E::READS_LOCAL | E::READS_HEAP | E::MAY_THROW,
+            // Releasing the replaced cell or value can run an arbitrary destructor.
+            BindPropRefCell | BindArrayElemRefCell => E::all(),
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
             // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
@@ -1702,6 +1721,9 @@ impl Op {
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             LoadArrayElemRefCellExisting => "load_array_elem_ref_cell_existing",
             BindRefCellPtr => "bind_ref_cell_ptr",
+            LoadLocalRefCellPtr => "load_local_ref_cell_ptr",
+            BindPropRefCell => "bind_prop_ref_cell",
+            BindArrayElemRefCell => "bind_array_elem_ref_cell",
             AdoptRefCellPtr => "adopt_ref_cell_ptr",
             AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",

@@ -19,6 +19,9 @@ use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+/// Stem of the hidden local a non-variable reference source is bound to before a place binding.
+const REFERENCE_PLACE_CELL_STEM: &str = "__elephc_ref_place_";
+
 /// Binds an otherwise-unbound local as `Mixed` after its assignment fails.
 ///
 /// Error recovery must preserve a valid earlier binding, while ensuring a name
@@ -269,6 +272,18 @@ pub(super) fn check_ref_assign(
         }
         ExprKind::PropertyAccess { object, property } => {
             let object_ty = checker.infer_type(object, env)?;
+            if target.starts_with(REFERENCE_PLACE_CELL_STEM) {
+                // The hidden local of `$place = &$obj->prop` (see `parser::stmt::assign::
+                // reference_places`): the property's cell is about to be shared with a property
+                // or array element, which can store any value into it, so an untyped property
+                // becomes `Mixed` exactly as a direct `$o->p = &$x` target does.
+                if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
+                    let current_ty = checker.infer_type(source, env)?;
+                    super::properties::widen_referenced_untyped_property(
+                        checker, &class, property, &current_ty,
+                    );
+                }
+            }
             let target_ty = checker.infer_type(source, env)?;
             if let Some(class) =
                 crate::types::checker::single_object_class_name(&object_ty)
@@ -282,7 +297,11 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
-        ExprKind::FunctionCall { .. }
+        // `$x = &C::$p` / `&self::$p` / `&static::$p`: the local aliases the static property's
+        // process-lifetime storage (late static binding is resolved by the backend), so it
+        // takes the property's declared type, exactly like a property source.
+        ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ClosureCall { .. }

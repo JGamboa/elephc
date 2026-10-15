@@ -478,6 +478,7 @@ fn validate_instruction_immediate(
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
+        | BindPropRefCell
         | LoadStaticPropertyRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
@@ -518,7 +519,7 @@ fn validate_instruction_immediate(
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
+        BindRefCellPtr | LoadLocalRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
             matches!(imm, Imm::LocalSlot(_) | Imm::LocalSlotPair { .. })
         }),
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
@@ -888,6 +889,9 @@ fn validate_opcode_rules(
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
         PropSet => check_count(inst_id, inst, 2, "2"),
+        LoadLocalRefCellPtr => check_count(inst_id, inst, 0, "0"),
+        BindPropRefCell => check_count(inst_id, inst, 2, "2"),
+        BindArrayElemRefCell => check_count(inst_id, inst, 3, "3"),
         PropUnset => check_count(inst_id, inst, 1, "1"),
         // The receiver plus the runtime name. `PropUnset` names its property in an immediate, so
         // it takes one operand; this op takes the name as a VALUE, which is the whole difference

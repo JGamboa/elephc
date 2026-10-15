@@ -50,6 +50,7 @@ fn stmt_tainted(stmt: &Stmt) -> bool {
         }
         StmtKind::Return(value) => value.as_ref().is_some_and(expr),
         StmtKind::ArrayAssign { index, value, .. } => expr(index) || expr(value),
+        StmtKind::RefAssignPlace { target, source } => expr(target) || expr(source),
         StmtKind::NestedArrayAssign { target, value } => expr(target) || expr(value),
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => expr(object) || expr(value),

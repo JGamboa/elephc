@@ -177,6 +177,10 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             audit_expr(index, errors);
             audit_expr(value, errors);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            audit_expr(target, errors);
+            audit_expr(source, errors);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             audit_expr(target, errors);
             audit_expr(value, errors);

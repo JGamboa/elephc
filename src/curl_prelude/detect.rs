@@ -488,6 +488,9 @@ fn stmt_refs_curl(stmt: &Stmt) -> bool {
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_curl(index) || expr_refs_curl(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_curl(target) || expr_refs_curl(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_curl(target) || expr_refs_curl(value)
         }

@@ -653,26 +653,46 @@ fn test_error_goto_label_is_not_supported() {
 
 // --- References inside array literals ---
 
-/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
-/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+/// Verifies a by-reference element whose source runs code (a call) is refused by name: elements
+/// are bound after the literal is built, which is only unobservable for side-effect-free places.
 #[test]
-fn test_error_reference_element_in_array_literal() {
+fn test_error_reference_element_with_call_source() {
     expect_error(
-        "<?php $first = 1; $r = [&$first];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php function f() { return 1; } $r = [&f()];",
+        "A by-reference array element must alias a variable",
     );
 }
 
-/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+/// Verifies a by-reference element after a spread is refused, since its key is not knowable.
 #[test]
-fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
+fn test_error_reference_element_after_spread() {
     expect_error(
-        "<?php $a = 1; $r = [\"k\" => &$a];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php $a = [1]; $x = 2; $r = [...$a, &$x];",
+        "A by-reference array element (`&$x`) is only supported where its key is known",
     );
+}
+
+/// Verifies a reference used as an array KEY is rejected.
+#[test]
+fn test_error_reference_as_array_key() {
+    expect_error("<?php $x = 1; $r = [&$x => 1];", "An array key cannot be a reference");
+}
+
+/// Verifies `$a[] = &$x` (push by reference) reports the unsupported form by name.
+#[test]
+fn test_error_reference_append() {
     expect_error(
-        "<?php $a = 1; $r = array(&$a);",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php $a = []; $x = 1; $a[] = &$x;",
+        "Appending a reference (`$a[] = &$x`) is not supported",
+    );
+}
+
+/// Verifies a typed property cannot share a reference with a local of another representation.
+#[test]
+fn test_error_reference_property_representation_mismatch() {
+    expect_error(
+        "<?php class T { public int $n = 0; } $t = new T(); $s = \"x\"; $t->n = &$s;",
+        "Property T::$n expects int, got string",
     );
 }
 

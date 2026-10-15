@@ -97,6 +97,7 @@ fn lower_on_compiler_stack(
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
     super::maybe_undefined::install(&check_result.maybe_undefined);
+    super::expr::install_escaping_ref_params(&check_result.escaping_ref_params);
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;

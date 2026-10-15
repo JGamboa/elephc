@@ -12,6 +12,7 @@ mod arrays;
 mod locals;
 mod properties;
 mod properties_null_coalesce;
+mod reference_places;
 mod static_properties;
 
 use crate::errors::CompileError;
@@ -136,6 +137,12 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        // A by-reference array literal element (`[&$this->p]`) lowers into its expression's
+        // prelude as the `Synthetic` group `$tmp = &<source>; $array[k] = &$tmp; unset($tmp);`,
+        // whose statements are checked as the ordinary statements they are.
+        if matches!(stmt.kind, StmtKind::Synthetic(_)) {
+            return self.check_stmt(stmt, env);
+        }
         let result = match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 // The one statement-form local assignment: `stmt_form: true` makes an
@@ -145,6 +152,9 @@ impl Checker {
             }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)
+            }
+            StmtKind::RefAssignPlace { target, source } => {
+                reference_places::check_ref_assign_place(self, target, source, stmt.span, env)
             }
             StmtKind::ArrayAssign {
                 array,
@@ -289,6 +299,8 @@ impl Checker {
             StmtKind::RefAssign { target, .. } => {
                 Self::purge_property_narrowings_for_root(env, target)
             }
+            // The place may be (or reach) a property, and its new cell can be written through.
+            StmtKind::RefAssignPlace { .. } => Self::purge_property_narrowings(env),
             StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
                 for name in vars {
                     Self::purge_property_narrowings_for_root(env, name);

@@ -165,7 +165,7 @@ pub(crate) fn lower_ref_assign_array_elem(
     let ExprKind::ArrayAccess { array, index } = &source.kind else {
         return;
     };
-    let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
+    let (prepared_array, receiver_aliases) = prepare_transient_addressable_ref_array_receiver(ctx, array);
     let array = prepared_array.as_ref().unwrap_or(array);
     crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
     let array_value = lower_expr(ctx, array);
@@ -192,6 +192,7 @@ pub(crate) fn lower_ref_assign_array_elem(
         Some(span),
     );
     ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    release_transient_ref_receiver_aliases(ctx, &receiver_aliases, span);
     // A property read that is not addressable storage (a `mixed` property, so no synthetic
     // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
     // nothing else releases it: the binding above retains the entry's managed cell, not the
@@ -209,16 +210,31 @@ pub(crate) fn lower_ref_assign_array_elem(
     }
 }
 
-/// Reifies a static property, stable declared property, or nested element as a local receiver.
+/// Prepares a receiver for ONE reference operation and returns the synthetic aliases it created.
 ///
-/// Element reference lowering can only republish COW or growth through `ReceiverPlace` when its
-/// receiver comes from a local or ref-cell slot. Each synthetic alias names the original storage,
-/// and recursively normalizing element parents to hash storage gives every level a managed cell.
-pub(crate) fn prepare_addressable_ref_array_receiver(
+/// The aliases only make each level addressable while the operation runs. Left alive, each one
+/// stays a second owner of its level's cell until the frame ends, which PHP has no counterpart
+/// for: `var_dump` would mark the intermediate dimension of `$r = &$a['x']['y']` as a shared
+/// reference (`["x"]=> &array`). The caller releases them once the binding is published.
+pub(crate) fn prepare_transient_addressable_ref_array_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,
-) -> Option<Expr> {
-    prepare_addressable_ref_array_receiver_impl(ctx, source, None)
+) -> (Option<Expr>, Vec<String>) {
+    let mut created = Vec::new();
+    let receiver = prepare_addressable_ref_array_receiver_impl(ctx, source, None, &mut created);
+    (receiver, created)
+}
+
+/// Releases the synthetic receiver aliases `prepare_transient_addressable_ref_array_receiver`
+/// created, innermost first, so each level's cell is owned only by its container again.
+pub(crate) fn release_transient_ref_receiver_aliases(
+    ctx: &mut LoweringContext<'_, '_>,
+    aliases: &[String],
+    span: Span,
+) {
+    for alias in aliases.iter().rev() {
+        ctx.release_ref_cell_owner(alias, Some(span));
+    }
 }
 
 /// Prepares a nested ref-argument receiver and records its managed expression aliases.
@@ -227,7 +243,8 @@ pub(crate) fn prepare_scoped_addressable_ref_array_receiver(
     source: &Expr,
 ) -> Option<(Expr, Vec<String>)> {
     let mut aliases = Vec::new();
-    let receiver = prepare_addressable_ref_array_receiver_impl(ctx, source, Some(&mut aliases))?;
+    let receiver =
+        prepare_addressable_ref_array_receiver_impl(ctx, source, Some(&mut aliases), &mut Vec::new())?;
     Some((receiver, aliases))
 }
 
@@ -236,6 +253,7 @@ fn prepare_addressable_ref_array_receiver_impl(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,
     mut scoped_aliases: Option<&mut Vec<String>>,
+    created: &mut Vec<String>,
 ) -> Option<Expr> {
     match &source.kind {
         ExprKind::Variable(_) => Some(source.clone()),
@@ -243,6 +261,7 @@ fn prepare_addressable_ref_array_receiver_impl(
             if by_ref_foreach_property_source_is_addressable(ctx, object, property) =>
         {
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            created.push(alias.clone());
             lower_ref_assign_property(ctx, &alias, source, source.span);
             // This alias exists only to make the property's storage addressable for a nested
             // reference. Detach an exact PHP array zval before the child promotion can update it
@@ -257,6 +276,7 @@ fn prepare_addressable_ref_array_receiver_impl(
         }
         ExprKind::StaticPropertyAccess { .. } => {
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            created.push(alias.clone());
             lower_ref_assign_static_property(ctx, &alias, source, source.span);
             // Static array values are boxed. Clone the zval through the synthetic ref-bound
             // alias so an earlier by-value copy keeps its own cell while nested writes publish
@@ -275,6 +295,7 @@ fn prepare_addressable_ref_array_receiver_impl(
                 ctx,
                 array,
                 scoped_aliases.as_deref_mut(),
+                created,
             )?;
             let element = Expr::new(
                 ExprKind::ArrayAccess {
@@ -284,6 +305,7 @@ fn prepare_addressable_ref_array_receiver_impl(
                 source.span,
             );
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            created.push(alias.clone());
             lower_ref_assign_array_elem(ctx, &alias, &element, source.span);
             // A persistent `=&` alias must detach a child still shared with a by-value snapshot
             // before a deeper reference binds one of its slots. A call-scoped argument does not:
