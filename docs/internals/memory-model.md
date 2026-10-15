@@ -704,9 +704,11 @@ The minimum is 64KB.
 always a plain variable: the parser first binds any other source (`&$pipes[0]`,
 `&$this->stream`) to a hidden local with the ordinary `$tmp = &<source>`, evaluating the
 place's computed indices into hidden locals before it so PHP's target-first order holds, and
-unsets the hidden locals afterwards. A literal with reference elements is built with `null` in
-each reference slot and then bound element by element, which is why its reference sources are
-limited to side-effect-free places and its keys to ones that can be named again.
+unsets the hidden locals afterwards. A literal with reference elements is rebuilt as PHP's
+ordered writes into a hidden table (each key, value and reference source evaluated at its own
+position; a later duplicate key replaces a reference instead of writing through it), and the
+table is MOVED into the expression's value so no hidden holder outlives the literal. Any
+reference to a readonly property raises `Cannot indirectly modify readonly property`.
 
 The model is the one the rest of this section uses: a PHP reference set is ONE managed
 reference cell (heap kind `REFERENCE_CELL_HEAP_KIND`). Locals own it through their alias and

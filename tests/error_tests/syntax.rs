@@ -653,12 +653,11 @@ fn test_error_goto_label_is_not_supported() {
 
 // --- References inside array literals ---
 
-/// Verifies a by-reference element whose source runs code (a call) is refused by name: elements
-/// are bound after the literal is built, which is only unobservable for side-effect-free places.
+/// Verifies a by-reference element whose source is not a place is refused by name.
 #[test]
-fn test_error_reference_element_with_call_source() {
+fn test_error_reference_element_with_computed_source() {
     expect_error(
-        "<?php function f() { return 1; } $r = [&f()];",
+        "<?php $a = 1; $r = [&($a + 1)];",
         "A by-reference array element must alias a variable",
     );
 }
@@ -668,7 +667,16 @@ fn test_error_reference_element_with_call_source() {
 fn test_error_reference_element_after_spread() {
     expect_error(
         "<?php $a = [1]; $x = 2; $r = [...$a, &$x];",
-        "A by-reference array element (`&$x`) is only supported where its key is known",
+        "A key-less by-reference array element (`&$x`) is not supported after a spread",
+    );
+}
+
+/// Verifies a static property cannot be bound into an object property or element.
+#[test]
+fn test_error_reference_place_from_static_property() {
+    expect_error(
+        "<?php class S { public static $p; public $q; } $o = new S; $o->q = &S::$p;",
+        "Binding a static property into an object property or array element by reference",
     );
 }
 

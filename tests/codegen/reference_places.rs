@@ -256,5 +256,209 @@ fn test_reference_place_static_source_is_refused() {
         "<?php class C { private $c; private static $h = []; function __construct() { $this->c = &self::$h; } } new C();",
         &[],
     );
-    assert!(err.contains("Unsupported reference assignment"), "{err}");
+    assert!(err.contains("Binding a static property into an object property"), "{err}");
+}
+
+/// A reference to a readonly property throws php's Error (`$r = &$o->v`). (review probe `t3a`)
+#[test]
+fn test_reference_readonly_alias_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class R { public function __construct(public readonly int $v) {} }
+$o = new R(1);
+try { $r = &$o->v; $r = 2; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo $o->v, "\n";
+"#,
+    );
+    assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$v\n1\n");
+}
+
+/// Binding a readonly property throws instead of rebinding it. (review probe `t3b`)
+#[test]
+fn test_reference_readonly_property_place_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class R { public function __construct(public readonly int $v) {} }
+$o = new R(1);
+$x = 3;
+try { $o->v = &$x; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo $o->v, "\n";
+$x = 4; echo $o->v, "\n";
+"#,
+    );
+    assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$v\n1\n1\n");
+}
+
+/// Binding an element of a readonly array property throws. (review probe `t3c`)
+#[test]
+fn test_reference_readonly_element_place_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class R { public readonly array $a; function __construct() { $this->a = ['k' => 1]; } }
+$o = new R; $x = 3;
+try { $o->a['k'] = &$x; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+print_r($o->a);
+"#,
+    );
+    assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$a\nArray\n(\n    [k] => 1\n)\n");
+}
+
+/// php refuses the binding inside the declaring constructor too. (review probe `t3d`)
+#[test]
+fn test_reference_readonly_place_in_constructor_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class R { public readonly int $v; function __construct(int &$p) { $this->v = &$p; } }
+$x = 3;
+try { $o = new R($x); echo $o->v, "\n"; $x = 9; echo $o->v, "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$v\n");
+}
+
+/// A later duplicate key replaces a reference element instead of writing through it. (review probe `d1`)
+#[test]
+fn test_reference_literal_duplicate_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$a = ['k' => &$x, 'k' => 2];
+$x = 99; var_dump($a);
+$b = ['k' => 2, 'k' => &$x];
+$x = 98; var_dump($b);
+$c = [0 => &$x, 0 => 'plain', 1 => 'z'];
+$x = 97; var_dump($c);
+$d = [&$x, 5, 1 => &$x];
+var_dump($d);
+$e = ['1' => &$x, 1 => 'int'];
+var_dump($e);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [\"k\"]=>\n  int(2)\n}\narray(1) {\n  [\"k\"]=>\n  &int(98)\n}\narray(2) {\n  [0]=>\n  string(5) \"plain\"\n  [1]=>\n  string(1) \"z\"\n}\narray(2) {\n  [0]=>\n  &int(97)\n  [1]=>\n  &int(97)\n}\narray(1) {\n  [1]=>\n  string(3) \"int\"\n}\n");
+}
+
+/// Nested literals with reference elements. (review probe `d2`)
+#[test]
+fn test_reference_literal_nested() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1; $s = [10, 20];
+$c = [5 => 'five', &$x];
+$x = 6; var_dump($c);
+$d = [-3 => 'neg', &$x];
+var_dump($d);
+$f = ['7' => 'v', &$x]; var_dump($f);
+"#,
+    );
+    assert_eq!(out, "array(2) {\n  [5]=>\n  string(4) \"five\"\n  [6]=>\n  &int(6)\n}\narray(2) {\n  [-3]=>\n  string(3) \"neg\"\n  [-2]=>\n  &int(6)\n}\narray(2) {\n  [7]=>\n  string(1) \"v\"\n  [8]=>\n  &int(6)\n}\n");
+}
+
+/// A key is evaluated at its own position, before later elements change it. (review probe `d3`)
+#[test]
+fn test_reference_literal_key_evaluated_in_order() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1; $k = 'a';
+$arr = [$k => &$x, 'z' => ($k = 'b')];
+$x = 2;
+var_dump($arr);
+$i = 0;
+$arr2 = [$i => &$x, 5 => $i++];
+var_dump($arr2);
+"#,
+    );
+    assert_eq!(out, "array(2) {\n  [\"a\"]=>\n  &int(2)\n  [\"z\"]=>\n  string(1) \"b\"\n}\narray(2) {\n  [0]=>\n  &int(2)\n  [5]=>\n  int(0)\n}\n");
+}
+
+/// A reference source is bound at its own position, before later elements change its operands. (review probe `d4`)
+#[test]
+fn test_reference_literal_source_evaluated_in_order() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['p', 'q']; $i = 0;
+$l = [&$a[$i], $i++];
+$l[0] = 'W'; var_dump($a);
+class B { public $p = 'b'; }
+$o = new B; $o1 = $o;
+$m = [&$o->p, ($o = new B)];
+$m[0] = 'M'; echo $o1->p, " ", $o->p, "\n";
+$x = 'x1';
+$n = [&$x, $x = 'x2'];
+var_dump($n);
+"#,
+    );
+    assert_eq!(out, "array(2) {\n  [0]=>\n  &string(1) \"W\"\n  [1]=>\n  string(1) \"q\"\n}\nM b\narray(2) {\n  [0]=>\n  &string(2) \"x2\"\n  [1]=>\n  string(2) \"x2\"\n}\n");
+}
+
+/// The literal's hidden table is released once built: destructors run when php runs them. (review probe `r3`)
+#[test]
+fn test_reference_literal_releases_its_table() {
+    let out = compile_and_run(
+        r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "dtor {$this->n}\n"; } }
+function t() {
+  $o = new D('lit');
+  $l = [&$o, new D('second')];
+  echo "unset l\n"; unset($l);
+  echo "unset o\n"; unset($o);
+  echo "end t\n";
+}
+t();
+function u() {
+  $x = 1;
+  $l = [&$x, 'k' => 2];
+  $l2 = $l;
+  $l2['k'] = 3;
+  $l2[0] = 'w';
+  echo $x, "\n";
+  var_dump($l, $l2);
+  $l = null;
+  var_dump($l2);
+}
+u();
+function w() {
+  $l = ['k' => new D('elem')];
+  $q = new D('q');
+  $l = [&$q, new D('third')];
+  echo "reassigned\n";
+  $l = 0;
+  echo "zeroed\n";
+}
+w();
+echo "done\n";
+"#,
+    );
+    assert_eq!(out, "unset l\ndtor second\nunset o\ndtor lit\nend t\nw\narray(2) {\n  [0]=>\n  &string(1) \"w\"\n  [\"k\"]=>\n  int(2)\n}\narray(2) {\n  [0]=>\n  &string(1) \"w\"\n  [\"k\"]=>\n  int(3)\n}\narray(2) {\n  [0]=>\n  &string(1) \"w\"\n  [\"k\"]=>\n  int(3)\n}\ndtor elem\nreassigned\ndtor third\nzeroed\ndtor q\ndone\n");
+}
+
+/// After the last alias is gone the element prints without `&`. (review probe `p3b`)
+#[test]
+fn test_reference_literal_sole_holder_prints_plain() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1; $y = 2;
+$a = [&$x, 'k' => &$y, 3];
+$x = 10; $y = 20;
+print_r($a);
+$a[0] = 100; $a['k'] = 200;
+echo "$x $y\n";
+var_dump($a);
+unset($x);
+$a[0] = 5;
+var_dump($a);
+"#,
+    );
+    assert_eq!(out, "Array\n(\n    [0] => 10\n    [k] => 20\n    [1] => 3\n)\n100 200\narray(3) {\n  [0]=>\n  &int(100)\n  [\"k\"]=>\n  &int(200)\n  [1]=>\n  int(3)\n}\narray(3) {\n  [0]=>\n  int(5)\n  [\"k\"]=>\n  &int(200)\n  [1]=>\n  int(3)\n}\n");
+}
+
+/// A literal with reference elements returned from a function. (review probe `p3c`)
+#[test]
+fn test_reference_literal_returned_from_function() {
+    let out = compile_and_run(
+        r#"<?php
+function f() { $v = 1; return [&$v, &$v]; }
+$r = f(); $r[0] = 9; var_dump($r);
+"#,
+    );
+    assert_eq!(out, "array(2) {\n  [0]=>\n  &int(9)\n  [1]=>\n  &int(9)\n}\n");
 }

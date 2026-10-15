@@ -300,6 +300,17 @@ pub(super) fn check_ref_assign(
         // `$x = &C::$p` / `&self::$p` / `&static::$p`: the local aliases the static property's
         // process-lifetime storage (late static binding is resolved by the backend), so it
         // takes the property's declared type, exactly like a property source.
+        ExprKind::StaticPropertyAccess { .. } if target.starts_with(REFERENCE_PLACE_CELL_STEM) => {
+            // `$o->p = &C::$s` / `$a[k] = &C::$s` / `[&C::$s]`: a static property lives in
+            // process-lifetime storage, not in a reference cell a property or element could
+            // co-own, so the binding is refused here rather than failing at run time.
+            Err(CompileError::new(
+                span,
+                "Binding a static property into an object property or array element by reference \
+                 (`$o->p = &C::$s`, `[&C::$s]`) is not supported: a static property has no \
+                 reference cell the place could share",
+            ))
+        }
         ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }

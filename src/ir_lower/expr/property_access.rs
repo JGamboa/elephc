@@ -35,6 +35,11 @@ pub(crate) fn lower_ref_assign_property(
         return;
     };
     let object = lower_expr(ctx, object);
+    if let Some(message) = readonly_reference_error(ctx, object.value, property) {
+        // php refuses any reference to a readonly property, inside its constructor too. The
+        // throw ends this path; the binding below stays well formed for the unreachable rest.
+        crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, span);
+    }
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
         PhpType::Object(class) => ctx.classes.get(class.as_str())
@@ -1266,4 +1271,31 @@ pub(crate) fn static_property_result_type(
         return PhpType::Mixed;
     };
     normalize_value_php_type(property_ty.codegen_repr())
+}
+
+/// php's `Error` for taking or binding a reference to a readonly property of a statically
+/// known class (`$r = &$o->v`, `$o->v = &$x`, `$o->ro['k'] = &$x`), or `None` when the property
+/// is not readonly.
+pub(crate) fn readonly_reference_error(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<String> {
+    let PhpType::Object(class) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return None;
+    };
+    let info = ctx.classes.get(class.as_str())?;
+    if !info.readonly_properties.contains(property) {
+        return None;
+    }
+    let declaring = info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or(class);
+    Some(format!(
+        "Cannot indirectly modify readonly property {}::${}",
+        declaring.trim_start_matches('\\'),
+        property
+    ))
 }

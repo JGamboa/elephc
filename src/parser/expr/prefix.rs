@@ -648,9 +648,12 @@ fn parse_array_literal_with_terminator(
     let mut first = true;
     let mut next_auto_key = 0i64;
     let mut auto_key_initialized = false;
-    // By-reference elements (`[&$x]`, `['k' => &$x]`) are bound after the literal is built, so
-    // each one needs the key it was given, which must therefore be knowable here.
-    let mut refs: Vec<ReferenceElement> = Vec::new();
+    // Every element in source order, kept so a literal with by-reference elements (`[&$x]`,
+    // `['k' => &$x]`) can be rebuilt as an ordered sequence of writes (see
+    // `build_reference_literal`).
+    let mut entries: Vec<LiteralEntry> = Vec::new();
+    let mut has_reference = false;
+    // Whether `next_auto_key` is still exact: false after a spread or a computed key.
     let mut keys_known = true;
     while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
@@ -676,10 +679,11 @@ fn parse_array_literal_with_terminator(
                 // `["c" => 8, ...$v]` come out as just the spread. Dropping the spread instead
                 // is what made `[...$v, "c" => 8]` come out as just the key (issue #1049).
                 migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
-                mixed_elems.push(ArrayEntry::Spread(spread));
+                mixed_elems.push(ArrayEntry::Spread(spread.clone()));
             } else {
-                elems.push(spread);
+                elems.push(spread.clone());
             }
+            entries.push(LiteralEntry::Spread(spread));
             keys_known = false;
             first = false;
             continue;
@@ -703,14 +707,15 @@ fn parse_array_literal_with_terminator(
                 Some(source) => Expr::new(ExprKind::Null, source.span),
                 None => parse_expr(tokens, pos)?,
             };
-            if let Some(source) = value_ref {
-                if !mixed_elems.is_empty() || !reference_element_key_is_stable(&expr) {
-                    return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
+            match value_ref {
+                Some(source) => {
+                    has_reference = true;
+                    entries.push(LiteralEntry::Keyed(expr.clone(), LiteralValue::Reference(source)));
                 }
-                refs.push(ReferenceElement { key: expr.clone(), source });
+                None => entries.push(LiteralEntry::Keyed(expr.clone(), LiteralValue::Value(value.clone()))),
             }
             if explicit_integer_array_key(&expr).is_none()
-                && !matches!(expr.kind, ExprKind::StringLiteral(_))
+                && !matches!(expr.kind, ExprKind::StringLiteral(_) | ExprKind::Null)
             {
                 keys_known = false;
             }
@@ -725,13 +730,13 @@ fn parse_array_literal_with_terminator(
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
         } else if is_assoc {
-            if let Some(source) = element_ref {
-                if !mixed_elems.is_empty() || !keys_known {
-                    return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
-                }
-                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), source.span);
-                refs.push(ReferenceElement { key, source });
-            }
+            push_positional_entry(
+                &mut entries,
+                &mut has_reference,
+                element_ref,
+                &expr,
+                keys_known.then_some(next_auto_key),
+            )?;
             if mixed_elems.is_empty() {
                 let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
                 assoc_elems.push((key, expr));
@@ -743,13 +748,13 @@ fn parse_array_literal_with_terminator(
             next_auto_key += 1;
             auto_key_initialized = true;
         } else {
-            if let Some(source) = element_ref {
-                if !keys_known {
-                    return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
-                }
-                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), source.span);
-                refs.push(ReferenceElement { key, source });
-            }
+            push_positional_entry(
+                &mut entries,
+                &mut has_reference,
+                element_ref,
+                &expr,
+                keys_known.then_some(next_auto_key),
+            )?;
             elems.push(expr);
             next_auto_key += 1;
             auto_key_initialized = true;
@@ -770,27 +775,64 @@ fn parse_array_literal_with_terminator(
     } else {
         Expr::new(ExprKind::ArrayLiteral(elems), span)
     };
-    if refs.is_empty() {
+    if !has_reference {
         return Ok(literal);
     }
-    bind_reference_elements(literal, refs, span)
+    build_reference_literal(entries, span)
 }
 
-/// One by-reference element of an array literal: the key it occupies and the place it aliases.
-struct ReferenceElement {
-    key: Expr,
-    source: Expr,
+/// One element of an array literal, in source order.
+enum LiteralEntry {
+    /// `V` or `&S` without a key.
+    Positional(LiteralValue),
+    /// `K => V` or `K => &S`.
+    Keyed(Expr, LiteralValue),
+    /// `...$s`.
+    Spread(Expr),
 }
 
-/// Diagnostic for a by-reference element whose key cannot be named again after the literal.
-const UNSUPPORTED_REFERENCE_ELEMENT_KEY: &str = "A by-reference array element (`&$x`) is only \
-     supported where its key is known: after a literal or variable key, or at a position not \
-     preceded by a spread or a computed key";
+/// The value half of a literal element.
+enum LiteralValue {
+    Value(Expr),
+    Reference(Expr),
+}
 
-/// Diagnostic for a by-reference element whose source has side effects.
+/// Records a key-less element.
+///
+/// A by-reference element is filed under its automatic key, which the parser knows exactly
+/// (`auto_key`) unless a spread or a computed key came before it.
+fn push_positional_entry(
+    entries: &mut Vec<LiteralEntry>,
+    has_reference: &mut bool,
+    reference: Option<Expr>,
+    value: &Expr,
+    auto_key: Option<i64>,
+) -> Result<(), CompileError> {
+    match reference {
+        Some(source) => {
+            let Some(key) = auto_key else {
+                return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
+            };
+            *has_reference = true;
+            let key = Expr::new(ExprKind::IntLiteral(key), source.span);
+            entries.push(LiteralEntry::Keyed(key, LiteralValue::Reference(source)));
+        }
+        None => entries.push(LiteralEntry::Positional(LiteralValue::Value(value.clone()))),
+    }
+    Ok(())
+}
+
+/// Diagnostic for a key-less by-reference element whose automatic key is a runtime fact.
+const UNSUPPORTED_REFERENCE_ELEMENT_KEY: &str = "A key-less by-reference array element (`&$x`) is \
+     not supported after a spread or a computed key; give it an explicit key";
+
+/// Diagnostic for a by-reference element in a literal that also spreads.
+const UNSUPPORTED_REFERENCE_ELEMENT_SPREAD: &str = "A by-reference array element (`&$x`) is not \
+     supported in an array literal that also spreads (`...$a`)";
+
+/// Diagnostic for a by-reference element whose source is not a place.
 const UNSUPPORTED_REFERENCE_ELEMENT_SOURCE: &str = "A by-reference array element must alias a \
-     variable, a property, a static property or an element with a literal or variable index \
-     (`[&$x]`, `[&$this->p]`, `[&$a['k']]`)";
+     variable, a property, a static property, an element or a by-reference call";
 
 /// Consumes `&<place>` at an element position and returns the place; `None` when the element is
 /// not a reference. `&$this` is returned as `None` with only the `&` consumed: `$this` cannot be
@@ -813,91 +855,174 @@ fn take_reference_array_element(
         return Ok(None);
     }
     let source = parse_expr(tokens, pos)?;
-    if !is_side_effect_free_reference_place(&source) {
+    if !matches!(
+        source.kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    ) {
         return Err(CompileError::new(span, UNSUPPORTED_REFERENCE_ELEMENT_SOURCE));
     }
     Ok(Some(source))
 }
 
-/// Whether an explicit key can be evaluated again to bind its element after the literal.
-fn reference_element_key_is_stable(key: &Expr) -> bool {
-    matches!(
-        key.kind,
-        ExprKind::IntLiteral(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::Null
-            | ExprKind::Variable(_)
-    ) || explicit_integer_array_key(key).is_some()
-}
-
-/// Whether a reference source names storage without running code, so binding it after the other
-/// elements are evaluated (rather than in its source position) is unobservable.
-fn is_side_effect_free_reference_place(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::PropertyAccess { object, .. } => {
-            matches!(object.kind, ExprKind::This) || is_side_effect_free_reference_place(object)
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            matches!(
-                index.kind,
-                ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_)
-            ) && is_side_effect_free_reference_place(array)
-        }
-        _ => false,
-    }
-}
-
-/// Builds `[..., &$x, ...]` as: the literal with `null` in each reference slot into a hidden
-/// local, then `$tmp[key] = &$x` for each reference element (the ordinary place-reference
-/// binding), and the hidden local as the expression's value. The value is a copy-on-write share
-/// of the same table, so every bound element keeps its reference.
-fn bind_reference_elements(
-    literal: Expr,
-    refs: Vec<ReferenceElement>,
-    span: Span,
-) -> Result<Expr, CompileError> {
-    let table = crate::names::generated_local_name(&format!(
-        "__elephc_ref_literal_{}_{}",
-        span.line, span.col
-    ));
-    let result = crate::names::generated_local_name(&format!(
-        "__elephc_ref_literal_value_{}_{}",
-        span.line, span.col
-    ));
-    let mut prelude = vec![crate::parser::ast::Stmt::new(
-        crate::parser::ast::StmtKind::Assign {
+/// Builds a literal with by-reference elements as the ordered writes PHP performs.
+///
+/// PHP evaluates each element's key, then its value or reference source, and inserts it before
+/// moving on, so a later element observes (and may replace) the earlier ones: a duplicate key
+/// overwrites the entry, breaking a reference it held, and `[&$a[$i], $i++]` binds `$a[0]`.
+/// The literal therefore becomes, in a hidden table local:
+///
+/// - `$t[] = V` for a key-less value;
+/// - `$k = K; $v = V; <break>; $t[$k] = $v` for a keyed value, where `<break>` rebinds the
+///   entry to a fresh cell first (`$t[$k] = &$fresh; unset($fresh)`) whenever an earlier element
+///   was a reference whose key it may repeat, so the write replaces the reference instead of
+///   writing through it;
+/// - `$k = K; $t[$k] = &S` for `K => &S` (key evaluated first, the source bound at its own
+///   position); a key-less `&S` uses its automatic key, which the parser tracks exactly.
+///
+/// The expression's value is the table, MOVED out of the hidden local when the expression is
+/// lowered (`ir_lower::expr::assignments`), so no hidden holder outlives the literal.
+fn build_reference_literal(entries: Vec<LiteralEntry>, span: Span) -> Result<Expr, CompileError> {
+    use crate::parser::ast::{Stmt, StmtKind};
+    let stem = format!("__elephc_ref_literal_{}_{}", span.line, span.col);
+    let table = crate::names::generated_local_name(&stem);
+    let result = crate::names::generated_local_name(&format!("{REFERENCE_LITERAL_VALUE_STEM}{}_{}", span.line, span.col));
+    let var = |name: &str, at: Span| Expr::new(ExprKind::Variable(name.to_string()), at);
+    let element = |key: Expr, at: Span| {
+        Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(var(&table, at)),
+                index: Box::new(key),
+            },
+            at,
+        )
+    };
+    let mut prelude = vec![Stmt::new(
+        StmtKind::Assign {
             name: table.clone(),
-            value: literal,
+            value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), span),
         },
         span,
     )];
-    for element in refs {
-        let source_span = element.source.span;
-        let place = Expr::new(
-            ExprKind::ArrayAccess {
-                array: Box::new(Expr::new(ExprKind::Variable(table.clone()), source_span)),
-                index: Box::new(element.key),
-            },
-            source_span,
-        );
-        prelude.push(crate::parser::stmt::lower_place_ref_assign(
-            place,
-            element.source,
-            source_span,
-        )?);
+    let mut temps: Vec<String> = Vec::new();
+    // Literal keys bound to a reference so far (normalized), and whether a computed key was.
+    let mut reference_keys: Vec<String> = Vec::new();
+    let mut computed_reference_key = false;
+    for (index, entry) in entries.into_iter().enumerate() {
+        let temp = |kind: &str, temps: &mut Vec<String>| {
+            let name = crate::names::generated_local_name(&format!("{stem}_{kind}{index}"));
+            temps.push(name.clone());
+            name
+        };
+        match entry {
+            LiteralEntry::Spread(spread) => {
+                return Err(CompileError::new(spread.span, UNSUPPORTED_REFERENCE_ELEMENT_SPREAD));
+            }
+            LiteralEntry::Positional(LiteralValue::Value(value)) => {
+                prelude.push(Stmt::new(StmtKind::ArrayPush { array: table.clone(), value }, span));
+            }
+            LiteralEntry::Keyed(key, LiteralValue::Value(value)) => {
+                let normalized = literal_key_identity(&key);
+                let key_temp = temp("k", &mut temps);
+                let value_temp = temp("v", &mut temps);
+                let (key_span, value_span) = (key.span, value.span);
+                prelude.push(Stmt::new(StmtKind::Assign { name: key_temp.clone(), value: key }, key_span));
+                prelude.push(Stmt::new(StmtKind::Assign { name: value_temp.clone(), value }, value_span));
+                let may_repeat_reference = match &normalized {
+                    Some(identity) => computed_reference_key || reference_keys.contains(identity),
+                    None => computed_reference_key || !reference_keys.is_empty(),
+                };
+                if may_repeat_reference {
+                    let fresh = temp("f", &mut temps);
+                    // Each synthetic statement that binds or unsets a hidden local sits at its own
+                    // source position: local binding decisions are keyed by position.
+                    prelude.push(crate::parser::stmt::lower_place_ref_assign(
+                        element(var(&key_temp, key_span), key_span),
+                        var(&fresh, key_span),
+                        key_span,
+                    )?);
+                    prelude.push(unset_stmt(vec![var(&fresh, value_span)], value_span));
+                }
+                prelude.push(Stmt::new(
+                    StmtKind::ArrayAssign {
+                        array: table.clone(),
+                        index: var(&key_temp, span),
+                        value: var(&value_temp, span),
+                    },
+                    span,
+                ));
+            }
+            LiteralEntry::Keyed(key, LiteralValue::Reference(source)) => {
+                match literal_key_identity(&key) {
+                    Some(identity) => reference_keys.push(identity),
+                    None => computed_reference_key = true,
+                }
+                let at = source.span;
+                let key_temp = temp("k", &mut temps);
+                let key_span = key.span;
+                prelude.push(Stmt::new(StmtKind::Assign { name: key_temp.clone(), value: key }, key_span));
+                // The source is bound here, at its own position: a non-variable source goes
+                // through a hidden cell local inside `lower_place_ref_assign`.
+                prelude.push(crate::parser::stmt::lower_place_ref_assign(
+                    element(var(&key_temp, at), at),
+                    source,
+                    at,
+                )?);
+            }
+            LiteralEntry::Positional(LiteralValue::Reference(source)) => {
+                // `push_positional_entry` files every key-less reference under its key.
+                return Err(CompileError::new(source.span, UNSUPPORTED_REFERENCE_ELEMENT_KEY));
+            }
+        }
+    }
+    if !temps.is_empty() {
+        prelude.push(unset_stmt(temps.iter().map(|name| var(name, span)).collect(), span));
     }
     Ok(Expr::new(
         ExprKind::Assignment {
-            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
-            value: Box::new(Expr::new(ExprKind::Variable(table), span)),
+            target: Box::new(var(&result, span)),
+            value: Box::new(var(&table, span)),
             result_target: None,
             prelude,
             conditional_value_temp: None,
         },
         span,
     ))
+}
+
+/// Name stem of the result marker of a by-reference array literal; lowering moves the hidden
+/// table into the expression's value when it sees it.
+pub(crate) const REFERENCE_LITERAL_VALUE_STEM: &str = "__elephc_ref_literal_value_";
+
+/// `unset(...)` as a statement.
+fn unset_stmt(args: Vec<Expr>, span: Span) -> crate::parser::ast::Stmt {
+    crate::parser::ast::Stmt::new(
+        crate::parser::ast::StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall { name: "unset".into(), args },
+            span,
+        )),
+        span,
+    )
+}
+
+/// The key PHP stores for a literal key, as a comparable string (`'1'`, `1` and `true` are the
+/// same key); `None` for a computed key.
+fn literal_key_identity(key: &Expr) -> Option<String> {
+    if let Some(int) = explicit_integer_array_key(key) {
+        return Some(format!("i{int}"));
+    }
+    match &key.kind {
+        ExprKind::StringLiteral(text) => Some(format!("s{text}")),
+        ExprKind::Null => Some("s".to_string()),
+        _ => None,
+    }
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.

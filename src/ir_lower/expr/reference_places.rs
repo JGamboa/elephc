@@ -64,6 +64,11 @@ fn lower_bind_property(
     span: Span,
 ) {
     let object_value = lower_expr(ctx, object);
+    if let Some(message) = readonly_reference_error(ctx, object_value.value, property) {
+        release_owning_receiver_temporary(ctx, object_value, span);
+        crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span);
+        return;
+    }
     let owned = match ctx.builder.value_php_type(object_value.value).codegen_repr() {
         PhpType::Object(class) => ctx
             .classes

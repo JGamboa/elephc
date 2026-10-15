@@ -137,10 +137,11 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
-        // A by-reference array literal element (`[&$this->p]`) lowers into its expression's
-        // prelude as the `Synthetic` group `$tmp = &<source>; $array[k] = &$tmp; unset($tmp);`,
-        // whose statements are checked as the ordinary statements they are.
-        if matches!(stmt.kind, StmtKind::Synthetic(_)) {
+        // A by-reference array literal (`[&$this->p]`) lowers into its expression's prelude as
+        // ordered writes, `Synthetic` groups and `unset(...)` statements (see
+        // `parser::expr::prefix::build_reference_literal`); those are checked as the ordinary
+        // statements they are.
+        if matches!(stmt.kind, StmtKind::Synthetic(_) | StmtKind::ExprStmt(_)) {
             return self.check_stmt(stmt, env);
         }
         let result = match &stmt.kind {
