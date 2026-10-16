@@ -231,21 +231,7 @@ pub(super) fn check_nested_array_assign(
     };
 
     widen_nested_write_local_root(checker, target, env)?;
-    let mut root = target;
-    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
-        root = array;
-    }
-    match &root.kind {
-        ExprKind::PropertyAccess { object, property } => {
-            super::properties::widen_property_root_for_nested_write(checker, object, property, env)?;
-        }
-        ExprKind::StaticPropertyAccess { receiver, property } => {
-            super::static_properties::widen_static_property_root_for_nested_write(
-                checker, receiver, property, span,
-            )?;
-        }
-        _ => {}
-    }
+    super::widen_property_root_for_element_write(checker, target, span, env)?;
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
@@ -281,7 +267,7 @@ pub(super) fn check_nested_array_assign(
 /// Only roots whose elements are already `Mixed` (or not yet known) are widened: those are
 /// exactly the containers the nested-write lowering autovivifies through. A declared element
 /// type is a contract and is left alone.
-fn widen_nested_write_local_root(
+pub(super) fn widen_nested_write_local_root(
     checker: &mut Checker,
     target: &Expr,
     env: &mut TypeEnv,
@@ -311,7 +297,9 @@ fn widen_nested_write_local_root(
         && (matches!(normalized, PhpType::Str) || matches!(idx_ty, PhpType::Str));
     let widened = match &root_ty {
         PhpType::Array(elem)
-            if matches!(elem.as_ref(), PhpType::Never) || elem.codegen_repr() == PhpType::Mixed =>
+            if matches!(elem.as_ref(), PhpType::Never)
+                || elem.codegen_repr() == PhpType::Mixed
+                || is_concrete_container(elem) =>
         {
             if string_key {
                 let key = if matches!(elem.as_ref(), PhpType::Never) {
@@ -327,7 +315,9 @@ fn widen_nested_write_local_root(
                 PhpType::Array(Box::new(PhpType::Mixed))
             }
         }
-        PhpType::AssocArray { key, value } if value.codegen_repr() == PhpType::Mixed => {
+        PhpType::AssocArray { key, value }
+            if value.codegen_repr() == PhpType::Mixed || is_concrete_container(value) =>
+        {
             PhpType::AssocArray {
                 key: Box::new(merge_array_key_types(*key.clone(), normalized)),
                 value: Box::new(PhpType::Mixed),
@@ -339,6 +329,12 @@ fn widen_nested_write_local_root(
         env.insert(name.clone(), widened);
     }
     Ok(())
+}
+
+/// Returns whether an element type is itself a concretely typed array, whose slots the
+/// nested-write lowering boxes (`ArrayToMixed` / `HashToMixed`) before writing through them.
+fn is_concrete_container(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Validates and updates the type environment for `$array[] = $value` (push) assignments.

@@ -216,7 +216,7 @@ pub(crate) use property_access::{
 };
 pub(crate) use property_fetch_for_write::{
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
-    lower_nested_assignment_property_source,
+    lower_nested_assignment_property_source, nested_write_property_source_is_addressable,
 };
 pub(crate) use string_concat::string_op_uses_scratch_storage;
 pub(super) use assoc_array_literals::{

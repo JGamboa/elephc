@@ -100,6 +100,8 @@ pub(crate) use array_write_core::{
     desugared_element_update, lower_array_assign_with_diagnosed_key,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use nested_array_writes::{lower_nested_assign_parent, nested_parent_is_write_through};
+pub(crate) use static_property_helpers::static_property_type;
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,

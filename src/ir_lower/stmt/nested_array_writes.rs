@@ -81,7 +81,7 @@ pub(super) fn lower_nested_array_assign(
 /// undefined-key warning for these legal writes, and neither does this path.
 /// Shapes without a for-write lowering fall back to the plain read used
 /// before (ArrayAccess objects, non-container receivers).
-pub(super) fn lower_nested_assign_parent(
+pub(crate) fn lower_nested_assign_parent(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     span: Span,
@@ -131,6 +131,45 @@ pub(super) fn lower_nested_assign_parent(
     lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
 }
 
+/// Returns whether `lower_nested_assign_parent(expr)` yields the STORED cell of the container,
+/// so a mutation through it reaches the variable or property the chain names.
+///
+/// Mirrors the decisions `lower_nested_assign_parent` takes before lowering anything: a local
+/// concrete container with Mixed elements, a boxed local, a boxed fixed property slot behind a
+/// stable receiver, or a boxed static property; deeper levels inherit the answer of their
+/// receiver because every boxed level is fetched for write. Any other shape lowers to a plain
+/// read whose result is a detached copy.
+pub(crate) fn nested_parent_is_write_through(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => ctx.local_type(name).codegen_repr() == PhpType::Mixed,
+        ExprKind::PropertyAccess { object, property } => {
+            crate::ir_lower::expr::nested_write_property_source_is_addressable(ctx, object, property)
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            super::static_property_type(ctx, receiver, property)
+                .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            if let ExprKind::Variable(name) = &array.kind {
+                let local_ty = ctx.local_type(name).codegen_repr();
+                let concrete = match &local_ty {
+                    PhpType::Array(elem) => {
+                        elem.codegen_repr() == PhpType::Mixed
+                            || is_empty_indexed_array_element(elem.as_ref())
+                    }
+                    PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+                    _ => false,
+                };
+                return concrete
+                    || local_ty == PhpType::Mixed
+                    || concrete_container_elements_boxing(ctx, name).is_some();
+            }
+            nested_parent_is_write_through(ctx, array)
+        }
+        _ => false,
+    }
+}
+
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
 /// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
@@ -145,6 +184,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
     parent_expr: &Expr,
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
+    box_concrete_container_elements(ctx, name, span);
     let local_ty = ctx.local_type(name);
     let indexed_mixed = matches!(
         local_ty.codegen_repr(),
@@ -268,6 +308,48 @@ pub(super) fn release_nested_parent_key(ctx: &mut LoweringContext<'_, '_>, key: 
     if matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
     }
+}
+
+/// Returns the boxing conversion a local needs before a nested write can autovivify through it.
+///
+/// A container whose elements are themselves concretely typed arrays (`[[]]`, `['root' => []]`)
+/// stores raw array pointers in its slots; the for-write fetch needs boxed cells it can hand out
+/// and replace. Such a local is converted to Mixed elements first (the checker widened its type
+/// the same way). A by-reference local keeps its representation: its storage belongs to someone
+/// else's slot type.
+fn concrete_container_elements_boxing(ctx: &LoweringContext<'_, '_>, name: &str) -> Option<(Op, PhpType)> {
+    if ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    let is_container = |ty: &PhpType| matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. });
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(elem) if is_container(&elem) => {
+            Some((Op::ArrayToMixed, PhpType::Array(Box::new(PhpType::Mixed))))
+        }
+        PhpType::AssocArray { key, value } if is_container(&value) => Some((
+            Op::HashToMixed,
+            PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) },
+        )),
+        _ => None,
+    }
+}
+
+/// Boxes a local's concretely typed array elements in place (see
+/// `concrete_container_elements_boxing`), mirroring the arm-edge widening of `if` merges.
+fn box_concrete_container_elements(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
+    let Some((op, widened_ty)) = concrete_container_elements_boxing(ctx, name) else {
+        return;
+    };
+    let source = ctx.load_local(name, Some(span));
+    let converted = ctx.emit_value(
+        op,
+        vec![source.value],
+        None,
+        widened_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(name, converted, widened_ty, Some(span));
 }
 
 /// How a nested-write parent key selects the parent container's storage.

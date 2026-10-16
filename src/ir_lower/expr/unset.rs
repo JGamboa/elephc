@@ -59,6 +59,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_through_parent_cell_is_supported(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -169,6 +170,12 @@ pub(super) fn lower_unset_array_access(
             _ => {}
         }
     }
+    if !unset_array_access_has_object_receiver(ctx, array)
+        && unset_through_parent_cell_is_supported(ctx, array)
+    {
+        lower_unset_through_parent_cell(ctx, array, index, expr);
+        return;
+    }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
             object: Box::new(array.clone()),
@@ -178,6 +185,92 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Returns whether `unset($parent[$key])` can remove the key through `$parent`'s stored cell.
+///
+/// Covers the receivers that are not a plain local: a nested element (`unset($c[$e]['k'])`) and
+/// a boxed property or static property (`unset($this->listeners[$e])`, `unset(self::$map[$k])`),
+/// as long as the nested-write parent fetch reaches the stored cell
+/// (`nested_parent_is_write_through`). The receiver is probed with `isset()` first and then
+/// fetched again, so every part of it must be replayable without side effects.
+pub(super) fn unset_through_parent_cell_is_supported(ctx: &LoweringContext<'_, '_>, parent: &Expr) -> bool {
+    if matches!(parent.kind, ExprKind::Variable(_)) {
+        return false;
+    }
+    unset_parent_is_replayable(parent)
+        && crate::ir_lower::stmt::nested_parent_is_write_through(ctx, parent)
+}
+
+/// Returns whether evaluating `expr` twice is unobservable (no calls, assignments or increments).
+fn unset_parent_is_replayable(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::This
+        | ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_) => true,
+        ExprKind::PropertyAccess { object, .. } => unset_parent_is_replayable(object),
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, index } => {
+            unset_parent_is_replayable(array) && unset_parent_is_replayable(index)
+        }
+        _ => false,
+    }
+}
+
+/// Lowers `unset($parent[$key])` through the parent's stored cell.
+///
+/// PHP's `unset()` never autovivifies: a missing or null parent is a silent no-op. The parent is
+/// therefore probed with `isset()` first, and only an existing, non-null parent is fetched for
+/// write (which then creates nothing) and has the key removed in place by `Op::OffsetUnset`, the
+/// same removal a boxed local uses. A scalar parent reaches the helper's
+/// "Cannot unset offset in a non-array variable" Error, as in PHP.
+fn lower_unset_through_parent_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    parent: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let probe = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("isset"),
+            args: vec![parent.clone()],
+        },
+        parent.span,
+    );
+    let present = lower_expr(ctx, &probe);
+    let remove_block = ctx.builder.create_named_block("unset.nested.remove", Vec::new());
+    let merge = ctx.builder.create_named_block("unset.nested.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: present.value,
+        then_target: remove_block,
+        then_args: Vec::new(),
+        else_target: merge,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(remove_block);
+    let cell = crate::ir_lower::stmt::lower_nested_assign_parent(ctx, parent, expr.span);
+    let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    ctx.emit_void(
+        Op::OffsetUnset,
+        vec![cell.value, index_value.value],
+        None,
+        Op::OffsetUnset.default_effects(),
+        Some(expr.span),
+    );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    if ctx.value_is_owning_temporary(cell) {
+        crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(expr.span));
+    }
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
