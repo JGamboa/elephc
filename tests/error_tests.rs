@@ -290,6 +290,8 @@ mod syntax;
 mod assign_expr;
 #[path = "error_tests/static_member.rs"]
 mod static_member;
+#[path = "error_tests/static_ref.rs"]
+mod static_ref;
 #[path = "error_tests/inline_html.rs"]
 mod inline_html;
 #[path = "error_tests/recovery.rs"]
