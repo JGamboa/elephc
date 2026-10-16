@@ -110,12 +110,7 @@ pub(crate) fn lower_dynamic_ref_place(
     // A receiver typed `object` (or with a class this program does not declare) dispatches like
     // a receiver of unknown class.
     let receiver_repr = match object_type.codegen_repr() {
-        PhpType::Object(class_name)
-            if !crate::types::checker::builtin_stdclass::is_stdclass(class_name.trim_start_matches('\\'))
-                && !ctx.classes.contains_key(class_name.trim_start_matches('\\')) =>
-        {
-            PhpType::Mixed
-        }
+        PhpType::Object(class_name) if dispatches_like_unknown_class(ctx, &class_name) => PhpType::Mixed,
         other => other,
     };
     match receiver_repr {
@@ -204,30 +199,11 @@ pub(crate) fn lower_dynamic_ref_place(
         PhpType::Mixed | PhpType::Union(_) => {
             let arm_block = ctx.builder.create_named_block("dyn_ref_place.stdclass", Vec::new());
             let other = ctx.builder.create_named_block("dyn_ref_place.other", Vec::new());
-            let condition = Expr::new(
-                ExprKind::InstanceOf {
-                    value: Box::new(var(&object_local)),
-                    target: InstanceOfTarget::Name(Name::from("stdClass".to_string())),
-                },
-                span,
-            );
-            let matches = lower_expr(ctx, &condition);
+            let matches = lower_expr(ctx, &exact_stdclass_condition(&object_local, span));
             conditional_branch(ctx, matches.value, arm_block, other);
             ctx.builder.position_at_end(arm_block);
             ctx.restore_initialized_slots(split_initialized.clone());
-            let ty = PhpType::Object("stdClass".to_string());
-            let boxed = lower_expr(ctx, &var(&object_local));
-            let unboxed = ctx.emit_owned_value(
-                Op::MixedUnbox,
-                vec![boxed.value],
-                None,
-                ty.clone(),
-                Op::mixed_unbox_effects(&ty),
-                Some(span),
-            );
-            crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(span));
-            let receiver = ctx.declare_synthetic_php_local(ty.clone());
-            store_value_into_temp(ctx, &receiver, ty, unboxed, span);
+            let receiver = unbox_stdclass(ctx, &object_local, span);
             lower_hash_arm(ctx, target, &receiver, "stdClass", &name_local, source_name, direct, span);
             branch_to(ctx, merge);
             ctx.builder.position_at_end(other);
@@ -286,12 +262,7 @@ pub(crate) fn lower_ref_assign_dynamic_property(
     let split_initialized = ctx.initialized_slots_snapshot();
     let mut reached = false;
     let receiver_repr = match object_type.codegen_repr() {
-        PhpType::Object(class_name)
-            if !crate::types::checker::builtin_stdclass::is_stdclass(class_name.trim_start_matches('\\'))
-                && !ctx.classes.contains_key(class_name.trim_start_matches('\\')) =>
-        {
-            PhpType::Mixed
-        }
+        PhpType::Object(class_name) if dispatches_like_unknown_class(ctx, &class_name) => PhpType::Mixed,
         other => other,
     };
     match receiver_repr {
@@ -351,14 +322,7 @@ pub(crate) fn lower_ref_assign_dynamic_property(
         PhpType::Mixed | PhpType::Union(_) => {
             let arm_block = ctx.builder.create_named_block("dyn_ref_source.stdclass", Vec::new());
             let other = ctx.builder.create_named_block("dyn_ref_source.other", Vec::new());
-            let condition = Expr::new(
-                ExprKind::InstanceOf {
-                    value: Box::new(var(&object_local)),
-                    target: InstanceOfTarget::Name(Name::from("stdClass".to_string())),
-                },
-                span,
-            );
-            let matches = lower_expr(ctx, &condition);
+            let matches = lower_expr(ctx, &exact_stdclass_condition(&object_local, span));
             conditional_branch(ctx, matches.value, arm_block, other);
             ctx.builder.position_at_end(arm_block);
             ctx.restore_initialized_slots(split_initialized.clone());
@@ -464,6 +428,12 @@ fn name_condition(name_local: &str, object_local: &str, property: &str, subclass
 /// Unboxes a `mixed` local already known to hold a `stdClass` into a `stdClass`-typed local.
 fn unbox_stdclass(ctx: &mut LoweringContext<'_, '_>, object_local: &str, span: Span) -> String {
     let ty = PhpType::Object("stdClass".to_string());
+    if !matches!(ctx.local_type(object_local).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        // An object-typed receiver routed here (a class extends stdClass) is already a pointer.
+        let receiver = ctx.declare_synthetic_php_local(ty.clone());
+        store_expr_into_temp(ctx, &receiver, ty, &Expr::new(ExprKind::Variable(object_local.to_string()), span), span);
+        return receiver;
+    }
     let boxed = lower_expr(ctx, &Expr::new(ExprKind::Variable(object_local.to_string()), span));
     let unboxed = ctx.emit_owned_value(
         Op::MixedUnbox,
@@ -539,10 +509,81 @@ fn lower_hash_arm(
     );
 }
 
+/// Whether a receiver of static class `class_name` must be dispatched on its runtime class: an
+/// `object` type or a class this program does not declare, or `stdClass` while some class extends
+/// it (its instances then have another layout and may define `__get`/`__set`).
+fn dispatches_like_unknown_class(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return !subclasses_of(ctx, class_name).is_empty();
+    }
+    !ctx.classes.contains_key(class_name)
+}
+
+/// `$o instanceof stdClass && get_class($o) === 'stdClass'`: exactly a `stdClass`, never a class
+/// extending it.
+fn exact_stdclass_condition(object_local: &str, span: Span) -> Expr {
+    let var = Expr::new(ExprKind::Variable(object_local.to_string()), span);
+    let instance = Expr::new(
+        ExprKind::InstanceOf {
+            value: Box::new(var.clone()),
+            target: InstanceOfTarget::Name(Name::from("stdClass".to_string())),
+        },
+        span,
+    );
+    let class = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                ExprKind::FunctionCall { name: Name::unqualified("get_class"), args: vec![var] },
+                span,
+            )),
+            op: BinOp::StrictEq,
+            right: Box::new(literal("stdClass", span)),
+        },
+        span,
+    );
+    Expr::new(ExprKind::BinaryOp { left: Box::new(instance), op: BinOp::And, right: Box::new(class) }, span)
+}
+
+/// Whether `class_name` or one of its ancestors defines `__get` or `__set`.
+fn has_magic_accessors(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let Some(info) = ctx.classes.get(name.as_str()) else { return false };
+        if info.methods.keys().any(|method| {
+            let method = method.to_ascii_lowercase();
+            method == "__get" || method == "__set"
+        }) {
+            return true;
+        }
+        current = info.parent.clone();
+    }
+    false
+}
+
+/// Whether any runtime class a `class_name` receiver can hold defines `__get` or `__set`.
+fn subtree_has_magic_accessors(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    has_magic_accessors(ctx, class_name)
+        || subclasses_of(ctx, class_name).iter().any(|subclass| has_magic_accessors(ctx, subclass))
+}
+
+/// The explicit refusal for a reference through a runtime name that PHP would route to
+/// `__get`/`__set` (an undeclared or inaccessible name on a class with magic accessors).
+fn magic_refusal(class_name: &str) -> String {
+    format!(
+        "elephc: a reference through a runtime property name (`$obj->{{$name}}`) to an undeclared or \
+         inaccessible property of {class_name}, which has __get/__set, is not supported; PHP would \
+         call the magic accessor"
+    )
+}
+
 /// Returns why the property hash of `class_name` cannot hold the reference, if it cannot.
 fn hash_storage_refusal(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Option<String> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return None;
+    }
+    if subtree_has_magic_accessors(ctx, class_name) {
+        return Some(magic_refusal(class_name));
     }
     let refuse = || {
         Some(format!(
@@ -602,7 +643,9 @@ fn declared_arms(ctx: &LoweringContext<'_, '_>, class_name: &str, direct: bool) 
         } else {
             info.property_visibilities.get(&property)
         };
-        let arm = if !readable || !writable {
+        let arm = if (!readable || !writable) && subtree_has_magic_accessors(ctx, class_name) {
+            Arm::Throw(magic_refusal(class_name))
+        } else if !readable || !writable {
             Arm::Throw(format!(
                 "Cannot {} {} property {class_name}::${property}",
                 if readable { "modify" } else { "access" },

@@ -661,3 +661,65 @@ var_dump($res);
     );
     assert_eq!(out, "array(1) {\n  [0]=>\n  &int(5)\n}\n");
 }
+
+/// A runtime-named reference that PHP would route to `__get`/`__set` (an undeclared or
+/// inaccessible name on a class with magic accessors) throws an explicit elephc `Error` instead
+/// of binding a dynamic property; a declared accessible property still binds.
+#[test]
+fn test_reference_dynamic_property_refuses_magic_accessors() {
+    let out = compile_and_run(
+        r#"<?php
+class M {
+    public $d = 'd';
+    private $hid = 'H';
+    function __get($n) { return 'G'; }
+    function __set($n, $v) {}
+}
+class X extends stdClass { function __get($n) { return 'G'; } }
+function bind($o, string $k, &$v) {
+    try { $o->{$k} = &$v; echo "bound $k\n"; } catch (Error $e) { echo substr($e->getMessage(), 0, 60), "\n"; }
+}
+function take(M $o, string $k) {
+    try { $r = &$o->{$k}; echo "taken $k\n"; } catch (Error $e) { echo substr($e->getMessage(), 0, 60), "\n"; }
+}
+$v = 1;
+$m = new M();
+take($m, 'd');
+take($m, 'zz');
+take($m, 'hid');
+bind($m, 'zz', $v);
+bind(new X(), 'zz', $v);
+$s = new stdClass();
+bind($s, 'a', $v);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"taken d
+elephc: a reference through a runtime property name (`$obj->
+elephc: a reference through a runtime property name (`$obj->
+elephc: a reference bound through a runtime property name (`
+elephc: a reference bound through a runtime property name (`
+bound a
+"#
+    );
+}
+
+/// `&$c->t[]` and `$c->t[] = &$x` on an uninitialized typed `array` property raise PHP's
+/// uninitialized-property `Error` (a reference slot keeps its marker inside the cell).
+#[test]
+fn test_reference_new_element_of_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $t; }
+$c = new C;
+try { $r = &$c->t[]; $r = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$x = 1;
+try { $c->t[] = &$x; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Typed property C::$t must not be accessed before initialization\nTyped property C::$t must not be accessed before initialization\n"
+    );
+}
