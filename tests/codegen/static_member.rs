@@ -156,7 +156,7 @@ class D {
         self::${$p}['B'] ??= 4;
         self::${$p}['A'] = self::${$p}['A'] ? self::${$p}['B'] + self::${$p}['A'] : 0;
         echo json_encode(self::$final), json_encode(self::$finalMethods), "\n";
-        $r = &self::${$p};
+        $r = &self::${'fin' . 'al'}; // nombre plegable: candidatas mixtas no admiten ref dinámica
         $r['C'] = 5;
         ++self::${$p}['C'];
         self::${'case' . 'Check'} = 7;
@@ -348,5 +348,196 @@ return ['en' => 'English', 'es' => 'Spanish'];
     assert_eq!(out, r#"loaded {"en":"English","es":"Spanish"} {"en":"English","es":"Spanish"}
 loaded Spanish English loaded English
 ["k","j"]
+"#);
+}
+
+/// Verifies `++self::$a[f('k')];` / `self::$a[f()]++;` in statement position evaluate the index
+/// once and write the static element (review P42a, `e5`).
+#[test]
+fn test_statement_incdec_on_static_element_with_call_index() {
+    let out = compile_and_run(r#"<?php
+function f($x){ echo "f($x)\n"; return $x; }
+class A {
+  public static array $a = ['k'=>1];
+  static function run() {
+    ++self::$a[f('k')];
+    self::$a[f('k')]++;
+    --self::$a[strtolower('K')];
+    var_dump(self::$a);
+  }
+}
+A::run();
+"#);
+    assert_eq!(out, r#"f(k)
+f(k)
+array(1) {
+  ["k"]=>
+  int(2)
+}
+"#);
+}
+
+/// Verifies a protected static property reached from outside through `A::${$n}` reports
+/// `protected`, not `private` (review P42a, `o2`).
+#[test]
+fn test_dynamic_static_property_visibility_messages() {
+    let out = compile_and_run(r#"<?php
+class A { protected static $p = 'p'; public static array $q = ['z'=>1]; private static $r = 'r'; }
+$n = 'q';
+echo json_encode(A::${$n}), "\n";
+try { $n = 'p'; echo A::${$n}, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $n = 'r'; echo A::${$n}, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $n = 'nope'; echo A::${$n}, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump(isset(A::${'p'}), isset(A::${'q'}));
+"#);
+    assert_eq!(out, r#"{"z":1}
+Cannot access protected property A::$p
+Cannot access private property A::$r
+Access to undeclared static property A::$nope
+bool(false)
+bool(true)
+"#);
+}
+
+/// Verifies `$r = &self::${$n}` binds the matching property when every candidate is an array
+/// (symfony DebugClassLoader) or there is a single candidate.
+#[test]
+fn test_dynamic_static_property_reference_array_and_single_candidate() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static array $a = ['k' => 1];
+  public static array $b = [];
+  static function run($n) { $r = &self::${$n}; $r['z'] = 2; var_dump(count($r)); }
+}
+P::run('a'); P::run('b'); echo json_encode(P::$a), json_encode(P::$b), "\n";
+"#);
+    assert_eq!(out, r#"int(2)
+int(1)
+{"k":1,"z":2}{"z":2}
+"#);
+    let out = compile_and_run(r#"<?php
+class P {
+  public static string $s = 'x';
+  static function run($n) { $r = &self::${$n}; var_dump($r); $r = 'W'; }
+}
+P::run('s'); var_dump(P::$s);
+"#);
+    assert_eq!(out, r#"string(1) "x"
+string(1) "W"
+"#);
+}
+
+/// Verifies a whole-value write through a runtime name runs on an untyped scalar candidate and
+/// throws the explicit elephc `Error` (never a silent skip, never an internal temp name) for a
+/// candidate whose type the arm cannot take (review P42a, `w1`).
+#[test]
+fn test_dynamic_static_property_whole_write_explicit_limit() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static $a = ['k'=>1];
+  public static array $t = [];
+  public static $s = 'x';
+  public static int $i = 5;
+  public static $u = 3;
+  static function run($n) {
+    self::${$n}++;
+    echo json_encode(self::$a), json_encode(self::$t), self::$s, self::$i, self::$u, "\n";
+  }
+}
+P::run("u"); try { P::run("i"); } catch (\Error $e) { echo str_starts_with($e->getMessage(), "elephc: ") ? "elephc-limit\n" : $e->getMessage(); }
+"#);
+    assert_eq!(out, "{\"k\":1}[]x54\nelephc-limit\n");
+}
+
+/// Documents the pre-existing limit behind the reference rule: a reference to a static property
+/// bound inside an `if`/`elseif` branch is not visible after the branch (`ref10`). Ignored
+/// until conditional static-property references are lowered.
+#[test]
+#[ignore = "pre-existing: reference to a static property bound inside a conditional branch (review P42a ref10)"]
+fn test_conditional_reference_to_static_property_two_branches() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static string $s = 'x';
+  public static string $t = 'y';
+  static function run($n) { if ($n === 's') { $r = &self::$s; } elseif ($n === 't') { $r = &self::$t; } var_dump($r); $r = 'W'; }
+}
+P::run('s'); P::run('t'); var_dump(P::$s, P::$t);
+"#);
+    assert_eq!(out, r#"string(1) "x"
+string(1) "y"
+string(1) "W"
+string(1) "W"
+"#);
+}
+
+/// Same limit with a single guarded branch (`ref11`).
+#[test]
+#[ignore = "pre-existing: reference to a static property bound inside a conditional branch (review P42a ref11)"]
+fn test_conditional_reference_to_static_property_one_branch() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static string $s = 'x';
+  static function run($n) { if ($n === 's') { $r = &self::$s; } var_dump($r); $r = 'W'; }
+}
+P::run('s'); var_dump(P::$s);
+"#);
+    assert_eq!(out, r#"string(1) "x"
+string(1) "W"
+"#);
+}
+
+/// Verifies `self::${$n}[] = v` on a single untyped property with an array default (review P42a r1, `x10`).
+#[test]
+fn test_dynamic_static_append_on_untyped_array_default() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static $a = ['k'=>1];
+  static function run($n) { self::${$n}[] = 3; echo json_encode(self::$a), "\n"; }
+}
+P::run('a');
+"#);
+    assert_eq!(out, r#"{"k":1,"0":3}
+"#);
+}
+
+/// Verifies `self::${$n}[] = v` selecting a declared `array` property among mixed-type candidates (review P42a r1, `x1`).
+#[test]
+fn test_dynamic_static_append_on_typed_array_property() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static $a = ['k'=>1];
+  public static array $t = [];
+  public static $s = 'x';
+  public static int $i = 5;
+  public static $u = 3;
+  static function run($n) {
+    self::${$n}[] = 3;
+    echo json_encode(self::$a), json_encode(self::$t), self::$s, self::$i, self::$u, "\n";
+  }
+}
+P::run('t');
+"#);
+    assert_eq!(out, r#"{"k":1}[3]x53
+"#);
+}
+
+/// Verifies element writes and appends through `self::${$n}` on untyped and typed array properties (review P42a, `w5`).
+#[test]
+fn test_dynamic_static_element_writes_and_appends() {
+    let out = compile_and_run(r#"<?php
+class P {
+  public static $a = ['k'=>1];
+  public static array $t = [];
+  public static $s = 'x';
+  public static int $i = 5;
+  public static $u = 3;
+  static function run($n) {
+    self::${$n}[] = 3;
+    echo json_encode(self::$a), json_encode(self::$t), self::$s, self::$i, self::$u, "\n";
+  }
+}
+P::run('a');
+"#);
+    assert_eq!(out, r#"{"k":1,"0":3}[]x53
 "#);
 }

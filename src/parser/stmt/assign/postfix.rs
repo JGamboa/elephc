@@ -373,7 +373,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
         return Err(CompileError::new(span, "Invalid increment target"));
     }
 
-    if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. }) {
+    if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. })
+        && !crate::variable_variables::static_props::is_dynamic_static_place(&lhs_expr)
+    {
         return Ok(None);
     }
 
@@ -1045,6 +1047,30 @@ fn lower_effectful_postfix_assignment(
                 let value = assignment_value(target, op, rhs, span);
                 StmtKind::PropertyArrayAssign {
                     object,
+                    property,
+                    index,
+                    value,
+                }
+            }
+            // `++self::$a[f('k')];`: the index is evaluated once into a hidden local.
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(
+                            ExprKind::StaticPropertyAccess {
+                                receiver: receiver.clone(),
+                                property: property.clone(),
+                            },
+                            span,
+                        )),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
                     property,
                     index,
                     value,

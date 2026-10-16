@@ -60,6 +60,11 @@ pub(crate) fn dynamic_static_access(receiver: StaticReceiver, name: Expr, span: 
     )
 }
 
+/// Whether `expr` is a place rooted at a dynamic static-property access (`C::${n}`, `C::${n}[k]`).
+pub(crate) fn is_dynamic_static_place(expr: &Expr) -> bool {
+    place_root(expr).is_some()
+}
+
 /// Returns `(receiver, name)` when `expr` is exactly a dynamic static-property access.
 fn dynamic_root(expr: &Expr) -> Option<(&StaticReceiver, &Expr)> {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
@@ -168,6 +173,7 @@ struct StaticProp {
 /// The class-like facts the dispatch needs.
 #[derive(Default, Clone)]
 struct ClassFacts {
+    name: String,
     parent: Option<String>,
     traits: Vec<String>,
     statics: Vec<StaticProp>,
@@ -198,6 +204,7 @@ fn collect_classes(stmts: &[Stmt], out: &mut HashMap<String, ClassFacts>) {
                 out.insert(
                     class_key(name),
                     ClassFacts {
+                        name: name.clone(),
                         parent: extends.as_ref().map(|n| n.as_str().to_string()),
                         traits: trait_uses
                             .iter()
@@ -211,6 +218,7 @@ fn collect_classes(stmts: &[Stmt], out: &mut HashMap<String, ClassFacts>) {
                 out.insert(
                     class_key(name),
                     ClassFacts {
+                        name: name.clone(),
                         parent: None,
                         traits: trait_uses
                             .iter()
@@ -246,10 +254,33 @@ fn is_array_capable(prop: &StaticProp) -> bool {
     }
 }
 
+/// Whether the property always holds an array: declared `array`, or untyped with an array literal
+/// default.
+fn is_array_valued(prop: &StaticProp) -> bool {
+    match &prop.type_expr {
+        Some(TypeExpr::Named(name)) => {
+            name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("array")
+        }
+        Some(_) => false,
+        None => matches!(
+            prop.default.as_ref().map(|d| &d.kind),
+            Some(
+                ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+                    | ExprKind::ArrayLiteralMixed(_)
+            )
+        ),
+    }
+}
+
 /// Whether a whole-value write of an arbitrary value is valid for the property.
+///
+/// An untyped property whose default is an array literal is typed as an array by the checker,
+/// so writing a scalar through a dispatch arm (`C::${$n}++`, `.= 'x'`) would fail to compile in
+/// an arm the program may never take; that arm throws the explicit elephc `Error` instead.
 fn accepts_any_value(prop: &StaticProp) -> bool {
     match &prop.type_expr {
-        None => true,
+        None => !is_array_valued(prop),
         Some(TypeExpr::Named(name)) => {
             name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("mixed")
         }
@@ -266,6 +297,8 @@ enum Access {
     Element,
     /// A write of a new value to the whole property.
     WholeWrite,
+    /// `$r = &C::${n}`: binds a reference to the whole property.
+    Reference,
 }
 
 impl Access {
@@ -274,6 +307,7 @@ impl Access {
             Access::Whole => true,
             Access::Element => is_array_capable(prop),
             Access::WholeWrite => accepts_any_value(prop),
+            Access::Reference => true,
         }
     }
 }
@@ -293,7 +327,7 @@ impl StaticPropsRewriter {
     fn candidates(
         &self,
         receiver: &StaticReceiver,
-    ) -> Result<(String, Vec<StaticProp>, Vec<String>), String> {
+    ) -> Result<(String, Vec<StaticProp>, Vec<(String, Visibility)>), String> {
         let current = self.current_class.clone();
         let (class, own_scope) = match receiver {
             StaticReceiver::Self_ | StaticReceiver::Static => match &current {
@@ -320,7 +354,7 @@ impl StaticPropsRewriter {
             return Err(format!("on class `{class}`, whose declaration is not visible to elephc"));
         }
         let mut out: Vec<StaticProp> = Vec::new();
-        let mut hidden: Vec<String> = Vec::new();
+        let mut hidden: Vec<(String, Visibility)> = Vec::new();
         let mut visit = Some(class.clone());
         let mut first = true;
         let mut guard = 0;
@@ -356,16 +390,89 @@ impl StaticPropsRewriter {
                     out.push(prop);
                 } else if !visible
                     && !out.iter().any(|p| p.name == prop.name)
-                    && !hidden.contains(&prop.name)
+                    && !hidden.iter().any(|(name, _)| name == &prop.name)
                 {
-                    hidden.push(prop.name);
+                    hidden.push((prop.name, prop.visibility));
                 }
             }
             first = false;
             visit = facts.parent.clone();
         }
-        hidden.retain(|name| !out.iter().any(|p| &p.name == name));
+        hidden.retain(|(name, _)| !out.iter().any(|p| &p.name == name));
+        if matches!(receiver, StaticReceiver::Static) {
+            if let Some((sub, prop)) = self.subclass_only_static(&class, &out, &hidden) {
+                return Err(format!(
+                    "through `static::` while subclass `{}` declares static property `${}`, which late static binding could reach (elephc dispatches on the lexical class `{}` only); name the class explicitly or declare the property in `{}`",
+                    sub.trim_start_matches('\\'),
+                    prop,
+                    class.trim_start_matches('\\'),
+                    class.trim_start_matches('\\')
+                ));
+            }
+        }
         Ok((class, out, hidden))
+    }
+
+    /// Finds a static property a known subclass of `class` declares (itself or through its
+    /// traits) that the lexical candidate set does not hold: `static::${$n}` called on that
+    /// subclass would reach it in PHP.
+    fn subclass_only_static(
+        &self,
+        class: &str,
+        out: &[StaticProp],
+        hidden: &[(String, Visibility)],
+    ) -> Option<(String, String)> {
+        let target = class_key(class);
+        let mut names: Vec<&String> = self.classes.keys().collect();
+        names.sort();
+        for key in names {
+            if *key == target {
+                continue;
+            }
+            // Is `key` a descendant of `class`?
+            let mut parent = self.classes.get(key).and_then(|f| f.parent.clone());
+            let mut guard = 0;
+            let mut descends = false;
+            while let Some(p) = parent {
+                guard += 1;
+                if guard > 64 {
+                    break;
+                }
+                if class_key(&p) == target {
+                    descends = true;
+                    break;
+                }
+                parent = self.classes.get(&class_key(&p)).and_then(|f| f.parent.clone());
+            }
+            if !descends {
+                continue;
+            }
+            let facts = &self.classes[key];
+            let mut level = facts.statics.clone();
+            let mut trait_stack = facts.traits.clone();
+            let mut trait_guard = 0;
+            while let Some(t) = trait_stack.pop() {
+                trait_guard += 1;
+                if trait_guard > 64 {
+                    break;
+                }
+                if let Some(tf) = self.classes.get(&class_key(&t)) {
+                    level.extend(tf.statics.iter().cloned());
+                    trait_stack.extend(tf.traits.iter().cloned());
+                }
+            }
+            for prop in level {
+                if prop.visibility == Visibility::Private {
+                    continue;
+                }
+                let known = out.iter().any(|p| p.name == prop.name)
+                    || hidden.iter().any(|(name, _)| name == &prop.name);
+                if !known {
+                    return Some((facts.name.clone(), prop.name));
+                }
+            }
+        }
+        None
     }
 
     fn fresh_temp(&mut self, span: Span) -> String {
@@ -390,11 +497,20 @@ impl StaticPropsRewriter {
         )
     }
 
-    /// `"Cannot access private property " . R::class . "::$name"`.
-    fn private_message(receiver: &StaticReceiver, prop: &str, span: Span) -> Expr {
+    /// `"Cannot access <private|protected> property " . R::class . "::$name"`.
+    fn private_message(
+        receiver: &StaticReceiver,
+        prop: &str,
+        visibility: &Visibility,
+        span: Span,
+    ) -> Expr {
         let class = Expr::new(ExprKind::ClassConstant { receiver: receiver.clone() }, span);
+        let label = match visibility {
+            Visibility::Protected => "Cannot access protected property ",
+            _ => "Cannot access private property ",
+        };
         binop(
-            binop(str_lit("Cannot access private property ", span), BinOp::Concat, class),
+            binop(str_lit(label, span), BinOp::Concat, class),
             BinOp::Concat,
             str_lit(&format!("::${prop}"), span),
         )
@@ -443,7 +559,7 @@ impl StaticPropsRewriter {
         span: Span,
         arm: &dyn Fn(&Expr) -> Expr,
         excluded: &dyn Fn(&str, &str) -> Expr,
-        private: &dyn Fn(&str) -> Expr,
+        private: &dyn Fn(&str, &Visibility) -> Expr,
         fallback: Expr,
     ) -> Option<Expr> {
         let (receiver, name) = dynamic_root(root)?;
@@ -463,8 +579,10 @@ impl StaticPropsRewriter {
             let _ = (&class, excluded, access);
             return Some(match props.iter().find(|p| p.name == literal) {
                 Some(p) => arm(&Self::static_prop(&receiver, &p.name, span)),
-                None if hidden.contains(&literal) => private(&literal),
-                None => fallback,
+                None => match hidden.iter().find(|(name, _)| name == &literal) {
+                    Some((name, visibility)) => private(name, visibility),
+                    None => fallback,
+                },
             });
         }
         let mut arms: Vec<(Vec<Expr>, Expr)> = props
@@ -478,7 +596,9 @@ impl StaticPropsRewriter {
                 (vec![str_lit(&p.name, span)], value)
             })
             .collect();
-        arms.extend(hidden.iter().map(|name| (vec![str_lit(name, span)], private(name))));
+        arms.extend(
+            hidden.iter().map(|(name, visibility)| (vec![str_lit(name, span)], private(name, visibility))),
+        );
         Some(Expr::new(
             ExprKind::Match {
                 subject: Box::new(cast_string(name)),
@@ -507,8 +627,8 @@ impl StaticPropsRewriter {
         let excluded = |class: &str, prop: &str| {
             box_mixed(throw_error(Self::unsupported_message(class, prop, span), span))
         };
-        let private = |prop: &str| {
-            box_mixed(throw_error(Self::private_message(&receiver, prop, span), span))
+        let private = |prop: &str, visibility: &Visibility| {
+            box_mixed(throw_error(Self::private_message(&receiver, prop, visibility, span), span))
         };
         let fallback = box_mixed(throw_error(Self::undeclared_message(&receiver, name, span), span));
         if let Some(rewritten) =
@@ -541,7 +661,7 @@ impl StaticPropsRewriter {
             };
             let unset = Expr::new(ExprKind::BoolLiteral(!is_isset), span);
             let excluded = |_: &str, _: &str| Expr::new(ExprKind::BoolLiteral(!is_isset), span);
-            let private = |_: &str| Expr::new(ExprKind::BoolLiteral(!is_isset), span);
+            let private = |_: &str, _: &Visibility| Expr::new(ExprKind::BoolLiteral(!is_isset), span);
             match self.dispatch_expr(&root, access, span, &arm, &excluded, &private, unset) {
                 Some(part) => parts.push(part),
                 None => return,
@@ -582,7 +702,7 @@ impl StaticPropsRewriter {
             ))
         };
         let excluded = |_: &str, _: &str| box_mixed(default.clone());
-        let private = |_: &str| box_mixed(default.clone());
+        let private = |_: &str, _: &Visibility| box_mixed(default.clone());
         let fallback = box_mixed(default.clone());
         if let Some(rewritten) =
             self.dispatch_expr(&root, access, span, &arm, &excluded, &private, fallback)
@@ -628,9 +748,35 @@ impl StaticPropsRewriter {
                 _ => None,
             },
             StmtKind::RefAssign { source, .. } => {
-                place_root(source).map(|root| (root.clone(), Access::Whole))
+                place_root(source).map(|root| {
+                    let access =
+                        if dynamic_root(source).is_some() { Access::Reference } else { Access::Element };
+                    (root.clone(), access)
+                })
             }
-            StmtKind::Synthetic(_) => None,
+            // `C::${$n}[] = v` / `C::${$n}[k][] = v`: the parser's nested-append desugar reads
+            // the property into a hidden temporary, appends, and writes the temporary back. The
+            // whole block is one ELEMENT write of the property, dispatched as a unit so each arm
+            // reads, appends and writes back the same named property.
+            StmtKind::Synthetic(stmts) => stmts.iter().find_map(|inner| match &inner.kind {
+                StmtKind::StaticPropertyArrayAssign { receiver, property, index, value }
+                    if property == DYNAMIC_STATIC_PROPERTY
+                        && matches!(&value.kind, ExprKind::Variable(name)
+                            if name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)) =>
+                {
+                    Some((
+                        dynamic_static_access(receiver.clone(), index.clone(), inner.span),
+                        Access::Element,
+                    ))
+                }
+                StmtKind::NestedArrayAssign { target, value }
+                    if matches!(&value.kind, ExprKind::Variable(name)
+                        if name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)) =>
+                {
+                    place_root(target).map(|root| (root.clone(), Access::Element))
+                }
+                _ => None,
+            }),
             _ => None,
         }
     }
@@ -638,11 +784,20 @@ impl StaticPropsRewriter {
     /// Normalizes a statement whose dynamic root was replaced by a named static property.
     fn normalize_written(stmt: Stmt, root: &Expr, prop: &str) -> Result<Stmt, CompileError> {
         let span = stmt.span;
+        if let StmtKind::Synthetic(stmts) = stmt.kind {
+            let stmts = stmts
+                .into_iter()
+                .map(|inner| Self::normalize_written(inner, root, prop))
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Stmt::new(StmtKind::Synthetic(stmts), span));
+        }
         let (receiver, _) = dynamic_root(root).unwrap();
         let replacement = Self::static_prop(receiver, prop, span);
         let mut stmt = stmt;
-        if let StmtKind::StaticPropertyArrayAssign { receiver, property, value, .. } = &stmt.kind {
-            if property == DYNAMIC_STATIC_PROPERTY {
+        if let StmtKind::StaticPropertyArrayAssign { receiver, property, value, index } = &stmt.kind {
+            if property == DYNAMIC_STATIC_PROPERTY
+                && dynamic_root(root).is_some_and(|(_, name)| name == index)
+            {
                 let mut value = value.clone();
                 replace_root_in_expr(&mut value, root, &replacement);
                 stmt.kind = StmtKind::StaticPropertyAssign {
@@ -679,6 +834,25 @@ impl StaticPropsRewriter {
                 return;
             }
         };
+        // `$r = &C::${$n}` lowers to one `$r = &C::$p;` per branch of an `if` chain, and a
+        // reference bound to a static property inside a conditional branch does not survive the
+        // branch unless every candidate shares one representation (elephc limit: the arms of
+        // DebugClassLoader are all arrays). Mixed candidates would silently bind null or crash,
+        // so they are refused here.
+        if access == Access::Reference
+            && Self::literal_name(&name).is_none()
+            && props.len() > 1
+            && !props.iter().all(is_array_valued)
+        {
+            self.errors.push(CompileError::new(
+                span,
+                &format!(
+                    "A reference to a static property named at run time (`$r = &C::${{...}}`) is only supported when every candidate property of `{}` is an array (or there is a single candidate) (elephc)",
+                    class.trim_start_matches('\\')
+                ),
+            ));
+            return;
+        }
         let throw_stmt = |message: Expr| Stmt::new(StmtKind::Throw(super::new_error(message, span)), span);
         let arm_body = |this: &mut Self, prop: &StaticProp, checked: bool| -> Vec<Stmt> {
             if checked && !access.admits(prop) {
@@ -698,8 +872,13 @@ impl StaticPropsRewriter {
         if let Some(literal) = Self::literal_name(&name) {
             let body = match props.iter().find(|p| p.name == literal) {
                 Some(p) => arm_body(self, &p.clone(), false),
-                None if hidden.contains(&literal) => {
-                    vec![throw_stmt(Self::private_message(&receiver, &literal, span))]
+                None if hidden.iter().any(|(name, _)| name == &literal) => {
+                    let visibility = hidden
+                        .iter()
+                        .find(|(name, _)| name == &literal)
+                        .map(|(_, visibility)| visibility.clone())
+                        .unwrap_or(Visibility::Private);
+                    vec![throw_stmt(Self::private_message(&receiver, &literal, &visibility, span))]
                 }
                 None => vec![throw_stmt(Self::undeclared_message(&receiver, name.clone(), span))],
             };
@@ -717,9 +896,12 @@ impl StaticPropsRewriter {
             let body = arm_body(self, &prop, true);
             clauses.push((test, body));
         }
-        for name in &hidden {
+        for (name, visibility) in &hidden {
             let test = binop(var(&temp, span), BinOp::StrictEq, str_lit(name, span));
-            clauses.push((test, vec![throw_stmt(Self::private_message(&receiver, name, span))]));
+            clauses.push((
+                test,
+                vec![throw_stmt(Self::private_message(&receiver, name, visibility, span))],
+            ));
         }
         let fallback = vec![throw_stmt(Self::undeclared_message(&receiver, var(&temp, span), span))];
         if clauses.is_empty() {

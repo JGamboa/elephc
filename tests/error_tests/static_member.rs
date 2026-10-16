@@ -83,3 +83,24 @@ fn test_reference_into_static_property_element_is_refused_clearly() {
         "Reference assignment target must be a variable",
     );
 }
+
+/// Verifies `$r = &self::${$n}` over candidates that are not all arrays is refused at compile
+/// time: the conditional reference lowering would bind null or crash (review P42a, `ref1`-`ref3`).
+#[test]
+fn test_dynamic_static_property_reference_over_mixed_candidates_is_refused() {
+    expect_error(
+        "<?php class P { public static $a = ['k' => 1]; public static $s = 'x'; static function run($n) { $r = &self::${$n}; var_dump($r); } } P::run('a');",
+        "only supported when every candidate property of `P` is an array",
+    );
+}
+
+/// Verifies `static::${$n}` is refused when a known subclass declares a static property the
+/// lexical class does not have: late static binding could reach it and elephc dispatches on the
+/// lexical class only, so a PHP-looking `undeclared` Error would be false (review P42a, `v2`).
+#[test]
+fn test_late_static_dynamic_property_with_subclass_only_property_is_refused() {
+    expect_error(
+        "<?php class P { public static $x = 'P'; static function get($n) { return static::${$n}; } } class C extends P { public static $only = 'o'; } echo C::get('only');",
+        "while subclass `C` declares static property `$only`",
+    );
+}
