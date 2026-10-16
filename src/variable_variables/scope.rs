@@ -36,6 +36,9 @@ pub(super) struct FrameNames {
     pub(super) names: BTreeSet<String>,
     /// Declared parameter names (always defined on entry).
     pub(super) params: HashSet<String>,
+    /// Closure `use` captures, by value or by reference (always defined on entry: PHP binds an
+    /// undefined capture as null).
+    pub(super) captures: HashSet<String>,
     /// Plain `$x = <expr>;` definitions per variable, used to bound name expressions.
     pub(super) defs: HashMap<String, Vec<Expr>>,
     /// Variables written by some form other than a plain definition (unbounded values).
@@ -77,12 +80,27 @@ impl FrameNames {
 
 /// Collects the frame names of a function-like scope with `params` and `body`.
 pub(super) fn collect_frame_names(params: &[String], body: &mut Vec<Stmt>) -> FrameNames {
+    collect_frame_names_with_captures(params, &[], body)
+}
+
+/// Like [`collect_frame_names`] for a closure whose `use` list binds `captures` on entry.
+pub(super) fn collect_frame_names_with_captures(
+    params: &[String],
+    captures: &[String],
+    body: &mut Vec<Stmt>,
+) -> FrameNames {
     let mut collector = Collector {
         frame: FrameNames::default(),
     };
     for param in params {
         collector.frame.add_opaque(param);
         collector.frame.params.insert(param.clone());
+    }
+    for capture in captures {
+        // A capture is a local of the closure frame even when its body never spells it
+        // (`extract()` can still write through a `use (&$x)` binding).
+        collector.frame.add_opaque(capture);
+        collector.frame.captures.insert(capture.clone());
     }
     collector.block(body);
     collector.frame

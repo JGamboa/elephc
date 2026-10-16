@@ -47,6 +47,10 @@ pub(super) struct Scope {
     pub(super) definite: std::collections::HashSet<String>,
     /// `true` inside a closure or arrow function body.
     pub(super) in_closure: bool,
+    /// Locals some `unset()` may have removed before the statement being rewritten: the
+    /// unsets of already-rewritten statements plus those of every enclosing loop (a previous
+    /// iteration may have run them).
+    pub(super) unset_before: std::collections::HashSet<String>,
     /// Nesting depth of the statement block being rewritten (0 = the function body).
     pub(super) block_depth: usize,
 }
@@ -87,6 +91,7 @@ impl Rewriter {
                 frame: FrameNames::default(),
                 narrow: Vec::new(),
                 block_depth: 0,
+                unset_before: Default::default(),
             },
             errors: Vec::new(),
             counter: 0,
@@ -129,6 +134,7 @@ impl Rewriter {
     fn enter_frame(
         &mut self,
         params: Vec<(String, Option<TypeExpr>)>,
+        captures: &[String],
         this_available: bool,
         in_closure: bool,
         body: &mut Vec<Stmt>,
@@ -139,13 +145,14 @@ impl Rewriter {
             return;
         }
         let names: Vec<String> = params.iter().map(|(name, _)| name.clone()).collect();
-        let mut frame = collect_frame_names(&names, body);
+        let mut frame = super::scope::collect_frame_names_with_captures(&names, captures, body);
         frame.param_types = params
             .into_iter()
             .filter_map(|(name, ty)| ty.map(|ty| (name, ty)))
             .collect();
         let definite = names
             .iter()
+            .chain(captures.iter())
             .filter(|name| !frame.unset_names.contains(*name))
             .cloned()
             .collect();
@@ -159,6 +166,7 @@ impl Rewriter {
                 frame,
                 narrow: Vec::new(),
                 block_depth: 0,
+                unset_before: Default::default(),
             },
         );
         self.block(body);
@@ -855,7 +863,7 @@ impl Visitor for Rewriter {
                 let mut names: Vec<(String, Option<TypeExpr>)> =
                     params.iter().map(|(n, ty, ..)| (n.clone(), ty.clone())).collect();
                 names.extend(variadic.iter().map(|v| (v.clone(), None)));
-                self.enter_frame(names, false, false, body);
+                self.enter_frame(names, &[], false, false, body);
                 return;
             }
             StmtKind::ClassDecl { methods, .. }
@@ -870,7 +878,7 @@ impl Visitor for Rewriter {
                         .collect();
                     names.extend(method.variadic.iter().map(|v| (v.clone(), None)));
                     let this_available = !method.is_static;
-                    self.enter_frame(names, this_available, false, &mut method.body);
+                    self.enter_frame(names, &[], this_available, false, &mut method.body);
                 }
                 return;
             }
@@ -1078,13 +1086,20 @@ impl Rewriter {
         self.scope.block_depth += 1;
         let mut index = 0;
         while index < stmts.len() {
+            let tracks_unsets = !self.scope.frame.unset_names.is_empty();
+            if tracks_unsets && is_loop_stmt(&stmts[index]) {
+                let mut own = vec![stmts[index].clone()];
+                let unsets = collect_frame_names(&[], &mut own).unset_names;
+                self.scope.unset_before.extend(unsets);
+            }
             if is_extract_stmt(&stmts[index]) {
                 // `extract(..., EXTR_SKIP)` needs to know which locals may already exist.
                 let mut preceding = stmts[..index].to_vec();
-                let written = collect_frame_names(&[], &mut preceding).names;
+                let preceding_frame = collect_frame_names(&[], &mut preceding);
                 self.extract_context = Some(super::builtins::ExtractContext {
                     function_body,
-                    preceding_names: written,
+                    preceding_names: preceding_frame.names,
+                    preceding_unsets: preceding_frame.unset_names,
                 });
             }
             self.pending_splice = false;
@@ -1101,6 +1116,11 @@ impl Rewriter {
                     count = body.len();
                     stmts.splice(index..=index, body);
                 }
+            }
+            if tracks_unsets {
+                let mut done = stmts[index..index + count].to_vec();
+                let unsets = collect_frame_names(&[], &mut done).unset_names;
+                self.scope.unset_before.extend(unsets);
             }
             for stmt in &stmts[index..index + count] {
                 for name in definitely_assigned(stmt) {
@@ -1122,13 +1142,18 @@ impl Rewriter {
                 variadic,
                 body,
                 is_static,
+                is_arrow,
+                captures,
                 ..
             } => {
                 let mut names: Vec<(String, Option<TypeExpr>)> =
                     params.iter().map(|(n, ty, ..)| (n.clone(), ty.clone())).collect();
                 names.extend(variadic.iter().map(|v| (v.clone(), None)));
                 let this_available = self.scope.this_available && !*is_static;
-                self.enter_frame(names, this_available, true, body);
+                // An arrow function's implicit captures may be undefined in its body; only an
+                // explicit `use` list binds them on entry.
+                let captures = if *is_arrow { Vec::new() } else { captures.clone() };
+                self.enter_frame(names, &captures, this_available, true, body);
                 return;
             }
             ExprKind::Variable(name) if name == FRAME_LOCAL => {
@@ -1327,5 +1352,16 @@ fn ends_case(stmt: &Stmt) -> bool {
     matches!(
         stmt.kind,
         StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Return(_) | StmtKind::Throw(_)
+    )
+}
+
+/// Returns whether `stmt` is a loop, whose body may run again after its own `unset()`s.
+fn is_loop_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt.kind,
+        StmtKind::While { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::Foreach { .. }
     )
 }
