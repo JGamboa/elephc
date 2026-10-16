@@ -12520,7 +12520,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Writes data to a file.",
         examples: &[
@@ -13150,7 +13150,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Format line as CSV and write to file pointer.",
         examples: &[

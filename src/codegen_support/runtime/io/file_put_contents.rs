@@ -150,6 +150,12 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fpc_written")); // keep the byte count of a successful write
     emitter.instruction("mov x0, #-1");                                         // a failed write() is file_put_contents()'s false, not an errno byte count
     emitter.label("__rt_fpc_written");
+    // A SHORT write (RLIMIT_FSIZE, a full disk) is a failure too: php-src compares the byte
+    // count with the payload length and answers false, never the partial count.
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload data length
+    emitter.instruction("cmp x0, x9");                                          // was every byte written?
+    emitter.instruction("mov x10, #-1");                                        // file_put_contents()'s failure result
+    emitter.instruction("csel x0, x0, x10, eq");                                // keep the count only for a complete write
     emitter.instruction("str x0, [sp, #32]");                                   // save bytes written
 
     // -- close the file --
@@ -283,6 +289,10 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jns __rt_fpc_written_linux_x86_64");                   // keep the byte count of a successful write
     emitter.instruction("mov rax, -1");                                         // normalize any failed write to file_put_contents()'s false
     emitter.label("__rt_fpc_written_linux_x86_64");
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // was every byte written? a short write is a failure in php-src
+    emitter.instruction("je __rt_fpc_complete_linux_x86_64");                   // keep the count only for a complete write
+    emitter.instruction("mov rax, -1");                                         // file_put_contents()'s failure result for a short write
+    emitter.label("__rt_fpc_complete_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the number of written bytes for the final return value
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc close() argument

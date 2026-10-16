@@ -197,3 +197,95 @@ echo count($r), "\n";
     assert_eq!(out.stdout, "0\n0\n");
     assert_eq!(out.stderr, "Warning: scandir(): Failed to open directory\n");
 }
+
+/// Review round 1, finding 1: a string callable dispatches through the builtin CONTRACT's
+/// return type. The contract still said `int` while the lowering boxed `int|false`, so
+/// `$cb = 'file_put_contents'; $cb(...)` printed the boxed cell's address as an integer.
+#[test]
+fn test_file_put_contents_through_dynamic_callables_returns_int_or_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$d = sys_get_temp_dir() . "/p41_t_dyn_" . getmypid();
+@mkdir($d);
+$p = $d . "/f.txt";
+$cb = 'file_put_contents';
+var_dump($cb($p, "1234"));
+var_dump(@$cb($d . "/nope/x", "1234"));
+var_dump(call_user_func('file_put_contents', $p, "12345"));
+var_dump(@call_user_func('file_put_contents', $d . "/nope/x", "1"));
+var_dump(call_user_func_array('file_put_contents', [$p, "123456"]));
+var_dump(array_map(fn($x) => file_put_contents($p, $x), ["ab", "abc"]));
+$f = file_put_contents(...);
+var_dump($f($p, "1234567"));
+$c = 'fputcsv';
+$h = fopen($p, "w");
+var_dump($c($h, ["a", "b"]));
+fclose($h);
+unlink($p);
+rmdir($d);
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "int(4)\nbool(false)\nint(5)\nbool(false)\nint(6)\narray(2) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n}\nint(7)\nint(4)\n"
+    );
+}
+
+/// Review round 1, findings 6 and 7: fputcsv() on a read-only stream and hash_file() of a
+/// directory are PHP `false`, not a negative sum of failed writes or md5("").
+#[test]
+fn test_fputcsv_read_only_and_hash_file_directory_are_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$d = sys_get_temp_dir() . "/p41_t_csv_" . getmypid();
+@mkdir($d);
+$p = $d . "/r.csv";
+file_put_contents($p, "x");
+$h = fopen($p, "r");
+var_dump(@fputcsv($h, ["a", "b c", "d\"e"]));
+fclose($h);
+$w = fopen($p, "w");
+var_dump(fputcsv($w, ["a", "b"]));
+fclose($w);
+var_dump(@hash_file("md5", $d));
+var_dump(hash_file("md5", $p));
+unlink($p);
+rmdir($d);
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nint(4)\nbool(false)\nstring(32) \"f69f5b72bc79a92dc70c63c9aa142e36\"\n"
+    );
+}
+
+/// The boxed `int|false` result is `Fresh`: storing, discarding, and dynamically calling
+/// file_put_contents() in a loop must not leave live heap blocks behind.
+#[test]
+fn test_file_put_contents_boxed_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$p = sys_get_temp_dir() . "/p41_t_leak_" . getmypid() . ".txt";
+$f = file_put_contents(...);
+$t = 0;
+for ($i = 0; $i < 50; $i++) {
+    $t += file_put_contents($p, "abc");
+    file_put_contents($p, "x");
+    $t += $f($p, "a");
+    $t += call_user_func('file_put_contents', $p, "abcd");
+    if (@file_put_contents($p . "/nope", "z") === false) { $t++; }
+}
+echo $t, "\n";
+unlink($p);
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "450\n");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "boxed file_put_contents() results leaked: {}",
+        out.stderr
+    );
+}
