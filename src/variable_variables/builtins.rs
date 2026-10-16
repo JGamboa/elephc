@@ -198,81 +198,104 @@ impl Rewriter {
             .filter(|name| !(mode == EXTR_SKIP && entry.contains(*name)))
             .cloned()
             .collect();
+        // A conditional store into a local the frame also `unset()`s loses its value once
+        // another statement follows (the read yields null), so refuse rather than miscompile.
+        if let Some(name) = names.iter().find(|name| self.scope.frame.unset_names.contains(*name)) {
+            let message = format!(
+                "extract() is not supported in a function that also unset()s ${name} (elephc): the conditional store into an unset local is not compiled reliably"
+            );
+            self.error(span, &message);
+            return;
+        }
         // `EXTR_SKIP` ignores a `this` key. `EXTR_OVERWRITE` writes the keys before it in array
-        // order and then throws, so that case walks the array in order up to `this`.
-        if mode == EXTR_OVERWRITE {
+        // order and then throws: a boolean per name records whether its key precedes `this`,
+        // so each local keeps a single `$n = $tmp['n']` store (no retyping from a loop value).
+        let key_exists =
+            |name: &str| global_call("array_key_exists", vec![str_lit(name, span), var(&temp, span)], span);
+        let bool_assign = |name: &str, value: Expr| {
+            Stmt::new(
+                StmtKind::Assign {
+                    name: name.to_string(),
+                    value,
+                },
+                span,
+            )
+        };
+        let has_this = (mode == EXTR_OVERWRITE).then(|| self.fresh_temp("extract_this", span));
+        let mut writes = Vec::new();
+        for name in &names {
+            let condition = match &has_this {
+                Some(_) => {
+                    let flag = self.fresh_temp("extract_ok", span);
+                    out.push(bool_assign(&flag, key_exists(name)));
+                    var(&flag, span)
+                }
+                None => key_exists(name),
+            };
+            writes.push((name.clone(), condition));
+        }
+        if let Some(has_this) = &has_this {
+            out.push(bool_assign(has_this, key_exists("this")));
             let key = self.fresh_temp("extract_key", span);
             let value = self.fresh_temp("extract_value", span);
+            let mut reset = Vec::new();
             let mut loop_body = vec![if_then(
                 binop(var(&key, span), BinOp::StrictEq, str_lit("this", span)),
                 vec![Stmt::new(StmtKind::Break(1), span)],
                 span,
             )];
-            for name in &names {
+            for (name, condition) in &writes {
+                let ExprKind::Variable(flag) = &condition.kind else {
+                    unreachable!("overwrite mode uses flag locals");
+                };
+                reset.push(bool_assign(flag, Expr::new(ExprKind::BoolLiteral(false), span)));
                 loop_body.push(if_then(
                     binop(var(&key, span), BinOp::StrictEq, str_lit(name, span)),
-                    vec![Stmt::new(
-                        StmtKind::Assign {
-                            name: name.clone(),
-                            value: var(&value, span),
-                        },
-                        span,
-                    )],
+                    vec![bool_assign(flag, Expr::new(ExprKind::BoolLiteral(true), span))],
                     span,
                 ));
             }
+            reset.push(Stmt::new(
+                StmtKind::Foreach {
+                    array: var(&temp, span),
+                    key_var: Some(key),
+                    value_var: value,
+                    value_by_ref: false,
+                    body: loop_body,
+                },
+                span,
+            ));
+            out.push(if_then(var(has_this, span), reset, span));
+        }
+        for (name, condition) in writes {
             out.push(if_then(
-                global_call(
-                    "array_key_exists",
-                    vec![str_lit("this", span), var(&temp, span)],
-                    span,
-                ),
-                vec![
-                    Stmt::new(
-                        StmtKind::Foreach {
-                            array: var(&temp, span),
-                            key_var: Some(key),
-                            value_var: value,
-                            value_by_ref: false,
-                            body: loop_body,
-                        },
-                        span,
-                    ),
-                    Stmt::new(
-                        StmtKind::Throw(super::new_error(
-                            str_lit("Cannot re-assign $this", span),
+                condition,
+                vec![Stmt::new(
+                    StmtKind::Assign {
+                        name: name.clone(),
+                        value: Expr::new(
+                            ExprKind::ArrayAccess {
+                                array: Box::new(var(&temp, span)),
+                                index: Box::new(str_lit(&name, span)),
+                            },
                             span,
-                        )),
-                        span,
-                    ),
-                ],
+                        ),
+                    },
+                    span,
+                )],
                 span,
             ));
         }
-        for name in names {
-            out.push(Stmt::new(
-                StmtKind::If {
-                    condition: global_call(
-                        "array_key_exists",
-                        vec![str_lit(&name, span), var(&temp, span)],
+        if let Some(has_this) = &has_this {
+            out.push(if_then(
+                var(has_this, span),
+                vec![Stmt::new(
+                    StmtKind::Throw(super::new_error(
+                        str_lit("Cannot re-assign $this", span),
                         span,
-                    ),
-                    then_body: vec![Stmt::new(
-                        StmtKind::Assign {
-                            name: name.clone(),
-                            value: Expr::new(
-                                ExprKind::ArrayAccess {
-                                    array: Box::new(var(&temp, span)),
-                                    index: Box::new(str_lit(&name, span)),
-                                },
-                                span,
-                            ),
-                        },
-                        span,
-                    )],
-                    elseif_clauses: Vec::new(),
-                    else_body: None,
-                },
+                    )),
+                    span,
+                )],
                 span,
             ));
         }

@@ -328,6 +328,22 @@ f(null);
     assert_eq!(out, "[null,\"si\",true] Cannot re-assign $this [true,false] [null,null,3]");
 }
 
+/// Default-mode extract() of a list keeps typed locals: the `this` check stores no loop value
+/// into them (P43 ronda 1, H1).
+#[test]
+fn test_extract_overwrite_list_keeps_typed_locals() {
+    let out = compile_and_run(
+        r#"<?php
+function f() { $a = 'k'; $rows = [1, 2]; extract($rows); return $a . count($rows); }
+function g() { $a = 'k'; extract([1, 2]); return $a; }
+function h($d) { $a = 'k'; extract($d); return $a; }
+function i($d) { extract($d); return 'ok' . count($d); }
+echo f(), g(), h([1, 2, 3]), i([1, 2, 3]);
+"#,
+    );
+    assert_eq!(out, "k2kkok3");
+}
+
 /// Destructuring targets that are variable variables write the named locals (review r1, H1).
 #[test]
 fn test_varvar_destructuring_targets() {

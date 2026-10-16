@@ -99,6 +99,16 @@ fn test_error_extract_skip_after_unset_or_closure_local() {
     );
 }
 
+/// extract() into a local the function also unset()s is refused: the conditional store is
+/// lost once another statement follows (P43 ronda 1).
+#[test]
+fn test_error_extract_into_unset_local() {
+    expect_error(
+        "<?php function f($a) { unset($a); extract(['a' => 2, 'b' => 3]); return $a . $b; }",
+        "extract() is not supported in a function that also unset()s $a",
+    );
+}
+
 /// Every mode other than EXTR_OVERWRITE / EXTR_SKIP (and EXTR_REFS combinations), and an
 /// extract() in an arrow function, are refused (P43).
 #[test]
