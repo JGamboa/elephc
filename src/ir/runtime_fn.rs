@@ -2604,6 +2604,12 @@ impl RuntimeFnId {
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
+                // `file_put_contents()` and `fputcsv()` answer `int|false`, boxed by the
+                // lowering into a Mixed cell `__rt_mixed_from_value` just allocated; neither
+                // hands back an argument. Without an explicit owner the callable wrapper
+                // (`file_put_contents(...)`, `call_user_func`) refused the Mixed result.
+                | RuntimeFnId::FilePutContents
+                | RuntimeFnId::Fputcsv
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
