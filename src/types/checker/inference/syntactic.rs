@@ -322,6 +322,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "array_search" | "grapheme_strrev" | "fileatime"
             | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
             | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile"
+            // `file_put_contents()` is `int|false`: a destination that cannot be opened is
+            // `false`, boxed in the same `Mixed` cell as `readfile()`'s result.
+            | "file_put_contents"
             | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp"
             // hexdec/bindec/octdec return `int|float`, whose shared codegen representation
             // is `Mixed`; the boxed cell must not be read back as a raw integer.
