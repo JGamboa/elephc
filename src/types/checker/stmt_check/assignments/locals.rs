@@ -323,6 +323,16 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        // `$r = &$o->{$k}` (nette `Arrays::associate`): the name selects a declared property or a
+        // property-hash entry at run time, all of which share a boxed `Mixed` cell.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            super::reference_places::check_dynamic_ref_source(checker, object, property, span, env)?;
+            target_has_boxed_ref_provenance = true;
+            env.insert(target.to_string(), PhpType::Mixed);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         ExprKind::ArrayAccess { array, index } => {
             let array_ty = checker.infer_type(array, env)?;
             target_has_boxed_ref_provenance = match array_ty.codegen_repr() {
@@ -356,6 +366,25 @@ pub(super) fn check_ref_assign(
                     span,
                     "Reference assignment to an array element requires an integer or string array key",
                 ));
+            }
+            // An element reached through a property (`$r = &$this->p[$k]`, symfony's
+            // `&$this->optimized[$e][]`) is made addressable through that property's reference
+            // cell, exactly like an element place (`$this->p[$k] = &$v`).
+            if let Some((object, property)) =
+                super::reference_places::element_place_property_root(array)
+            {
+                let object_ty = checker.infer_type(object, env)?;
+                if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
+                    super::properties::widen_referenced_untyped_property(
+                        checker,
+                        &class,
+                        property,
+                        &PhpType::php_array(),
+                    );
+                    checker
+                        .reference_property_promotions
+                        .insert((class, property.to_string()));
+                }
             }
             let target_ty = checker.infer_type(source, env)?;
             env.insert(target.to_string(), target_ty);

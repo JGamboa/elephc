@@ -90,10 +90,8 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
     {
         if is_append {
-            return Err(CompileError::new(
-                span,
-                "Appending a reference (`$a[] = &$x`) is not supported; use an explicit key",
-            ));
+            return super::reference_places::parse_append_ref_assign(tokens, pos, lhs_expr, span)
+                .map(Some);
         }
         return super::reference_places::parse_place_ref_assign(tokens, pos, lhs_expr, span)
             .map(Some);
@@ -133,39 +131,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     };
     let lhs_span = lhs_expr.span;
     if is_append {
-        let stmt = match lhs_expr.kind {
-            ExprKind::Variable(array) => StmtKind::ArrayPush { array, value: rhs },
-            ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayPush {
-                object,
-                property,
-                value: rhs,
-            },
-            ExprKind::ArrayAccess { array, index } => {
-                return lower_nested_append_assignment(
-                    Expr::new(ExprKind::ArrayAccess { array, index }, lhs_span),
-                    rhs,
-                    span,
-                )
-                .map(Some);
-            }
-            // `$this[] = v;` on an ArrayAccess `$this` is `$this->offsetSet(null, v)`, which the
-            // local push lowering dispatches for an object receiver.
-            ExprKind::This => StmtKind::ArrayPush { array: "this".to_string(), value: rhs },
-            // `$this->{$property}[] = v;` (Mailable): pushes onto the slot the name selects.
-            ExprKind::DynamicPropertyAccess { object, property } => {
-                dynamic_property_push_stmt(*object, *property, rhs, span)
-            }
-            // `call()[] = v;`: the expression form already appends to a call temporary.
-            other => {
-                let append = crate::parser::expr::append_assignment_expr(
-                    Expr::new(other, lhs_span),
-                    rhs,
-                    span,
-                )?;
-                StmtKind::ExprStmt(append)
-            }
-        };
-        return Ok(Some(Stmt::new(stmt, span)));
+        return push_statement(lhs_expr, rhs, span).map(Some);
     }
 
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
@@ -1411,4 +1377,41 @@ impl EffectfulTargetLowerer {
         ));
         Expr::new(ExprKind::Variable(name), self.span)
     }
+}
+
+/// Builds the statement for `<container>[] = <value>;` (`lhs_expr` is the container).
+pub(super) fn push_statement(lhs_expr: Expr, rhs: Expr, span: Span) -> Result<Stmt, CompileError> {
+    let lhs_span = lhs_expr.span;
+    let stmt = match lhs_expr.kind {
+        ExprKind::Variable(array) => StmtKind::ArrayPush { array, value: rhs },
+        ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value: rhs,
+        },
+        ExprKind::ArrayAccess { array, index } => {
+            return lower_nested_append_assignment(
+                Expr::new(ExprKind::ArrayAccess { array, index }, lhs_span),
+                rhs,
+                span,
+            );
+        }
+        // `$this[] = v;` on an ArrayAccess `$this` is `$this->offsetSet(null, v)`, which the
+        // local push lowering dispatches for an object receiver.
+        ExprKind::This => StmtKind::ArrayPush { array: "this".to_string(), value: rhs },
+        // `$this->{$property}[] = v;` (Mailable): pushes onto the slot the name selects.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            dynamic_property_push_stmt(*object, *property, rhs, span)
+        }
+        // `call()[] = v;`: the expression form already appends to a call temporary.
+        other => {
+            let append = crate::parser::expr::append_assignment_expr(
+                Expr::new(other, lhs_span),
+                rhs,
+                span,
+            )?;
+            StmtKind::ExprStmt(append)
+        }
+    };
+    Ok(Stmt::new(stmt, span))
 }

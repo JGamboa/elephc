@@ -213,6 +213,9 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces.
         _ => {
+            if !matches!(group.base, BaseKind::StaticProperty { .. }) {
+                crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            }
             super::lower_stmt(ctx, group.read);
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
@@ -228,7 +231,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         isset_op.default_effects(),
         Some(span),
     );
-    if matches!(group.base, BaseKind::Local(_)) {
+    // The probe's container read is released for a local and for a property base: a property
+    // read arrives as an owning temporary (`PropGet` acquires), and keeping it leaked the outer
+    // container once per `$this->p[$k][] = $v`. A static-property load is the symbol's own
+    // borrowed payload and is never released here.
+    if !matches!(group.base, BaseKind::StaticProperty { .. }) {
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     }
     crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));

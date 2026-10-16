@@ -891,6 +891,8 @@ fn validate_opcode_rules(
         PropSet => check_count(inst_id, inst, 2, "2"),
         LoadLocalRefCellPtr => check_count(inst_id, inst, 0, "0"),
         BindPropRefCell => check_count(inst_id, inst, 2, "2"),
+        LoadDynamicPropRefCell => check_count(inst_id, inst, 2, "2"),
+        BindDynamicPropRefCell => check_count(inst_id, inst, 3, "3"),
         BindArrayElemRefCell => check_count(inst_id, inst, 3, "3"),
         PropUnset => check_count(inst_id, inst, 1, "1"),
         // The receiver plus the runtime name. `PropUnset` names its property in an immediate, so

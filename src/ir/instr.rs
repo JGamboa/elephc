@@ -1017,6 +1017,16 @@ pub enum Op {
     /// shared table and inserting a missing key), the entry's previous value or cell is released
     /// and the entry is stamped tag 11 over the retained cell. Operands: array, index, cell.
     BindArrayElemRefCell,
+    /// Promotes the property a runtime name selects in an object's per-instance property hash
+    /// (a `stdClass` property, or a dynamic property of a class with hash storage) to a managed
+    /// reference cell and returns that cell, inserting null for a missing name
+    /// (`$o->{$k}['x'] = &$v` reaches its container this way). Operands: object, name.
+    /// Result: `Pointer`.
+    LoadDynamicPropRefCell,
+    /// Makes the property a runtime name selects in an object's per-instance property hash hold
+    /// the given managed cell (`$o->{$k} = &$v` on `stdClass` or a dynamic property).
+    /// Operands: object, name, cell pointer.
+    BindDynamicPropRefCell,
     /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
     /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
@@ -1357,6 +1367,9 @@ impl Op {
             LoadLocalRefCellPtr => E::READS_LOCAL | E::READS_HEAP | E::MAY_THROW,
             // Releasing the replaced cell or value can run an arbitrary destructor.
             BindPropRefCell | BindArrayElemRefCell => E::all(),
+            // Both can allocate or split the property hash and release a replaced value, which
+            // can run an arbitrary destructor, and both can emit the dynamic-creation notice.
+            LoadDynamicPropRefCell | BindDynamicPropRefCell => E::all(),
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
             // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
@@ -1723,6 +1736,8 @@ impl Op {
             BindRefCellPtr => "bind_ref_cell_ptr",
             LoadLocalRefCellPtr => "load_local_ref_cell_ptr",
             BindPropRefCell => "bind_prop_ref_cell",
+            LoadDynamicPropRefCell => "load_dynamic_prop_ref_cell",
+            BindDynamicPropRefCell => "bind_dynamic_prop_ref_cell",
             BindArrayElemRefCell => "bind_array_elem_ref_cell",
             AdoptRefCellPtr => "adopt_ref_cell_ptr",
             AcquireRefCell => "acquire_ref_cell",

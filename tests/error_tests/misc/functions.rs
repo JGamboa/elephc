@@ -593,8 +593,8 @@ fn test_error_dynamic_member_unsupported_forms() {
     );
     expect_error("<?php $a = []; $a[]['k'] .= 'x';", "Cannot use [] for reading");
     expect_error(
-        "<?php $o = new stdClass; foreach ([1] as &$o->p) {}",
-        "A by-reference foreach value into a property or array element",
+        "<?php $x = 5; $k = 'p'; foreach ([1] as &$x->{$k}) {}",
+        "Property assignment requires an object",
     );
 }
 

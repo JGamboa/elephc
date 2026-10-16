@@ -49,6 +49,9 @@ pub(super) fn check_ref_assign_place(
     checker.ref_aliased_locals.insert(source_name.clone());
     checker.active_ref_params.insert(source_name.clone());
     checker.record_reference_alias_root(target);
+    if let Some((object, name)) = dynamic_place_root(target) {
+        return check_dynamic_ref_place(checker, target, object, name, source_name, span, env);
+    }
     match &target.kind {
         ExprKind::PropertyAccess { object, property } => {
             properties::check_property_assign(checker, object, property, source, span, env)?;
@@ -126,8 +129,133 @@ pub(super) fn check_ref_assign_place(
     }
 }
 
+/// Returns the runtime-named property (`$o->{$k}`) a place is, or that its element chain starts
+/// from (`$o->{$k}['x']`), if any.
+pub(crate) fn dynamic_place_root(place: &Expr) -> Option<(&Expr, &Expr)> {
+    match &place.kind {
+        ExprKind::DynamicPropertyAccess { object, property } => Some((object, property)),
+        ExprKind::ArrayAccess { array, .. } => dynamic_place_root(array),
+        _ => None,
+    }
+}
+
+/// Type-checks `$o->{$k} = &$v`, `$o->{$k}['x'] = &$v` and `$o->{$k}[] = &$v` (desugared to an
+/// element place).
+///
+/// The name is only known at run time, so every property it can select must be able to share the
+/// reference: each untyped property of the receiver's class and subclasses is widened to boxed
+/// storage and promoted to a reference property, exactly as a statically named bind does, and a
+/// typed property whose storage is already boxed is promoted too. Any other typed property is
+/// refused per name at run time by the lowering. A name that selects no declared property lands
+/// in the object's property hash (a `stdClass` property or a dynamic property), so the receiver
+/// subtree records the hash reservation an ordinary runtime-name write records.
+fn check_dynamic_ref_place(
+    checker: &mut Checker,
+    target: &Expr,
+    object: &Expr,
+    name: &Expr,
+    source_name: &str,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    if !matches!(object_ty, PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed) {
+        return Err(CompileError::new(span, "Property assignment requires an object"));
+    }
+    let name_ty = checker.infer_type(name, env)?;
+    if !matches!(name_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        return Err(CompileError::new(
+            name.span,
+            "Dynamic property name must be string or integer",
+        ));
+    }
+    if let ExprKind::ArrayAccess { index, .. } = &target.kind {
+        checker.infer_type(index, env)?;
+    }
+    let direct = matches!(target.kind, ExprKind::DynamicPropertyAccess { .. });
+    promote_runtime_name_candidates(checker, &object_ty, direct);
+    env.insert(source_name.to_string(), PhpType::Mixed);
+    Ok(())
+}
+
+/// Type-checks the source of `$r = &$o->{$k}`: the receiver and the name, and the promotion of
+/// every property the name can select, exactly as for a runtime-named place.
+pub(crate) fn check_dynamic_ref_source(
+    checker: &mut Checker,
+    object: &Expr,
+    name: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    if !matches!(object_ty, PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed) {
+        return Err(CompileError::new(span, "Property assignment requires an object"));
+    }
+    let name_ty = checker.infer_type(name, env)?;
+    if !matches!(name_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        return Err(CompileError::new(
+            name.span,
+            "Dynamic property name must be string or integer",
+        ));
+    }
+    promote_runtime_name_candidates(checker, &object_ty, true);
+    Ok(())
+}
+
+/// Records the property-hash reservation for a runtime-named reference and promotes every
+/// property of the receiver's class subtree that can share the reference (`direct`: the
+/// property itself; otherwise an element of it).
+fn promote_runtime_name_candidates(checker: &mut Checker, object_ty: &PhpType, direct: bool) {
+    crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
+        checker,
+        object_ty,
+    );
+    let receiver_class = match object_ty {
+        PhpType::Object(class) => Some(class.trim_start_matches('\\').to_string()),
+        _ => checker.union_single_object_class(object_ty),
+    };
+    if let Some(class) = receiver_class {
+        let subtree: Vec<String> = checker
+            .classes
+            .keys()
+            .filter(|candidate| {
+                candidate.as_str() == class
+                    || crate::types::class_inherits_from(&checker.classes, candidate, &class)
+            })
+            .cloned()
+            .collect();
+        for owner in subtree {
+            let names: Vec<(String, bool, PhpType)> = match checker.classes.get(&owner) {
+                Some(info) => info
+                    .properties
+                    .iter()
+                    .map(|(property, ty)| {
+                        (property.clone(), info.visible_property_is_declared(property), ty.clone())
+                    })
+                    .collect(),
+                None => continue,
+            };
+            for (property, declared, ty) in names {
+                if !declared {
+                    let shape = if direct { PhpType::Mixed } else { PhpType::php_array() };
+                    properties::widen_referenced_untyped_property(checker, &owner, &property, &shape);
+                } else {
+                    let repr = ty.codegen_repr();
+                    let shares = repr == PhpType::Mixed || (!direct && ty.is_php_array());
+                    if !shares {
+                        continue;
+                    }
+                }
+                checker
+                    .reference_property_promotions
+                    .insert((owner.clone(), property));
+            }
+        }
+    }
+}
+
 /// Returns the property an element place's container chain starts from, if any.
-fn element_place_property_root(container: &Expr) -> Option<(&Expr, &str)> {
+pub(super) fn element_place_property_root(container: &Expr) -> Option<(&Expr, &str)> {
     match &container.kind {
         ExprKind::PropertyAccess { object, property } => Some((object, property)),
         ExprKind::ArrayAccess { array, .. } => element_place_property_root(array),

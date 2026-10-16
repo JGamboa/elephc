@@ -247,6 +247,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
     objects::emit_stdclass_set(emitter);
+    objects::emit_property_hash_reference(emitter);
     objects::emit_mixed_property_get(emitter);
     objects::emit_mixed_property_set(emitter);
     objects::emit_magic_set_guard(emitter);

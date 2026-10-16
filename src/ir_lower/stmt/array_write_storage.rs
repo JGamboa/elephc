@@ -294,6 +294,12 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 }
 
 /// Preserves the first concrete value type written into an empty indexed array.
+///
+/// A `null` first value (`$a = []; $a[] = null;`) has no list-slot representation (`Void` has no
+/// storage), so the slot is boxed like a literal `null` array element.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
-    normalize_materialized_element_type(item_type)
+    match item_type.codegen_repr() {
+        PhpType::Void => PhpType::Mixed,
+        _ => normalize_materialized_element_type(item_type),
+    }
 }

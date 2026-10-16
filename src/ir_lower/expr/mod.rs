@@ -37,6 +37,7 @@ mod maybe_undefined_read;
 mod dynamic_class_access;
 mod scoped_dynamic_calls;
 mod dynamic_property_push;
+mod dynamic_reference_places;
 mod lsb_taint;
 mod nullsafe_chain;
 mod ref_place_args;
@@ -206,6 +207,7 @@ pub(crate) use instanceof_coercions::{
 };
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use reference_places::{install_escaping_ref_params, lower_ref_assign_place};
+pub(crate) use dynamic_reference_places::lower_ref_assign_dynamic_property;
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
