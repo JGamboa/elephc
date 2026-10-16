@@ -32,14 +32,14 @@ use super::super::Checker;
 /// saw the keys an earlier call stored. Such a static is boxed `Mixed` storage, read at run time.
 /// An informative initializer (`static $n = 0;`, `static $m = ['a' => 1];`) keeps its type, and an
 /// assignment of another type is refused or widened by the ordinary local rules.
-/// An empty-array initializer keeps the array contract as PHP's general (boxed) `array`, so
-/// array builtins still accept it while its keys and elements are read at run time.
+/// An array initializer keeps the array contract as PHP's general (boxed) `array`, so array
+/// builtins still accept it while its keys and elements are read at run time: a later call can
+/// store any key or value into it (`static $u = ['x' => 0]; $u[3] = 1;` rewrote a string-keyed
+/// hash slot as another layout and corrupted it, review P42a `s2`).
 pub(crate) fn static_local_declared_type(init_ty: PhpType) -> PhpType {
     match init_ty.codegen_repr() {
         PhpType::Void | PhpType::Never => PhpType::Mixed,
-        PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Never | PhpType::Void) => {
-            PhpType::php_array()
-        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
         _ => init_ty,
     }
 }

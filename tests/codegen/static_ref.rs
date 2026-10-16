@@ -277,3 +277,32 @@ echo f('a'), f('b'), f('a'), "\n";
         out.stderr
     );
 }
+
+/// Verifies the review P42a static-local array probes `s1`/`s3`: a keyed write accumulates across
+/// calls for string and int keys, and `count` sees every key stored by earlier calls.
+#[test]
+fn test_static_local_keyed_array_accumulates_review_s1_s3() {
+    let out = compile_and_run(r#"<?php
+function loc($k) { static $c = []; $c[$k] = ($c[$k] ?? 0) + 1; return $c; }
+loc('a'); loc(1); echo json_encode(loc('a')), "\n";
+function cnt($k) { static $c = []; $c[$k] = 1; return count($c); }
+echo cnt('a'), cnt('b'), cnt('a'), "\n";
+function loci($k) { static $c = []; $c[$k] = ($c[$k] ?? 0) + 1; return $c[$k]; }
+echo loci(1), loci(1), loci(2), "\n";
+function locs($k) { static $c = []; $c[$k] = ($c[$k] ?? 0) + 1; return $c[$k]; }
+echo locs('a'), locs('a'), locs('b'), "\n";
+"#);
+    assert_eq!(out, "{\"a\":2,\"1\":1}\n122\n121\n121\n");
+}
+
+/// Verifies the review P42a probe `s2`: an int key written into a static local initialized with a
+/// string-keyed array keeps both keys (it corrupted the hash to `{"\u0000":0}`).
+#[test]
+fn test_static_local_string_keyed_initializer_takes_int_key_review_s2() {
+    let out = compile_and_run(r#"<?php
+function loc2($k) { static $u = ['x' => 0]; $u[$k] = 1; return $u; }
+echo json_encode(loc2('y')), json_encode(loc2(3)), "\n";
+echo "after\n";
+"#);
+    assert_eq!(out, "{\"x\":0,\"y\":1}{\"x\":0,\"y\":1,\"3\":1}\nafter\n");
+}

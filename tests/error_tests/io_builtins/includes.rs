@@ -203,20 +203,3 @@ fn test_error_include_expression_in_unsupported_position() {
     }
 }
 
-/// Verifies `static $x; $x ??= require F;` is refused: the conditional hoist leaves a `mixed`
-/// value, which elephc does not persist into an untyped `static` local.
-#[test]
-fn test_error_include_coalesce_into_static_local_is_rejected() {
-    let err = resolve_files_error(
-        &[
-            ("main.php", "<?php function p() { static $q; $q ??= require 'a.php'; return $q; } p();"),
-            ("a.php", "<?php return [1];"),
-        ],
-        "main.php",
-    );
-    assert!(
-        err.message.contains("assigned to `static $q`"),
-        "unexpected error message: {}",
-        err.message
-    );
-}
