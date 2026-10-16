@@ -17,7 +17,9 @@
 //!   property empty. Such roots now widen to the boxed PHP array representation.
 //! - Expected outputs are php 8.5's.
 
-use crate::support::{compile_and_run, compile_and_run_with_heap_debug, compile_source_expect_backend_error};
+use crate::support::{
+    compile_and_run, compile_and_run_with_heap_debug, compile_cli_file_with_flags_expect_failure,
+};
 
 /// A string-valued variable key keeps its own hash key at every level.
 #[test]
@@ -232,13 +234,14 @@ echo $d->count(), "\n";
 /// copy, so it is refused instead of compiling a write that silently does nothing.
 #[test]
 fn test_nested_write_through_copy_is_refused() {
-    let err = compile_source_expect_backend_error(
+    let err = compile_cli_file_with_flags_expect_failure(
         r#"<?php
 $m = ["a" => ["b" => 1]];
 $r = &$m;
 $r["a"]["c"] = 2;
 echo json_encode($m);
 "#,
+        &[],
     );
     assert!(
         err.contains("Nested array write through this container is not supported"),
