@@ -108,6 +108,14 @@ std::thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// The span counters at one moment; see [`Span::counters_checkpoint`].
+#[derive(Debug, Clone, Copy)]
+pub struct SpanCounters {
+    next_source_id: u32,
+    next_synthetic_source_id: u32,
+    next_synthetic_line: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
 pub struct Span {
@@ -193,6 +201,27 @@ impl Span {
     /// Resets source identities at the beginning of a new include-resolution unit.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Captures every span counter (include and synthetic source identities, synthetic lines),
+    /// to hand back to [`Span::restore_counters`] after work whose spans are discarded.
+    pub fn counters_checkpoint() -> SpanCounters {
+        SpanCounters {
+            next_source_id: NEXT_SOURCE_ID.with(|next| next.get()),
+            next_synthetic_source_id: NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.get()),
+            next_synthetic_line: NEXT_SYNTHETIC_LINE.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    /// Rewinds the span counters to a [`Span::counters_checkpoint`], so a discarded trial parse
+    /// (the autoload prelude probe) leaves the numbering the real pass will use.
+    pub fn restore_counters(checkpoint: SpanCounters) {
+        NEXT_SOURCE_ID.with(|next| next.set(checkpoint.next_source_id));
+        NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.set(checkpoint.next_synthetic_source_id));
+        NEXT_SYNTHETIC_LINE.store(
+            checkpoint.next_synthetic_line,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not

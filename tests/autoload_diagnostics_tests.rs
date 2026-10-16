@@ -10,7 +10,9 @@
 //! - Autoloaded class files are loaded after name resolution, long after the entry file was
 //!   lexed and scanned. Two things used to miss them:
 //!   - every checker diagnostic in such a file printed `error[line:col]`, naming no file, so on a
-//!     large vendor tree the error could not be located.
+//!     large vendor tree the error could not be located;
+//!   - the PDO/curl/... preludes were decided on the entry file alone, so a class file typed
+//!     against `PDO` failed with `Unknown type: PDO` unless `--with-pdo` forced it.
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) with `--check` as a subprocess in an
 //!   isolated temp dir, so nothing is assembled or linked.
 
@@ -105,6 +107,33 @@ fn checker_error_in_the_entry_file_names_the_file() {
     assert!(
         stderr.contains(&expected),
         "diagnostic should name the entry file ({expected}), got:\n{stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A class file reached only through autoload that types against `PDO` and `CurlHandle` gets
+/// the PDO and curl preludes, without `--with-pdo` / `--with-curl`.
+#[test]
+fn autoloaded_class_typed_against_pdo_and_curl_gets_their_preludes() {
+    let dir = project(
+        "elephc_autoload_prelude",
+        &[
+            ("composer.json", COMPOSER),
+            (
+                "src/Store.php",
+                "<?php\nnamespace App;\nuse PDO;\nclass Store {\n    public ?PDO $pdo = null;\n    public ?\\CurlHandle $curl = null;\n    public function connected(): bool { return $this->pdo !== null || $this->curl !== null; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$s = new App\\Store();\necho $s->connected() ? \"yes\" : \"no\";\n",
+            ),
+        ],
+    );
+    let output = check(&dir);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an autoloaded PDO/curl user should check without --with-*, got:\n{stderr}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

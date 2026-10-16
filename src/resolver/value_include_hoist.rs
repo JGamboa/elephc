@@ -44,7 +44,7 @@ use crate::span::Span;
 use super::contains::expr_has_includes;
 
 /// Process-global counter producing unique hidden temporaries for hoisted includes.
-static HOIST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+pub(super) static HOIST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Rewrites the expression-position includes in `stmt`'s own expressions, unless the include
 /// is already the whole value of a plain assignment or a `return` (those are expanded directly

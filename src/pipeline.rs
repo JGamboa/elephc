@@ -200,6 +200,24 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         process::exit(1);
     }
 
+    // The preludes below are decided on the entry program, but the autoload pass that loads the
+    // Composer class files runs after name resolution, much later. Probe that closure now, so a
+    // vendor file that uses PDO or curl gets its prelude as if the entry file used it.
+    crate::progress::phase("autoload-prelude-probe");
+    let phase_started = Instant::now();
+    let autoloaded_preludes = if repl_output.is_some() {
+        HashSet::new()
+    } else {
+        autoload::prelude_probe::autoloaded_prelude_groups(
+            &ast,
+            parent,
+            &autoload_registry,
+            &defines,
+        )
+    };
+    timings.record_since("autoload-prelude-probe", phase_started);
+    let autoloaded = |group: &str| autoloaded_preludes.contains(group);
+
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
@@ -242,7 +260,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // injects when `force || detect(...)`, so `force = pdo_used` reproduces the
     // exact decision without a second AST walk (the injected PDO prelude would
     // otherwise be re-scanned by the mysqli detection below too).
-    let pdo_used = pdo_force || pdo_prelude::program_uses_pdo(&ast);
+    let pdo_used = pdo_force || autoloaded("pdo") || pdo_prelude::program_uses_pdo(&ast);
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
         pdo_prelude::inject_if_used(ast, pdo_used, &mut prelude_inventory)
     } else {
@@ -267,7 +285,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     crate::progress::phase("mysqli-prelude");
     let phase_started = Instant::now();
     let mysqli_force = with_crates.contains("mysqli");
-    let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
+    let mysqli_used =
+        mysqli_force || autoloaded("mysqli") || mysqli_prelude::program_uses_mysqli(&ast);
     let ast =
         mysqli_prelude::inject_if_used(ast, mysqli_used, php_version, &mut prelude_inventory);
     if mysqli_used {
@@ -284,7 +303,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = tz_prelude::inject_if_used(
         ast,
-        with_crates.contains("tz"),
+        with_crates.contains("tz") || autoloaded("tz"),
         &mut prelude_inventory,
     );
     timings.record_since("tz-prelude", phase_started);
@@ -305,7 +324,11 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // before name resolution so the call resolves to the injected function.
     crate::progress::phase("var-export-prelude");
     let phase_started = Instant::now();
-    let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = var_export_prelude::inject_if_used_or_referenced_elsewhere(
+        ast,
+        autoloaded("var_export"),
+        &mut prelude_inventory,
+    );
     timings.record_since("var-export-prelude", phase_started);
 
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
@@ -397,7 +420,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = crate::image_prelude::inject_if_used(
         ast,
-        with_crates.contains("image"),
+        with_crates.contains("image") || autoloaded("image"),
         &mut prelude_inventory,
     );
     timings.record_since("image-prelude", phase_started);
@@ -410,7 +433,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // detected, and before name resolution so a namespaced caller resolves to it.
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
-    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast =
+        crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -426,13 +450,13 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let ast = if php_version == crate::php_version::PhpVersion::default() {
         crate::curl_prelude::inject_if_used(
             ast,
-            with_crates.contains("curl"),
+            with_crates.contains("curl") || autoloaded("curl"),
             &mut prelude_inventory,
         )
     } else {
         crate::curl_prelude::inject_if_used_for_version(
             ast,
-            with_crates.contains("curl"),
+            with_crates.contains("curl") || autoloaded("curl"),
             php_version,
             &mut prelude_inventory,
         )
@@ -448,7 +472,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = crate::xml_prelude::inject_if_used(
         ast,
-        with_crates.contains("xml"),
+        with_crates.contains("xml") || autoloaded("xml"),
         &mut prelude_inventory,
     );
     timings.record_since("xml-prelude", phase_started);

@@ -128,6 +128,31 @@ pub fn resolve_collecting_includes_with_defines(
     })
 }
 
+/// The resolver's hidden-temporary counters at one moment; see [`counters_checkpoint`].
+#[derive(Debug, Clone, Copy)]
+pub struct ResolverCounters([usize; 3]);
+
+/// Captures the counters that name the resolver's hidden temporaries, to hand back to
+/// [`restore_counters`] after a resolution whose result is discarded (the autoload prelude
+/// probe), so the real resolution names its temporaries exactly as without it.
+pub fn counters_checkpoint() -> ResolverCounters {
+    use std::sync::atomic::Ordering::SeqCst;
+    ResolverCounters([
+        value_include_hoist::HOIST_COUNTER.load(SeqCst),
+        engine_includes::VALUE_INCLUDE_COUNTER.load(SeqCst),
+        dynamic_includes::TEMP_COUNTER.load(SeqCst),
+    ])
+}
+
+/// Rewinds the resolver's hidden-temporary counters to a [`counters_checkpoint`].
+pub fn restore_counters(checkpoint: ResolverCounters) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let [hoist, value_include, temp] = checkpoint.0;
+    value_include_hoist::HOIST_COUNTER.store(hoist, SeqCst);
+    engine_includes::VALUE_INCLUDE_COUNTER.store(value_include, SeqCst);
+    dynamic_includes::TEMP_COUNTER.store(temp, SeqCst);
+}
+
 /// Resolves the includes of a file loaded INTO an ongoing compile (an autoloaded class file).
 ///
 /// Unlike [`resolve_collecting_includes_with_defines`] it keeps the source identities the

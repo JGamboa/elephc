@@ -12,6 +12,7 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
+pub mod prelude_probe;
 mod index;
 mod interpret;
 mod registry;

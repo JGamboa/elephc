@@ -48,7 +48,7 @@ static REPORT_MODE: AtomicBool = AtomicBool::new(false);
 static MANIFEST_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
 static APP_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
 static REPORT: Mutex<BTreeMap<String, ReportEntry>> = Mutex::new(BTreeMap::new());
-static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+pub(in crate::resolver) static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static SKIPPED_FILES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Every manifest consulted, with its entry ids, and every site id actually met, per manifest:
 /// an entry no site matched is a stale manifest or a misspelled id (see [`orphan_entries`]).
