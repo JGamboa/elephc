@@ -124,6 +124,7 @@ use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
 use native_isset::*;
+pub(crate) use native_isset::lower_native_isset_offset_probe_from_value;
 use callable_probes::*;
 use descriptor_invoke::*;
 use call_operand_owners::*;

@@ -146,76 +146,166 @@ pub(super) fn lower_local_parent_fetch_for_write(
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
     let local_ty = ctx.local_type(name);
-    match local_ty.codegen_repr() {
-        PhpType::Array(elem_ty)
+    let indexed_mixed = matches!(
+        local_ty.codegen_repr(),
+        PhpType::Array(ref elem_ty)
             if elem_ty.codegen_repr() == PhpType::Mixed
-                || is_empty_indexed_array_element(elem_ty.as_ref()) =>
-        {
-            match index_expr_key_type(ctx, index) {
-                PhpType::Int => {
-                    let array_value = ctx.load_local(name, Some(span));
-                    let key = lower_expr(ctx, index);
-                    let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
-                    // Autovivification makes the element type effectively
-                    // Mixed even when the array started empty-typed. The
-                    // ensure call consumes the loaded container (in-place
-                    // mutation or realloc), so the previous boxed owner of a
-                    // Mixed-storage slot must be released up front and the
-                    // storeback must not release again.
-                    let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
-                    ctx.prepare_mutated_local_owner(name, array_value, ensured_ty.clone(), Some(span));
-                    let ensured = ctx.emit_value(
-                        Op::RuntimeCall,
-                        vec![array_value.value, key.value],
-                        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
-                        ensured_ty.clone(),
-                        effects_lookup::runtime_effects(),
-                        Some(span),
-                    );
-                    ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
-                    // The element now exists: the in-bounds read returns the
-                    // STORED cell (retained) without an undefined-key warning.
-                    let cell = ctx.emit_value(
-                        Op::ArrayGetForWrite,
-                        vec![ensured.value, key.value],
-                        None,
-                        PhpType::Mixed,
-                        Op::ArrayGetForWrite.default_effects(),
-                        Some(span),
-                    );
-                    Some(cell)
-                }
-                PhpType::Str => {
-                    // A literal string key on an indexed local is always a
-                    // hash key: promote the local to a Mixed-valued hash
-                    // first (mirrors `lower_string_key_array_promotion`),
-                    // then ensure the element through the hash path. The
-                    // promoted hash flows straight into the ensure call and
-                    // is stored back exactly once at the end.
-                    let array_value = ctx.load_local(name, Some(span));
-                    let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
-                    ctx.prepare_mutated_local_owner_for_backend_retire(name, array_value, assoc_ty.clone(), Some(span));
-                    let hash = ctx.emit_value(
-                        Op::ArrayToHash,
-                        vec![array_value.value],
-                        None,
-                        assoc_ty.clone(),
-                        Op::ArrayToHash.default_effects(),
-                        Some(span),
-                    );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
-                }
-                _ => None,
-            }
-        }
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
-            let hash_value = ctx.load_local(name, Some(span));
-            let assoc_ty = ctx.local_type(name);
-            ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
-            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
-        }
-        _ => None,
+                || is_empty_indexed_array_element(elem_ty.as_ref())
+    );
+    let assoc_mixed = matches!(
+        local_ty.codegen_repr(),
+        PhpType::AssocArray { ref value, .. } if value.codegen_repr() == PhpType::Mixed
+    );
+    if !indexed_mixed && !assoc_mixed {
+        return None;
     }
+    // The key's storage class decides the container shape, so it is classified from the LOWERED
+    // value, not from syntax: a plain variable, property or call key is syntactically `Int`
+    // (`infer_expr_type_syntactic`), and coercing a string-valued one to int collapsed
+    // `$c[$e]['k'] = 'x'` onto key 0 (P48). The key is lowered before the container is loaded,
+    // so a key expression that reallocates the container cannot leave a stale pointer behind.
+    let syntactic_key_ty = index_expr_key_type(ctx, index);
+    if !matches!(syntactic_key_ty, PhpType::Int | PhpType::Str) {
+        return None;
+    }
+    let key = lower_expr(ctx, index);
+    let key_class = nested_parent_key_class(ctx, index, key, syntactic_key_ty);
+    if assoc_mixed {
+        let hash_value = ctx.load_local(name, Some(span));
+        let assoc_ty = ctx.local_type(name);
+        ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
+        return Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, key, span));
+    }
+    match key_class {
+        NestedParentKey::Int => {
+            let array_value = ctx.load_local(name, Some(span));
+            let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), false);
+            // Autovivification makes the element type effectively
+            // Mixed even when the array started empty-typed. The
+            // ensure call consumes the loaded container (in-place
+            // mutation or realloc), so the previous boxed owner of a
+            // Mixed-storage slot must be released up front and the
+            // storeback must not release again.
+            let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
+            ctx.prepare_mutated_local_owner(name, array_value, ensured_ty.clone(), Some(span));
+            let ensured = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![array_value.value, key.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+                ensured_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
+            // The element now exists: the in-bounds read returns the
+            // STORED cell (retained) without an undefined-key warning.
+            let cell = ctx.emit_value(
+                Op::ArrayGetForWrite,
+                vec![ensured.value, key.value],
+                None,
+                PhpType::Mixed,
+                Op::ArrayGetForWrite.default_effects(),
+                Some(span),
+            );
+            Some(cell)
+        }
+        NestedParentKey::Str => {
+            // A string key on an indexed local is always a hash key:
+            // promote the local to a Mixed-valued hash first (mirrors
+            // `lower_string_key_array_promotion`), then ensure the element
+            // through the hash path. The promoted hash flows straight into
+            // the ensure call and is stored back exactly once at the end.
+            let array_value = ctx.load_local(name, Some(span));
+            let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
+            ctx.prepare_mutated_local_owner_for_backend_retire(name, array_value, assoc_ty.clone(), Some(span));
+            let hash = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![array_value.value],
+                None,
+                assoc_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                Some(span),
+            );
+            Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, key, span))
+        }
+        NestedParentKey::Mixed => {
+            // A runtime-tagged key may be an integer or a string. Like `Op::ArraySetMixedKey`,
+            // the local stays statically `Array(Mixed)`: the ensure helper promotes the payload
+            // to hash storage only for a string key, and the mixed-key for-write read
+            // dispatches on the runtime container kind.
+            let array_value = ctx.load_local(name, Some(span));
+            let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
+            ctx.prepare_mutated_local_owner(name, array_value, ensured_ty.clone(), Some(span));
+            let ensured = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![array_value.value, key.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+                ensured_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
+            let cell = ctx.emit_value(
+                Op::ArrayGetForWrite,
+                vec![ensured.value, key.value],
+                None,
+                PhpType::Mixed,
+                Op::ArrayGetForWrite.default_effects(),
+                Some(span),
+            );
+            release_nested_parent_key(ctx, key, span);
+            Some(cell)
+        }
+    }
+}
+
+/// Releases an owning string or boxed key temporary once the parent cell has been fetched.
+///
+/// The hash and mixed-key helpers copy (strings) or retain (boxed payloads) what they keep, so
+/// the call/concat result that produced the key is dead after the fetch.
+pub(super) fn release_nested_parent_key(ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span) {
+    if !ctx.value_is_owning_temporary(key) {
+        return;
+    }
+    let ty = ctx.builder.value_php_type(key.value).codegen_repr();
+    if matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    }
+}
+
+/// How a nested-write parent key selects the parent container's storage.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum NestedParentKey {
+    /// An integer-valued key (int, bool, float, null, or a foreach key over an indexed source).
+    Int,
+    /// A definitely-string key: always a hash key in PHP (numeric strings are normalized by the
+    /// hash helpers).
+    Str,
+    /// A boxed key whose int/string tag is only known at runtime.
+    Mixed,
+}
+
+/// Classifies a lowered nested-write parent key from its SSA value type.
+pub(super) fn nested_parent_key_class(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    key: LoweredValue,
+    syntactic: PhpType,
+) -> NestedParentKey {
+    if syntactic == PhpType::Str {
+        return NestedParentKey::Str;
+    }
+    let lowered = ctx.builder.value_php_type(key.value);
+    if key.ir_type == IrType::Str || lowered.codegen_repr() == PhpType::Str {
+        return NestedParentKey::Str;
+    }
+    if index_is_boxed_mixed_key(key.ir_type) {
+        if matches!(&index.kind, ExprKind::Variable(name) if ctx.is_foreach_int_key(name)) {
+            return NestedParentKey::Int;
+        }
+        return NestedParentKey::Mixed;
+    }
+    NestedParentKey::Int
 }
 
 /// Ensures a hash element exists for a nested write parent, stores the
@@ -227,10 +317,9 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     name: &str,
     hash_value: LoweredValue,
     assoc_ty: PhpType,
-    index: &Expr,
+    key: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    let key = lower_expr(ctx, index);
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
@@ -240,14 +329,16 @@ pub(super) fn lower_hash_parent_fetch_for_write(
         Some(span),
     );
     ctx.store_prepared_mutated_local(name, ensured, assoc_ty, Some(span));
-    ctx.emit_value(
+    let cell = ctx.emit_value(
         Op::HashGetForWrite,
         vec![ensured.value, key.value],
         Some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::HashGetForWrite.default_effects(),
         Some(span),
-    )
+    );
+    release_nested_parent_key(ctx, key, span);
+    cell
 }
 
 /// Returns true when every part of a nested write target is a bare variable.

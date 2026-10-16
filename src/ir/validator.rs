@@ -796,9 +796,23 @@ fn validate_opcode_rules(
         // receiver's element slot, so its operand shape is pinned tighter than the shared read
         // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
         // one.
+        //
+        // The one exception is a boxed `Mixed` result (a nested write's parent cell): that read
+        // goes through the key-normalizing `__rt_array_get_mixed_key`, which also dispatches on
+        // the receiver's runtime storage kind, so a runtime-tagged key is accepted there (P48).
         ArrayGetForWrite => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            let key = inst.operands[1];
+            let key_ty = function
+                .value(key)
+                .ok_or(ValidationError::UnknownValue(key))?
+                .ir_type;
+            if inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+                && matches!(key_ty, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+            {
+                return Ok(());
+            }
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         // The hash counterpart of the fetch-for-write read. A nested write can also emit it
