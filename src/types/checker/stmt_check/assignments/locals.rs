@@ -1375,24 +1375,6 @@ pub(super) fn check_static_var(
         }
     };
     checker.active_statics.insert(name.to_string());
-    env.insert(name.to_string(), static_local_storage_type(ty));
+    env.insert(name.to_string(), ty);
     Ok(())
-}
-
-/// Returns the type a `static` local is bound with on every entry to its function.
-///
-/// The binding is re-established from the initializer on each call, but the storage keeps what
-/// the PREVIOUS call wrote: `static $c = []; $c[$k] = ...` re-entered typed `array<never>` and
-/// read every key as missing, and `static $u = ['x' => 0]; $u[3] = 1` re-read a hash written
-/// under a different key type (P42a s1/s2/s3). A concretely typed array initializer therefore
-/// binds the general PHP array representation, which every later write keeps valid; the lowering
-/// boxes the initializer to match (`lower_static_var`).
-pub(crate) fn static_local_storage_type(ty: PhpType) -> PhpType {
-    if !ty.is_php_array()
-        && matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-    {
-        PhpType::php_array()
-    } else {
-        ty
-    }
 }

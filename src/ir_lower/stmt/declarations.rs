@@ -143,17 +143,6 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
 
     ctx.builder.position_at_end(init_block);
     let value = lower_expr(ctx, init);
-    // Mirrors `static_local_storage_type` in the checker: a concrete array initializer is boxed
-    // into the general PHP array representation, so the storage stays valid for whatever key and
-    // value types later calls write (P42a s1/s2/s3).
-    let value_ty = ctx.builder.value_php_type(value.value);
-    let value = if !value_ty.is_php_array()
-        && matches!(value_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-    {
-        ctx.box_value_as_mixed(value, PhpType::php_array(), Some(span))
-    } else {
-        value
-    };
     let slot = ctx.declare_local_with_kind(
         name,
         ctx.builder.value_php_type(value.value),
