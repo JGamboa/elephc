@@ -288,6 +288,8 @@ mod locals_retype_fixtures;
 mod syntax;
 #[path = "error_tests/assign_expr.rs"]
 mod assign_expr;
+#[path = "error_tests/static_member.rs"]
+mod static_member;
 #[path = "error_tests/inline_html.rs"]
 mod inline_html;
 #[path = "error_tests/recovery.rs"]
