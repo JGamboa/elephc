@@ -487,4 +487,39 @@ mod tests {
         assert_eq!(version_compare("1.0pl1", "1.0"), 1);
         assert_eq!(version_compare("5.2", "5.10"), -1);
     }
+
+    /// The CarbonPeriod condition and its `version_compare` / `PHP_*_VERSION` spellings, at the
+    /// 8.2 border, under every compile profile.
+    #[test]
+    fn version_conditions_fold_per_profile() {
+        use crate::names::Name;
+        use crate::span::Span;
+        use crate::web_prelude::PhpVersion;
+        let constant = |name: &str| Expr::new(ExprKind::ConstRef(Name::unqualified(name)), Span::dummy());
+        let binary = |left: Expr, op: BinOp, right: Expr| {
+            Expr::new(ExprKind::BinaryOp { left: Box::new(left), op, right: Box::new(right) }, Span::dummy())
+        };
+        let string = |s: &str| Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy());
+        let lt_float = binary(constant("PHP_VERSION"), BinOp::Lt, Expr::new(ExprKind::FloatLiteral(8.2), Span::dummy()));
+        let compare = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("version_compare"),
+                args: vec![constant("PHP_VERSION"), string("8.2.0"), string("<")],
+            },
+            Span::dummy(),
+        );
+        let minor = binary(constant("PHP_MINOR_VERSION"), BinOp::Lt, Expr::new(ExprKind::IntLiteral(2), Span::dummy()));
+        let id = binary(constant("PHP_VERSION_ID"), BinOp::Lt, Expr::new(ExprKind::IntLiteral(80200), Span::dummy()));
+        let state = ResolveState::default();
+        for version in PhpVersion::ALL {
+            crate::codegen::set_compile_profile(version, false);
+            let below = version.version_id() < 80_200;
+            for condition in [&lt_float, &compare, &minor, &id] {
+                assert_eq!(fold_version_condition(condition, &state), Some(below), "{:?}", version);
+            }
+        }
+        crate::codegen::set_compile_profile(PhpVersion::default(), false);
+        // A condition that reads no version constant is not folded.
+        assert_eq!(fold_version_condition(&Expr::new(ExprKind::BoolLiteral(true), Span::dummy()), &state), None);
+    }
 }

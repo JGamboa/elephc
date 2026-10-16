@@ -45,6 +45,7 @@ mod numeric_scalars;
 mod type_builtins;
 mod casts_and_constants;
 mod include_paths;
+mod dynamic_include;
 mod magic_constants;
 mod strings;
 mod curl;
