@@ -15,15 +15,21 @@
 //!   scope that also reads variables dynamically (`$$x`, `get_defined_vars()`).
 //! - `EXTR_SKIP` must not overwrite a local that already exists, which elephc cannot test at
 //!   runtime for a null-valued local; it is accepted only as a function-body statement before
-//!   which no non-parameter local is mentioned, so the existing set is exactly the parameters.
+//!   which no other local is mentioned and nothing is unset, so the existing set is exactly the
+//!   parameters plus the closure's `use` captures (bound on entry, as null when undefined).
+//! - A `this` key: `EXTR_SKIP` ignores it; `EXTR_OVERWRITE` writes the keys before it in array
+//!   order and then throws `Error("Cannot re-assign $this")`.
+//! - Every other mode (prefixes, `EXTR_IF_EXISTS`, `EXTR_REFS`), a runtime mode, the result
+//!   value (the import count), top-level code and arrow functions (where it is an expression)
+//!   are compile errors.
 
 use std::collections::BTreeSet;
 
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 
 use super::rewrite::{builtin_call_name, Rewriter};
 use super::walk::{walk_expr_children, Visitor};
-use super::{global_call, is_frame_reachable_name, str_lit, var, warning_then_null, FRAME_LOCAL};
+use super::{binop, global_call, is_frame_reachable_name, str_lit, var, warning_then_null, FRAME_LOCAL};
 
 /// Placement facts for an `extract()` statement, computed by the enclosing block walk.
 pub(super) struct ExtractContext {
@@ -31,6 +37,8 @@ pub(super) struct ExtractContext {
     pub(super) function_body: bool,
     /// Frame names mentioned by the statements before it in that block.
     pub(super) preceding_names: BTreeSet<String>,
+    /// Locals some statement before it `unset()`s.
+    pub(super) preceding_unsets: std::collections::HashSet<String>,
 }
 
 /// `EXTR_OVERWRITE`, PHP's default extract mode.
@@ -148,19 +156,26 @@ impl Rewriter {
             );
             return;
         }
+        // The locals that exist on entry: parameters and closure `use` captures (PHP binds an
+        // undefined capture as null, which still exists for `EXTR_SKIP`).
+        let entry: std::collections::HashSet<String> = self
+            .scope
+            .frame
+            .params
+            .union(&self.scope.frame.captures)
+            .cloned()
+            .collect();
         if mode == EXTR_SKIP {
             let context = self.extract_context.as_ref();
             let placed_first = context.is_some_and(|context| {
                 context.function_body
-                    && context
-                        .preceding_names
-                        .iter()
-                        .all(|name| self.scope.frame.params.contains(name))
+                    && context.preceding_names.iter().all(|name| entry.contains(name))
+                    && context.preceding_unsets.is_empty()
             });
             if !placed_first {
                 self.error(
                     span,
-                    "extract(..., EXTR_SKIP) is only supported before the function mentions any local other than its parameters (elephc): elephc cannot tell at runtime whether a null local exists",
+                    "extract(..., EXTR_SKIP) is only supported before the function mentions any local other than its parameters and `use` captures, and before any unset() (elephc): elephc cannot tell at runtime whether a null local exists",
                 );
                 return;
             }
@@ -175,34 +190,65 @@ impl Rewriter {
             },
             span,
         )];
-        // PHP refuses to extract a `this` key before writing anything.
-        out.push(Stmt::new(
-            StmtKind::If {
-                condition: global_call(
-                    "array_key_exists",
-                    vec![str_lit("this", span), var(&temp, span)],
-                    span,
-                ),
-                then_body: vec![Stmt::new(
-                    StmtKind::Throw(super::new_error(
-                        str_lit("Cannot re-assign $this", span),
-                        span,
-                    )),
-                    span,
-                )],
-                elseif_clauses: Vec::new(),
-                else_body: None,
-            },
-            span,
-        ));
         let names: Vec<String> = self
             .scope
             .frame
             .names
             .iter()
-            .filter(|name| !(mode == EXTR_SKIP && self.scope.frame.params.contains(*name)))
+            .filter(|name| !(mode == EXTR_SKIP && entry.contains(*name)))
             .cloned()
             .collect();
+        // `EXTR_SKIP` ignores a `this` key. `EXTR_OVERWRITE` writes the keys before it in array
+        // order and then throws, so that case walks the array in order up to `this`.
+        if mode == EXTR_OVERWRITE {
+            let key = self.fresh_temp("extract_key", span);
+            let value = self.fresh_temp("extract_value", span);
+            let mut loop_body = vec![if_then(
+                binop(var(&key, span), BinOp::StrictEq, str_lit("this", span)),
+                vec![Stmt::new(StmtKind::Break(1), span)],
+                span,
+            )];
+            for name in &names {
+                loop_body.push(if_then(
+                    binop(var(&key, span), BinOp::StrictEq, str_lit(name, span)),
+                    vec![Stmt::new(
+                        StmtKind::Assign {
+                            name: name.clone(),
+                            value: var(&value, span),
+                        },
+                        span,
+                    )],
+                    span,
+                ));
+            }
+            out.push(if_then(
+                global_call(
+                    "array_key_exists",
+                    vec![str_lit("this", span), var(&temp, span)],
+                    span,
+                ),
+                vec![
+                    Stmt::new(
+                        StmtKind::Foreach {
+                            array: var(&temp, span),
+                            key_var: Some(key),
+                            value_var: value,
+                            value_by_ref: false,
+                            body: loop_body,
+                        },
+                        span,
+                    ),
+                    Stmt::new(
+                        StmtKind::Throw(super::new_error(
+                            str_lit("Cannot re-assign $this", span),
+                            span,
+                        )),
+                        span,
+                    ),
+                ],
+                span,
+            ));
+        }
         for name in names {
             out.push(Stmt::new(
                 StmtKind::If {
@@ -277,4 +323,17 @@ pub(super) fn reads_frame_dynamically(expr: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// Builds `if (<condition>) { <body> }`.
+fn if_then(condition: Expr, then_body: Vec<Stmt>, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
 }

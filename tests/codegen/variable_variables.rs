@@ -274,6 +274,60 @@ echo dsn(['host' => 'db', 'port' => 5432, 'config' => 'x']), ' ', dsn([]), ' ', 
     assert_eq!(out, "host=db;port=5432 port=none new keep");
 }
 
+/// extract(EXTR_SKIP) inside a closure keeps its `use` captures, by value and by reference,
+/// like Filesystem::getRequire (P43); EXTR_OVERWRITE writes through `use (&$y)`.
+#[test]
+fn test_extract_skip_keeps_closure_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function getRequire($path, array $data = []) {
+        $__path = $path;
+        $__data = $data;
+        return (static function () use ($__path, $__data) {
+            extract($__data, EXTR_SKIP);
+            return $__path . '|' . ($name ?? '-');
+        })();
+    }
+}
+echo (new Box)->getRequire('a.php', ['__path' => 'b.php', 'name' => 'ana']), ' ';
+echo (new Box)->getRequire('a.php', ['__data' => 'x']), ' ';
+$x = 1; $y = null;
+$c = function () use ($x, &$y) {
+    extract(['x' => 9, 'y' => 8, 'z' => 7], EXTR_SKIP);
+    echo json_encode([$x, $y, $z]), ' ';
+    extract(['x' => 5, 'y' => 6]);
+    echo json_encode([$x, $y]), ' ';
+};
+$c();
+echo json_encode([$x, $y]);
+"#,
+    );
+    assert_eq!(out, "a.php|ana a.php|- [1,null,7] [5,6] [1,6]");
+}
+
+/// EXTR_SKIP keeps null parameters, ignores a `this` key and invalid names; EXTR_OVERWRITE
+/// writes the keys before `this` in array order and then throws (P43).
+#[test]
+fn test_extract_skip_this_and_overwrite_order() {
+    let out = compile_and_run(
+        r#"<?php
+class M {
+    public function m($p) {
+        extract(['p' => 'no', 'this' => 1, 'q' => 'si', '1x' => 4, '' => 5, 0 => 6], EXTR_SKIP);
+        echo json_encode([$p, $q, $this instanceof M]), ' ';
+        try { extract(['z' => 1, 'this' => 2, 'w' => 3]); } catch (Error $e) { echo $e->getMessage(), ' '; }
+        echo json_encode([isset($z), isset($w)]), ' ';
+    }
+}
+function f($a, $b = null) { extract(['a' => 1, 'b' => 2, 'c' => 3], EXTR_SKIP); echo json_encode([$a, $b, $c]); }
+(new M)->m(null);
+f(null);
+"#,
+    );
+    assert_eq!(out, "[null,\"si\",true] Cannot re-assign $this [true,false] [null,null,3]");
+}
+
 /// Destructuring targets that are variable variables write the named locals (review r1, H1).
 #[test]
 fn test_varvar_destructuring_targets() {

@@ -85,6 +85,45 @@ fn test_error_extract_skip_after_locals() {
     );
 }
 
+/// `extract(..., EXTR_SKIP)` after an `unset()` of a parameter, or after a closure mentions a
+/// local other than its captures, is refused (P43).
+#[test]
+fn test_error_extract_skip_after_unset_or_closure_local() {
+    expect_error(
+        "<?php function f($a) { unset($a); extract(['a' => 1], EXTR_SKIP); return $a; }",
+        "extract(..., EXTR_SKIP) is only supported before the function mentions any local",
+    );
+    expect_error(
+        "<?php function f($x) { $c = function () use ($x) { $y = 1; extract(['x' => 1], EXTR_SKIP); return $x . $y; }; return $c(); }",
+        "extract(..., EXTR_SKIP) is only supported before the function mentions any local",
+    );
+}
+
+/// Every mode other than EXTR_OVERWRITE / EXTR_SKIP (and EXTR_REFS combinations), and an
+/// extract() in an arrow function, are refused (P43).
+#[test]
+fn test_error_extract_other_modes_and_arrow() {
+    for mode in [
+        "EXTR_PREFIX_SAME, 'p'",
+        "EXTR_PREFIX_ALL, 'p'",
+        "EXTR_PREFIX_INVALID, 'p'",
+        "EXTR_IF_EXISTS",
+        "EXTR_PREFIX_IF_EXISTS, 'p'",
+        "EXTR_REFS",
+        "EXTR_SKIP | EXTR_REFS",
+        "EXTR_OVERWRITE | EXTR_REFS",
+    ] {
+        expect_error(
+            &format!("<?php function f(array $c) {{ extract($c, {mode}); return 1; }}"),
+            "extract() is only supported with EXTR_OVERWRITE or EXTR_SKIP",
+        );
+    }
+    expect_error(
+        "<?php function f(array $c) { $g = fn() => extract($c); return $g(); }",
+        "extract() is only supported as a statement",
+    );
+}
+
 /// `extract()` next to a dynamic frame read is refused (unknown keys would be lost).
 #[test]
 fn test_error_extract_with_dynamic_read() {
