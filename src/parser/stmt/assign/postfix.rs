@@ -483,6 +483,20 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     };
 
     *pos = assign_pos + 1;
+    // `self::$darwinCache[$dir] = &self::$darwinCache[$k];` (symfony DebugClassLoader): the
+    // same place-reference lowering as the local and property targets.
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        if is_append {
+            return Err(CompileError::new(
+                span,
+                "Appending a reference (`$a[] = &$x`) is not supported; use an explicit key",
+            ));
+        }
+        return super::reference_places::parse_place_ref_assign(tokens, pos, lhs_expr, span)
+            .map(Some);
+    }
     // `self::$x = require 'f.php';` needs no special case: the include is an ordinary
     // expression, and `crate::resolver::value_include_hoist` binds it to a hidden local first.
     let rhs = parse_assignment_value_expr(tokens, pos)?;

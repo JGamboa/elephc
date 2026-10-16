@@ -73,3 +73,13 @@ fn test_mixed_value_into_typed_static_property_is_refused() {
         "Static property L::$n expects",
     );
 }
+
+/// Verifies a reference bound INTO a static-property element (symfony DebugClassLoader
+/// `self::$darwinCache[$dir] = &self::$darwinCache[$k]`) is a clear refusal, not a parse error.
+#[test]
+fn test_reference_into_static_property_element_is_refused_clearly() {
+    expect_error(
+        "<?php class C { static array $c = []; static function f($d, $k) { self::$c[$d] = &self::$c[$k]; } } C::f('a', 'b');",
+        "Reference assignment target must be a variable",
+    );
+}
