@@ -38,6 +38,16 @@ pub(super) fn check_ref_assign_place(
             "Reference assignment source must be a variable, array/property element, or a by-reference call",
         ));
     };
+    if checker.active_statics.contains(source_name) {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Binding the static local ${source_name} into a property or array element by \
+                 reference is not supported yet: its storage has no reference cell the place \
+                 could share"
+            ),
+        ));
+    }
     if let Some(index) = checker.current_by_ref_param_index(source_name) {
         checker.escaping_ref_params.insert((source_name.clone(), index));
     }

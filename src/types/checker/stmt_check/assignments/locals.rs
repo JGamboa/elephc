@@ -252,6 +252,7 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    reject_static_local_reference(checker, target, source, span)?;
     let mut target_has_boxed_ref_provenance = match &source.kind {
         ExprKind::Variable(source_name) => {
             checker.boxed_ref_aliased_locals.contains(source_name)
@@ -1378,7 +1379,7 @@ pub(super) fn check_static_var(
         }
     };
     checker.active_statics.insert(name.to_string());
-    env.insert(name.to_string(), ty);
+    env.insert(name.to_string(), super::static_local_declared_type(ty));
     Ok(())
 }
 
@@ -1391,4 +1392,33 @@ pub(super) fn element_static_property_root(
         ExprKind::ArrayAccess { array, .. } => element_static_property_root(array),
         _ => None,
     }
+}
+
+/// Refuses `$r = &$s` and `$s = &$v` for a `static` local `$s`. The static's storage is the
+/// function's static symbol, not a reference cell, so the alias would not share it: the binding
+/// crashed or silently kept two copies. Elements are fine (`$r = &$s['k']` binds the element's own
+/// cell inside the static's array).
+fn reject_static_local_reference(
+    checker: &Checker,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    let named = match &source.kind {
+        ExprKind::Variable(source_name) if checker.active_statics.contains(source_name) => {
+            Some(source_name.as_str())
+        }
+        _ if checker.active_statics.contains(target) => Some(target),
+        _ => None,
+    };
+    let Some(name) = named else {
+        return Ok(());
+    };
+    Err(CompileError::new(
+        span,
+        &format!(
+            "A reference to the static local ${name} (`$r = &$s` or `$s = &$v`) is not supported \
+             yet: its storage has no reference cell the alias could share"
+        ),
+    ))
 }

@@ -22,6 +22,28 @@ use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Returns the type a `static $x = <init>;` local carries at its declaration, from the type of
+/// its initializer.
+///
+/// The value a static holds when the declaration is reached is whatever the PREVIOUS call left
+/// in it, not the initializer. An initializer that says nothing about that value (`static $x;`,
+/// `static $x = null;`, `static $x = [];`) would otherwise make every later read fold against
+/// null or an empty array: `$x ??= make()` re-ran `make()` on every call and `$c[$k] ?? 0` never
+/// saw the keys an earlier call stored. Such a static is boxed `Mixed` storage, read at run time.
+/// An informative initializer (`static $n = 0;`, `static $m = ['a' => 1];`) keeps its type, and an
+/// assignment of another type is refused or widened by the ordinary local rules.
+/// An empty-array initializer keeps the array contract as PHP's general (boxed) `array`, so
+/// array builtins still accept it while its keys and elements are read at run time.
+pub(crate) fn static_local_declared_type(init_ty: PhpType) -> PhpType {
+    match init_ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Never | PhpType::Void) => {
+            PhpType::php_array()
+        }
+        _ => init_ty,
+    }
+}
+
 /// Widens the untyped static array property an element chain starts from (`C::$p[$k]..`) to
 /// the boxed PHP array representation its addressable (reference/unset) path needs.
 /// `widen_null_default` also widens a null-defaulted slot, which a reference autovivifies into

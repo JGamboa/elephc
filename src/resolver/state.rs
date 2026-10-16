@@ -24,10 +24,6 @@ pub(super) struct ResolveState {
     pub(super) const_imports: HashMap<String, String>,
     /// Invocation-level symbols used to select `ifdef` branches in every physical file.
     pub(super) conditional_defines: HashSet<String>,
-    /// Names declared `static $x;` so far in the statement list being resolved (and the lists
-    /// it encloses, which resolve with a clone). `value_include_hoist` refuses a conditional
-    /// include whose value would be stored into one of them; see `hoist_value_includes`.
-    pub(super) static_locals: HashSet<String>,
 }
 
 impl ResolveState {

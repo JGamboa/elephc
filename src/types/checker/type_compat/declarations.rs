@@ -264,6 +264,7 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        self.reject_boxed_static_local_by_ref_arg(actual_ty, arg, context)?;
         let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
             && actual_ty.codegen_repr() == PhpType::Mixed
             && matches!(arg.kind, ExprKind::Variable(_));
@@ -366,6 +367,35 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Refuses a boxed `static` local (`static $c = [];`, `static $p;`) as a by-reference
+    /// argument. Its storage is the function's static symbol, which has no reference cell the
+    /// callee could write through, so the callee's writes would be silently dropped.
+    fn reject_boxed_static_local_by_ref_arg(
+        &self,
+        actual_ty: &PhpType,
+        arg: &Expr,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return Ok(());
+        };
+        if !self.active_statics.contains(name) || actual_ty.codegen_repr() != PhpType::Mixed {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            arg.span,
+            &format!(
+                "{context}: passing the static local ${name} by reference is not supported yet \
+                 (its storage has no reference cell the callee could write through); copy it \
+                 into a plain local, pass that, and assign it back"
+            ),
+        ))
     }
 
     /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.
