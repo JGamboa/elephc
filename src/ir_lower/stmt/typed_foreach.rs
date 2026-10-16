@@ -192,6 +192,9 @@ pub(super) fn lower_foreach(
 ) {
     // `foreach ($o->readonly as &$v)` (or an element of it, or an enum's `value`): php evaluates
     // the receiver and throws "Cannot indirectly modify readonly property" before iterating.
+    // The throw does not terminate the block: the loop below still lowers (it is unreachable at
+    // run time) so the body's bindings stay on the same path as every later statement, which
+    // the backend's per-slot representation tracking relies on.
     if value_by_ref {
         if let Some((object, message)) =
             crate::ir_lower::expr::readonly_by_ref_foreach_source(ctx, array)
@@ -200,8 +203,7 @@ pub(super) fn lower_foreach(
             if ctx.value_is_owning_temporary(receiver) {
                 crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(array.span));
             }
-            super::lower_throw_access_error(ctx, &message, array.span);
-            return;
+            super::lower_throw_access_error_expr(ctx, &message, array.span);
         }
     }
     // Apply the checker-computed loop header contract before lowering the source expression so

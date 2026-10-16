@@ -39,14 +39,13 @@ pub(crate) fn lower_ref_assign_property(
         // php refuses any reference to a readonly property, inside its constructor too. A
         // readonly property is never promoted to a reference cell (see
         // `apply_reference_property_promotions`), so nothing may load one: loading would read
-        // its plain payload as a cell pointer. The throw TERMINATES the block, so a catch in
-        // the same frame does not see `target` as bound. Callers keep lowering the rest (a
-        // nested element place binds through `target`), so that continues in a fresh block with
-        // no predecessor, where the target is bound to a null cell nothing ever executes.
+        // its plain payload as a cell pointer. The throw ends this path at run time, but it
+        // does not terminate the block: callers keep lowering the rest linearly (a nested
+        // element place binds through `target`, and its source variable is promoted there), and
+        // the backend's per-slot representation tracking needs those effects on the same path.
+        // So the target is bound to a null cell that no executed code ever dereferences.
         release_owning_receiver_temporary(ctx, object, span);
-        crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span);
-        let dead = ctx.builder.create_named_block("readonly.ref.dead", Vec::new());
-        ctx.builder.position_at_end(dead);
+        crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, span);
         let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
         let null_cell = ctx.emit_value(
             Op::ConstNull,
