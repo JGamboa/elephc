@@ -36,9 +36,28 @@ pub(crate) fn lower_ref_assign_property(
     };
     let object = lower_expr(ctx, object);
     if let Some(message) = readonly_reference_error(ctx, object.value, property) {
-        // php refuses any reference to a readonly property, inside its constructor too. The
-        // throw ends this path; the binding below stays well formed for the unreachable rest.
-        crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, span);
+        // php refuses any reference to a readonly property, inside its constructor too. A
+        // readonly property is never promoted to a reference cell (see
+        // `apply_reference_property_promotions`), so nothing may load one: loading would read
+        // its plain payload as a cell pointer. The throw TERMINATES the block, so a catch in
+        // the same frame does not see `target` as bound. Callers keep lowering the rest (a
+        // nested element place binds through `target`), so that continues in a fresh block with
+        // no predecessor, where the target is bound to a null cell nothing ever executes.
+        release_owning_receiver_temporary(ctx, object, span);
+        crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span);
+        let dead = ctx.builder.create_named_block("readonly.ref.dead", Vec::new());
+        ctx.builder.position_at_end(dead);
+        let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
+        let null_cell = ctx.emit_value(
+            Op::ConstNull,
+            Vec::new(),
+            None,
+            PhpType::Pointer(None),
+            Op::ConstNull.default_effects(),
+            Some(span),
+        );
+        ctx.bind_local_ref_cell_ptr(target, null_cell, value_type, Some(span));
+        return;
     }
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
@@ -1302,6 +1321,35 @@ pub(crate) fn readonly_reference_error(
     let PhpType::Object(class) = ctx.builder.value_php_type(object).codegen_repr() else {
         return None;
     };
+    readonly_reference_error_for_class(ctx, class, property)
+}
+
+/// The by-reference `foreach` source rooted in a readonly property of a statically known
+/// receiver (`foreach ($o->ro as &$v)`, `foreach ($o->ro['k'] as &$v)`, and an enum's `value`),
+/// as the receiver expression to evaluate plus php's `Error` message. Iterating such a source by
+/// reference would write through the readonly slot, which php refuses before the loop starts.
+pub(crate) fn readonly_by_ref_foreach_source<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    source: &'e Expr,
+) -> Option<(&'e Expr, String)> {
+    let mut root = source;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    let ExprKind::PropertyAccess { object, property } = &root.kind else {
+        return None;
+    };
+    let (class, _) = instance_callable_object_class_and_nullability(ctx, object)?;
+    let message = readonly_reference_error_for_class(ctx, class, property)?;
+    Some((object, message))
+}
+
+/// php's readonly-reference `Error` for `property` of `class`, or `None` when it is writable.
+fn readonly_reference_error_for_class(
+    ctx: &LoweringContext<'_, '_>,
+    class: String,
+    property: &str,
+) -> Option<String> {
     let info = ctx.classes.get(class.as_str())?;
     if !info.readonly_properties.contains(property) {
         return None;

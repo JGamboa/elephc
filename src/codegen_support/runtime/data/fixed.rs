@@ -1460,12 +1460,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _vd_uninit_prefix\n_vd_uninit_prefix:\n    .ascii \"uninitialized(\"\n");
     // `*RECURSION*` replaces the value of a container already on the walk stack.
     out.push_str(".globl _vd_recursion_line\n_vd_recursion_line:\n    .ascii \"*RECURSION*\\n\"\n");
-    // _vd_seen / _vd_seen_n: the var_dump recursion guard — a bounded stack of
-    // the object pointers currently being walked, pushed and popped around each
-    // object body by `__rt_var_dump_value`'s tag-6 branch. 256 entries × 8 B.
+    // _vd_seen / _vd_seen_n: the var_dump/print_r recursion guard — a bounded stack
+    // of the object pointers and array/hash tables currently being walked, pushed and
+    // popped around each object body and each array walk. 2048 entries × 8 B.
     // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
-    out.push_str(&comm_directive("_vd_seen", 2048, target));
+    out.push_str(&comm_directive("_vd_seen", 16384, target));
     out.push_str(&comm_directive("_vd_seen_n", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone

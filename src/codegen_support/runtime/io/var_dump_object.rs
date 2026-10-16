@@ -73,9 +73,11 @@ use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Capacity of the `_vd_seen` visited-object stack, in pointers. Kept in sync
-/// with the `.comm _vd_seen` reservation in `runtime::data::fixed`.
-const VD_SEEN_CAPACITY: u64 = 256;
+/// Capacity of the `_vd_seen` visited-container stack, in pointers. Kept in sync
+/// with the `.comm _vd_seen` reservation in `runtime::data::fixed`. The stack holds
+/// every object AND array/hash table on the current var_dump/print_r walk path, so it
+/// bounds the nesting depth those builtins render before reporting `*RECURSION*`.
+const VD_SEEN_CAPACITY: u64 = 2048;
 
 /// Byte width of one `_class_vd_desc_*` property row.
 const VD_DESC_ROW_BYTES: u64 = 48;

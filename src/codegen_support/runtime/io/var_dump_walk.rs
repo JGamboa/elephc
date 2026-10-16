@@ -1213,6 +1213,10 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.label("__rt_vd_val_arr");
     emitter.instruction("ldr x0, [sp, #0]");                                    // nested indexed-array pointer
     emitter.instruction("cbz x0, __rt_vd_val_null");                            // defensive: a null container renders NULL
+    // -- a table already on the walk stack renders `*RECURSION*` (PHP's GC_PROTECT_RECURSION) --
+    emitter.instruction("bl __rt_vd_seen_find");                                // is this table already being walked?
+    emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // a revisited table renders *RECURSION*
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the nested array pointer
     emitter.instruction("bl __rt_var_dump_open_container");                     // write `<indent>array(N) {\n`
     emitter.instruction("bl __rt_vd_indent_push");                              // entries sit one level deeper
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the nested array pointer
@@ -1224,6 +1228,10 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.label("__rt_vd_val_hash");
     emitter.instruction("ldr x0, [sp, #0]");                                    // nested hash pointer
     emitter.instruction("cbz x0, __rt_vd_val_null");                            // defensive: a null container renders NULL
+    // -- a table already on the walk stack renders `*RECURSION*` (PHP's GC_PROTECT_RECURSION) --
+    emitter.instruction("bl __rt_vd_seen_find");                                // is this table already being walked?
+    emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // a revisited table renders *RECURSION*
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the nested hash pointer
     emitter.instruction("bl __rt_var_dump_open_container");                     // write `<indent>array(N) {\n`
     emitter.instruction("bl __rt_vd_indent_push");                              // entries sit one level deeper
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the nested hash pointer
@@ -1260,6 +1268,9 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
     emitter.label("__rt_vd_val_recursion");
+    // PHP prints the recursion marker without the `&` of the reference that reached it.
+    abi::emit_symbol_address(emitter, "x9", "_vd_ref_mark");                    // resolve the pending reference-marker flag
+    emitter.instruction("str xzr, [x9]");                                       // drop a pending `&`: the marker line prints none
     emitter.instruction("bl __rt_var_dump_emit_recursion_line");                // emit `<indent>*RECURSION*\n`
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
@@ -1343,6 +1354,11 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested indexed-array pointer
     emitter.instruction("test rdi, rdi");                                       // defensive null-container check
     emitter.instruction("jz __rt_vd_val_null_x86");                             // a null container renders NULL
+    // -- a table already on the walk stack renders `*RECURSION*` (PHP's GC_PROTECT_RECURSION) --
+    emitter.instruction("call __rt_vd_seen_find");                              // is this table already being walked?
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_vd_val_recursion_x86");                       // a revisited table renders *RECURSION*
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the nested array pointer
     emitter.instruction("call __rt_var_dump_open_container");                   // write `<indent>array(N) {\n`
     emitter.instruction("call __rt_vd_indent_push");                            // entries sit one level deeper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the nested array pointer
@@ -1355,6 +1371,11 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested hash pointer
     emitter.instruction("test rdi, rdi");                                       // defensive null-container check
     emitter.instruction("jz __rt_vd_val_null_x86");                             // a null container renders NULL
+    // -- a table already on the walk stack renders `*RECURSION*` (PHP's GC_PROTECT_RECURSION) --
+    emitter.instruction("call __rt_vd_seen_find");                              // is this table already being walked?
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_vd_val_recursion_x86");                       // a revisited table renders *RECURSION*
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the nested hash pointer
     emitter.instruction("call __rt_var_dump_open_container");                   // write `<indent>array(N) {\n`
     emitter.instruction("call __rt_vd_indent_push");                            // entries sit one level deeper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the nested hash pointer
@@ -1393,6 +1414,9 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
     emitter.label("__rt_vd_val_recursion_x86");
+    // PHP prints the recursion marker without the `&` of the reference that reached it.
+    abi::emit_symbol_address(emitter, "r9", "_vd_ref_mark");                    // resolve the pending reference-marker flag
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // drop a pending `&`: the marker line prints none
     emitter.instruction("call __rt_var_dump_emit_recursion_line");              // emit `<indent>*RECURSION*\n`
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
@@ -1467,6 +1491,9 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.instruction("lsr x9, x9, #8");                                      // shift the value_type stamp into the low byte
     emitter.instruction("and x9, x9, #0x0f");                                   // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("str x9, [sp, #24]");                                   // save the element value_type stamp
+    // -- the table stays on the recursion-guard stack while its entries render --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the array pointer
+    emitter.instruction("bl __rt_vd_seen_push");                                // mark the table as being walked
 
     emitter.label("__rt_vd_idx_loop");
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the current index
@@ -1523,6 +1550,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_idx_loop");                                  // continue scanning
 
     emitter.label("__rt_vd_idx_done");
+    emitter.instruction("bl __rt_vd_seen_pop");                                 // the table is no longer on the walk stack
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the indexed-walk frame
     emitter.instruction("ret");                                                 // return to caller
@@ -1556,6 +1584,9 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr rax, 8");                                          // shift the value_type stamp into the low byte
     emitter.instruction("and rax, 0x0f");                                       // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the element value_type stamp
+    // -- the table stays on the recursion-guard stack while its entries render --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the array pointer
+    emitter.instruction("call __rt_vd_seen_push");                              // mark the table as being walked
 
     emitter.label("__rt_vd_idx_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the current index
@@ -1616,6 +1647,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_idx_loop_x86");                            // continue scanning
 
     emitter.label("__rt_vd_idx_done_x86");
+    emitter.instruction("call __rt_vd_seen_pop");                               // the table is no longer on the walk stack
     emitter.instruction("add rsp, 48");                                         // release the indexed-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -1754,6 +1786,8 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish runtime frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash table pointer
+    // -- the table stays on the recursion-guard stack while its entries render --
+    emitter.instruction("bl __rt_vd_seen_push");                                // mark the table as being walked (x0 = hash)
     emitter.instruction("bl __rt_hash_count");                                  // x0 = number of entries
     emitter.instruction("str x0, [sp, #16]");                                   // save the entry count
     emitter.instruction("str xzr, [sp, #8]");                                   // iterator cursor = 0
@@ -1816,6 +1850,7 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_hash_loop");                                 // continue with the next entry
 
     emitter.label("__rt_vd_hash_done");
+    emitter.instruction("bl __rt_vd_seen_pop");                                 // the table is no longer on the walk stack
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the hash-walk frame
     emitter.instruction("ret");                                                 // return to the var_dump caller
@@ -1833,6 +1868,8 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
     emitter.instruction("sub rsp, 96");                                         // allocate the hash-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash table pointer
+    // -- the table stays on the recursion-guard stack while its entries render --
+    emitter.instruction("call __rt_vd_seen_push");                              // mark the table as being walked (rdi = hash)
     emitter.instruction("call __rt_hash_count");                                // rax = number of entries (hash ptr already in rdi)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the entry count
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // iterator cursor = 0
@@ -1893,6 +1930,7 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_hash_loop_x86");                           // continue with the next entry
 
     emitter.label("__rt_vd_hash_done_x86");
+    emitter.instruction("call __rt_vd_seen_pop");                               // the table is no longer on the walk stack
     emitter.instruction("add rsp, 96");                                         // release the hash-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to the var_dump caller
