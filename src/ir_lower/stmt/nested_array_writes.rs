@@ -127,7 +127,24 @@ pub(crate) fn lower_nested_assign_parent(
         return parent;
     }
     // The receiver is already evaluated but not a boxed Mixed cell: finish as
-    // the plain subscript read the pre-#555 lowering produced.
+    // the plain subscript read the pre-#555 lowering produced. For a by-value
+    // container (an indexed array or hash read out of storage this path cannot
+    // write through) that read is a DETACHED copy, and the leaf write would
+    // mutate the copy and vanish (P48). Refuse it instead of compiling a write
+    // that silently does nothing; objects (ArrayAccess) are handles and keep
+    // the read.
+    if matches!(
+        receiver.ir_type,
+        IrType::Heap(crate::ir::IrHeapKind::Array | crate::ir::IrHeapKind::Hash)
+    ) {
+        crate::ir_lower::diagnostics::refuse(
+            expr.span,
+            "Nested array write through this container is not supported: its elements are \
+             concretely typed (or it is reached through a by-reference, typed or temporary \
+             value), so the write would land in a copy. Declare the container as `array` \
+             (or leave it untyped) so its elements are boxed",
+        );
+    }
     lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
 }
 
