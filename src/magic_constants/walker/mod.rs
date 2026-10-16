@@ -16,7 +16,7 @@ use crate::names::Name;
 use crate::parser::ast::{ExprKind, MagicConstant};
 use crate::span::Span;
 
-pub(super) use members::{walk_class_method, walk_class_property};
+pub(super) use members::{walk_class_const, walk_class_method, walk_class_property};
 pub(crate) use stmts::walk_program;
 
 use crate::parser::ast::TypeExpr;
@@ -179,6 +179,16 @@ pub(crate) trait Pass {
     /// Transforms a magic constant node (e.g., `__FILE__`, `__LINE__`) into its
     /// substituted expression. Called for every `MagicConstant` encountered during the walk.
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind;
+    /// Whether the walk descends into class/interface/trait/enum CONSTANT VALUES.
+    ///
+    /// Only the magic-constant substitution passes opt in: a constant initializer such as
+    /// `const A = ['Closure' => __CLASS__.'::f'];` (symfony ReflectionCaster) holds magic
+    /// constants that must be lowered like any other, or type inference meets a raw
+    /// `MagicConstant` and panics. The walker's other users (generic instantiation, renames,
+    /// detectors) keep their historical behavior of leaving constant values alone.
+    fn walks_class_const_values(&self) -> bool {
+        false
+    }
     /// Transforms a string literal encountered in a position where a magic constant
     /// might appear (e.g., as the argument to `define`). Default returns the string unchanged.
     fn transform_string(&self, value: String) -> ExprKind {
