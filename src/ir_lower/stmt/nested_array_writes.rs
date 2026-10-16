@@ -142,16 +142,27 @@ pub(crate) fn lower_nested_assign_parent(
         return parent;
     }
     // The receiver is already evaluated but not a boxed Mixed cell: finish as
-    // the plain subscript read the pre-#555 lowering produced. For a by-value
-    // container (an indexed array or hash read out of storage this path cannot
-    // write through) that read is a DETACHED copy, and the leaf write would
-    // mutate the copy and vanish (P48). Refuse it instead of compiling a write
-    // that silently does nothing; objects (ArrayAccess) are handles and keep
-    // the read.
-    if matches!(
+    // the plain subscript read the pre-#555 lowering produced. When that read
+    // yields a CONTAINER (an array, hash or boxed value) it is a detached copy:
+    // the leaf write would mutate the copy and vanish (P48). Refuse it instead
+    // of compiling a write that silently does nothing; an object element
+    // (ArrayAccess) is a handle and keeps working through the read.
+    let receiver_is_by_value_container = matches!(
         receiver.ir_type,
         IrType::Heap(crate::ir::IrHeapKind::Array | crate::ir::IrHeapKind::Hash)
-    ) {
+    );
+    let parent = lower_array_access_from_lowered_receiver(ctx, receiver, index, expr);
+    if receiver_is_by_value_container
+        && matches!(
+            parent.ir_type,
+            IrType::Heap(
+                crate::ir::IrHeapKind::Array
+                    | crate::ir::IrHeapKind::Hash
+                    | crate::ir::IrHeapKind::Mixed
+                    | crate::ir::IrHeapKind::Union
+            )
+        )
+    {
         crate::ir_lower::diagnostics::refuse(
             expr.span,
             "Nested array write through this container is not supported: its elements are \
@@ -160,7 +171,7 @@ pub(crate) fn lower_nested_assign_parent(
              (or leave it untyped) so its elements are boxed",
         );
     }
-    lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
+    parent
 }
 
 /// Returns whether `lower_nested_assign_parent(expr)` yields the STORED cell of the container,
