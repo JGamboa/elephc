@@ -92,6 +92,7 @@ mod objects;
 mod native_classes;
 mod destructors;
 mod reference_property_payload;
+mod reference_append;
 mod reference_places;
 mod references;
 mod runtime_gc;

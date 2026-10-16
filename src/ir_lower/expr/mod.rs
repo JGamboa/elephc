@@ -37,6 +37,7 @@ mod maybe_undefined_read;
 mod dynamic_class_access;
 mod scoped_dynamic_calls;
 mod dynamic_property_push;
+mod dynamic_reference_places;
 mod lsb_taint;
 mod nullsafe_chain;
 mod ref_place_args;

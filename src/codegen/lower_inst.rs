@@ -345,6 +345,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindArrayElemRefCell => arrays::lower_bind_array_elem_ref_cell(ctx, &inst),
         Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, &inst),
+        Op::LoadDynamicPropRefCell | Op::BindDynamicPropRefCell => {
+            objects::lower_dynamic_prop_ref_cell(ctx, &inst)
+        }
         Op::LoadLocalRefCellPtr => lower_load_local_ref_cell_ptr(ctx, &inst),
         Op::LoadArrayElemRefCellExisting => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),

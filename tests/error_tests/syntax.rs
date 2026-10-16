@@ -682,12 +682,45 @@ fn test_error_reference_as_array_key() {
     expect_error("<?php $x = 1; $r = [&$x => 1];", "An array key cannot be a reference");
 }
 
-/// Verifies `$a[] = &$x` (push by reference) reports the unsupported form by name.
+/// Verifies a new-element reference (`&$a[]`) inside an array literal is PHP's compile error.
 #[test]
-fn test_error_reference_append() {
+fn test_error_reference_new_element_in_literal() {
+    expect_error("<?php $b = []; $l = [&$b[]];", "Cannot use [] for reading");
+    expect_error("<?php $b = []; $l = ['k' => &$b[]];", "Cannot use [] for reading");
+}
+
+/// Verifies `f($a[])` names the unsupported by-reference argument form.
+#[test]
+fn test_error_reference_new_element_argument() {
     expect_error(
-        "<?php $a = []; $x = 1; $a[] = &$x;",
-        "Appending a reference (`$a[] = &$x`) is not supported",
+        "<?php function f(&$x) {} $a = []; f($a[]);",
+        "elephc does not support a new array element (`$a[]`) as a by-reference argument",
+    );
+}
+
+/// Verifies a new-element reference needs a variable, property or element container.
+#[test]
+fn test_error_reference_new_element_container() {
+    expect_error(
+        "<?php function g() { return []; } $r = &g()[];",
+        "A reference to a new array element (`&$a[]`, `$a[] = &$x`) needs a variable, property or array element as its container",
+    );
+    expect_error(
+        "<?php function g() { return []; } $x = 1; g()[] = &$x;",
+        "A reference to a new array element (`&$a[]`, `$a[] = &$x`) needs a variable, property or array element as its container",
+    );
+}
+
+/// Verifies a runtime-named reference place checks its receiver and its name.
+#[test]
+fn test_error_reference_dynamic_property_place() {
+    expect_error(
+        "<?php $x = 5; $k = 'a'; $v = 1; $x->{$k} = &$v;",
+        "Property assignment requires an object",
+    );
+    expect_error(
+        "<?php $o = new stdClass; $k = 1.5; $v = 1; $o->{$k} = &$v;",
+        "Dynamic property name must be string or integer",
     );
 }
 

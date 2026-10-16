@@ -281,6 +281,13 @@ pub(super) fn check_array_push(
             let merged_ty = checker
                 .merge_array_element_type(elem_ty, &val_ty)
                 .unwrap_or(PhpType::Mixed);
+            // `$a = []; $a[] = null;`: a list slot has no `null`-only representation (`Void`
+            // has no storage), so the element is boxed like a literal `null` element is.
+            let merged_ty = if merged_ty.codegen_repr() == PhpType::Void {
+                PhpType::Mixed
+            } else {
+                merged_ty
+            };
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
     } else if let PhpType::AssocArray {

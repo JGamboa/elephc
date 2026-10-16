@@ -48,4 +48,4 @@ pub(super) use postfix::{
     try_parse_scoped_property_assignment,
 };
 pub(super) use simple::parse_variable_stmt;
-pub(crate) use reference_places::lower_place_ref_assign;
+pub(crate) use reference_places::{lower_append_ref_assign, lower_place_ref_assign, RefSource};

@@ -39,6 +39,16 @@ pub(crate) fn lower_ref_assign_place(
         );
         return;
     };
+    if super::dynamic_reference_places::dynamic_place_root(target).is_some() {
+        super::dynamic_reference_places::lower_dynamic_ref_place(ctx, target, source_name, span);
+        return;
+    }
+    // `$s->p = &$v` on a `stdClass` local: the property lives in the object's property hash,
+    // which is exactly the runtime-named path with a constant name.
+    if let Some(target) = super::dynamic_reference_places::stdclass_named_place(ctx, target) {
+        super::dynamic_reference_places::lower_dynamic_ref_place(ctx, &target, source_name, span);
+        return;
+    }
     match &target.kind {
         ExprKind::PropertyAccess { object, property } => {
             lower_bind_property(ctx, target, object, property, source_name, span)
@@ -166,7 +176,7 @@ fn lower_bind_element(
 /// A plain local is promoted in place (widened to `Mixed` first when the place is `Mixed`); an
 /// undefined one is first defined as null, like PHP's `&$v`. A local that is already part of a
 /// reference set keeps its cell, which must already have the place's representation.
-fn source_reference_cell(
+pub(super) fn source_reference_cell(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     place_type: &PhpType,

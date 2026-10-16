@@ -357,6 +357,25 @@ pub(super) fn check_ref_assign(
                     "Reference assignment to an array element requires an integer or string array key",
                 ));
             }
+            // An element reached through a property (`$r = &$this->p[$k]`, symfony's
+            // `&$this->optimized[$e][]`) is made addressable through that property's reference
+            // cell, exactly like an element place (`$this->p[$k] = &$v`).
+            if let Some((object, property)) =
+                super::reference_places::element_place_property_root(array)
+            {
+                let object_ty = checker.infer_type(object, env)?;
+                if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
+                    super::properties::widen_referenced_untyped_property(
+                        checker,
+                        &class,
+                        property,
+                        &PhpType::php_array(),
+                    );
+                    checker
+                        .reference_property_promotions
+                        .insert((class, property.to_string()));
+                }
+            }
             let target_ty = checker.infer_type(source, env)?;
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());

@@ -317,16 +317,38 @@ pub fn parse_foreach(
         None => body,
     };
 
-    Ok(Stmt::new(
+    let hidden_ref_value = value_by_ref && is_hidden_foreach_temp(&value_var);
+    let foreach = Stmt::new(
         StmtKind::Foreach {
             array,
             key_var,
-            value_var,
+            value_var: value_var.clone(),
             value_by_ref,
             body,
         },
         span,
-    ))
+    );
+    if !hidden_ref_value {
+        return Ok(foreach);
+    }
+    // The hidden by-reference loop variable of a place target keeps the last element's
+    // reference set alive after the loop; PHP has no such holder, so drop it.
+    let unset = Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall {
+                name: "unset".into(),
+                args: vec![Expr::new(ExprKind::Variable(value_var), span)],
+            },
+            span,
+        )),
+        span,
+    );
+    Ok(Stmt::new(StmtKind::Synthetic(vec![foreach, unset]), span))
+}
+
+/// Whether `name` is the hidden loop variable `bind_foreach_targets` made for a place target.
+fn is_hidden_foreach_temp(name: &str) -> bool {
+    name.starts_with("__elephc_foreach_value_") && crate::names::is_generated_local_name(name)
 }
 
 /// One `foreach` key or value target.
@@ -414,12 +436,6 @@ fn bind_foreach_targets(
         });
         return Ok((key, value, None));
     }
-    if value_by_ref {
-        return Err(CompileError::new(
-            span,
-            "A by-reference foreach value into a property or array element (`foreach ($a as &$o->p)`) is not supported; iterate into a variable",
-        ));
-    }
     let temp = |role: &str| {
         crate::names::generated_local_name(&format!(
             "__elephc_foreach_{role}_{}_{}",
@@ -442,7 +458,25 @@ fn bind_foreach_targets(
         }
     };
     let value_temp = temp("value");
-    let mut stores = vec![store(value, &value_temp)?];
+    // `foreach ($a as &$o->p)` / `&$list[]` / `&$m['k']`: the loop binds a hidden local by
+    // reference to each element, and the body first binds the place to that same reference
+    // (`$o->p = &$tmp`, `$list[] = &$tmp`), which is what PHP's assign-by-reference into the
+    // place does. The hidden local is unset after the loop (see `parse_foreach`).
+    let value_store = if value_by_ref {
+        let source = Expr::new(ExprKind::Variable(value_temp.clone()), span);
+        match value {
+            ForeachTarget::Var(name) => Stmt::new(StmtKind::RefAssign { target: name, source }, span),
+            ForeachTarget::Place(place) => crate::parser::stmt::lower_place_ref_assign(place, source, span)?,
+            ForeachTarget::Append(container) => crate::parser::stmt::lower_append_ref_assign(
+                container,
+                crate::parser::stmt::RefSource::Expr(source),
+                span,
+            )?,
+        }
+    } else {
+        store(value, &value_temp)?
+    };
+    let mut stores = vec![value_store];
     let key_temp = match key {
         Some(key) => {
             let key_temp = temp("key");

@@ -747,6 +747,31 @@ which accepts only a live managed cell and otherwise raises the catchable
 anything is published. Superglobals, `global` aliases and static properties live in
 program-global storage with no cell and are refused at compile time as place sources.
 
+#### New elements and runtime-named properties
+
+A reference to a NEW element (`$r = &$a[]`, `$r = &$this->list[$k][]`, `$a[] = &$x`,
+`foreach ($src as &$d[])`) is desugared by the parser into PHP's fetch for writing: the
+container's effectful sub-expressions are evaluated once into hidden locals, `$c[] = null`
+creates the element, and the binding then names it as `$c[(int) array_key_last($c)]` (an append
+always lands at the container's next integer key, which is its last key once the append
+succeeded). A by-reference foreach into a place binds a hidden loop variable and starts the body
+with `<place> = &$tmp`; the hidden variable is unset after the loop. `f($a[])` as a
+by-reference argument is refused at compile time.
+
+`$o->{$k} = &$v`, `$o->{$k}['x'] = &$v` and `$o->{$k}[] = &$v` dispatch on the runtime name
+(`ir_lower::expr::dynamic_reference_places`). Every property of the receiver's class and of its
+subclasses gets an arm that lowers the statically named binding, after the checker promoted
+every property that can share the reference (untyped ones are widened to boxed storage, typed
+ones must already be boxed; any other typed property throws an explicit elephc `Error` when the
+name selects it). A name that selects no declared property is an entry of the object's
+per-instance property hash (a `stdClass` property, or a dynamic property of a class with hash
+storage): `BindDynamicPropRefCell` stamps that hash entry tag 11 over the source's cell exactly
+like an array entry (`__rt_property_hash_reference`, which allocates, splits and inserts the
+entry first), and `LoadDynamicPropRefCell` promotes it to give an element place its container.
+Property-hash readers already dereference tag 11 (`__rt_hash_get`) and writers write through it
+(`__rt_hash_set`). A receiver of unknown class is accepted only when it is a `stdClass` at run
+time; a class whose subclasses place the hash at different offsets throws an explicit `Error`.
+
 ## Array layout
 
 Arrays are heap-allocated with a 24-byte header followed by contiguous elements:

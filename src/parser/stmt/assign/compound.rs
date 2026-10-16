@@ -103,6 +103,15 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
+    if let Some(container) = super::reference_places::parse_new_element_source(tokens, pos)? {
+        // `$r = &$a[];`: the element `[]` creates.
+        expect_semicolon(tokens, pos)?;
+        return super::reference_places::lower_local_ref_assign(
+            target,
+            super::reference_places::RefSource::NewElement(container),
+            span,
+        );
+    }
     let source = parse_expr(tokens, pos)?;
     crate::parser::expr::reject_dynamic_member_write(&source, span)?;
     if !is_valid_reference_source(&source.kind) {

@@ -108,6 +108,16 @@ fn parse_expr_bp_inner(
                     // `$base[] = value` in expression position (e.g. an arrow fn body). PHP only
                     // allows `[]` as a plain assignment target.
                     *pos += 1;
+                    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma | Token::RParen)) {
+                        // `f($a[])`: valid PHP only for a by-reference parameter, which then
+                        // receives a new null element. elephc does not lower that argument form.
+                        return Err(CompileError::new(
+                            span,
+                            "Cannot use [] for reading: elephc does not support a new array element \
+                             (`$a[]`) as a by-reference argument; append first and pass the element \
+                             (`$a[] = null; f($a[array_key_last($a)]);`)",
+                        ));
+                    }
                     if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Assign)) {
                         return Err(CompileError::new(span, "Cannot use [] for reading"));
                     }
