@@ -373,7 +373,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
         return Err(CompileError::new(span, "Invalid increment target"));
     }
 
-    if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. }) {
+    if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. })
+        && !crate::variable_variables::static_props::is_dynamic_static_place(&lhs_expr)
+    {
         return Ok(None);
     }
 
@@ -483,6 +485,20 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     };
 
     *pos = assign_pos + 1;
+    // `self::$darwinCache[$dir] = &self::$darwinCache[$k];` (symfony DebugClassLoader): the
+    // same place-reference lowering as the local and property targets.
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        if is_append {
+            return Err(CompileError::new(
+                span,
+                "Appending a reference (`$a[] = &$x`) is not supported; use an explicit key",
+            ));
+        }
+        return super::reference_places::parse_place_ref_assign(tokens, pos, lhs_expr, span)
+            .map(Some);
+    }
     // `self::$x = require 'f.php';` needs no special case: the include is an ordinary
     // expression, and `crate::resolver::value_include_hoist` binds it to a hidden local first.
     let rhs = parse_assignment_value_expr(tokens, pos)?;
@@ -1036,6 +1052,30 @@ fn lower_effectful_postfix_assignment(
                     value,
                 }
             }
+            // `++self::$a[f('k')];`: the index is evaluated once into a hidden local.
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(
+                            ExprKind::StaticPropertyAccess {
+                                receiver: receiver.clone(),
+                                property: property.clone(),
+                            },
+                            span,
+                        )),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index,
+                    value,
+                }
+            }
             _ => {
                 let target = lowerer.stabilize_array_target(Expr::new(
                     ExprKind::ArrayAccess { array, index },
@@ -1103,6 +1143,15 @@ pub(crate) fn lower_postfix_incdec_assignment(
                 index: *index,
                 value,
             },
+            // `++self::$rand[$i];` / `static::$n[$k]--;`
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                }
+            }
             _ => StmtKind::NestedArrayAssign {
                 target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
                 value,

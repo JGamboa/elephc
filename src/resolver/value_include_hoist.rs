@@ -337,6 +337,11 @@ impl Hoister {
     /// the context its consumer reads it in.
     fn descend(&mut self, expr: &mut Expr) -> Result<(), CompileError> {
         let span = expr.span;
+        // `return self::$cache[$k] ??= require F;`: a non-local `??=` whose lazy value holds
+        // the include. See `hoist_coalesce_assignment`.
+        if coalesce_assignment_include_parts(expr).is_some() {
+            return self.hoist_coalesce_assignment(expr);
+        }
         match &mut expr.kind {
             ExprKind::IncludeValue { .. } => {
                 let event = self.next_event();
@@ -614,6 +619,33 @@ impl Hoister {
         Ok(())
     }
 
+    /// Hoists a non-local `place ??= <value holding an include>` used as an expression.
+    ///
+    /// The parser's prelude (which stabilizes the place's computed parts, in source order) runs
+    /// first, then the STATEMENT form `place ??= value;`, which the resolver already lowers
+    /// (its conditional include runs only when the place is unset or null), and the expression
+    /// becomes a read of the place: PHP's `??=` yields the place's value whether it was already
+    /// set or just written.
+    fn hoist_coalesce_assignment(&mut self, expr: &mut Expr) -> Result<(), CompileError> {
+        let span = expr.span;
+        self.hoisted_conditional = true;
+        let event = self.next_event();
+        if self.dry {
+            self.include_events.push(event);
+        }
+        let original = std::mem::replace(expr, Expr::new(ExprKind::Null, span));
+        let ExprKind::Assignment { target, value, result_target, prelude, .. } = original.kind
+        else {
+            unreachable!("guarded by coalesce_assignment_include_parts");
+        };
+        let read = result_target.map(|target| *target).unwrap_or_else(|| (*target).clone());
+        let store = crate::parser::stmt::assignment_target_store_stmt(*target, *value, span)?;
+        self.hoisted.extend(prelude);
+        self.hoisted.push(Stmt::new(store, span));
+        *expr = read;
+        Ok(())
+    }
+
     /// Pushes `if (condition) { then_body } [else { else_body }]` onto the hoisted statements.
     fn push_if(&mut self, condition: Expr, then_body: Vec<Stmt>, else_body: Vec<Stmt>, span: Span) {
         self.hoisted.push(Stmt::new(
@@ -626,6 +658,27 @@ impl Hoister {
             span,
         ));
     }
+}
+
+/// Whether `expr` is a non-local `place ??= value` (the parser's `Assignment` with a lazy value
+/// temporary over `place ?? value`) whose include sits only in `value`: the place, its read and
+/// the prelude that stabilizes it run no include, so they can run ahead of the hoisted `if`.
+fn coalesce_assignment_include_parts(expr: &Expr) -> Option<()> {
+    let ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp } =
+        &expr.kind
+    else {
+        return None;
+    };
+    conditional_value_temp.as_ref()?;
+    let ExprKind::NullCoalesce { value: read, default } = &value.kind else {
+        return None;
+    };
+    let clean = !expr_has_includes(target)
+        && !expr_has_includes(read)
+        && result_target.as_deref().is_none_or(|target| !expr_has_includes(target))
+        && !super::contains::has_includes(prelude)
+        && expr_has_includes(default);
+    clean.then_some(())
 }
 
 /// Moves an operand holding an include into `[$t = operand;]`, returning that body and the

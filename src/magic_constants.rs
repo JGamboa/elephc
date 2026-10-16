@@ -71,6 +71,14 @@ pub fn bind_trait_class_constants(
     trait_binding::bind_trait_class_constants(properties, methods, class_name)
 }
 
+/// Rebinds `__CLASS__` placeholders to `class_name` in trait-imported constant values.
+pub fn bind_trait_class_constant_values(
+    constants: Vec<crate::parser::ast::ClassConst>,
+    class_name: &str,
+) -> Vec<crate::parser::ast::ClassConst> {
+    trait_binding::bind_trait_class_constant_values(constants, class_name)
+}
+
 /// Converts `name` to its canonical string representation, or returns an empty
 /// string if `name` is `None`. Used to produce the `__NAMESPACE__` literal.
 fn namespace_string(name: &Option<Name>) -> String {

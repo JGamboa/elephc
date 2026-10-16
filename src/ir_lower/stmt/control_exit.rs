@@ -531,6 +531,10 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                // `return self::$cache;`: the class slot keeps its owner, so the caller's
+                // copy needs its own. Without it the caller's release of the result freed
+                // the property's payload (`static ?array $n; f() { return self::$n; }`).
+                | Op::LoadStaticProperty
         )
     ) {
         return value;

@@ -15,7 +15,7 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 
 /// Parses a variable variable starting at the `Token::Dollar` under `pos`.
@@ -53,4 +53,25 @@ pub(crate) fn parse_variable_variable(
         _ => return Err(CompileError::new(span, "Expected variable name after '$'")),
     };
     Ok(crate::variable_variables::frame_access(name_expr, span))
+}
+
+/// Parses the variable member name of `C::$$name` / `C::${expr}` (the `$` is under `pos`) into
+/// the dynamic static-property shape `crate::variable_variables::static_props` lowers: an
+/// array access whose base is the unforgeable `C::$<marker>` property and whose index is the
+/// name expression. Every postfix and assignment form then parses as for `C::$name`.
+pub(crate) fn parse_dynamic_static_property(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    receiver: StaticReceiver,
+) -> Result<Expr, CompileError> {
+    let access = parse_variable_variable(tokens, pos, span)?;
+    let Some(name) = crate::variable_variables::frame_access_name(&access) else {
+        return Err(CompileError::new(span, "Expected static property name after '::$'"));
+    };
+    Ok(crate::variable_variables::static_props::dynamic_static_access(
+        receiver,
+        name.clone(),
+        span,
+    ))
 }
