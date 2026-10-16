@@ -181,6 +181,24 @@ unlink($f);
     assert_eq!(out.stdout, "bool(false)\nhello\n");
 }
 
+/// fwrite() on a full non-blocking socket is int(0), not false (php-src bug #79000): the
+/// EAGAIN/EWOULDBLOCK failure is not an error.
+#[test]
+fn test_fwrite_would_block_on_non_blocking_socket_is_zero() {
+    let out = compile_and_run_capture(
+        r#"<?php
+[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+stream_set_blocking($a, false);
+$s = str_repeat('a', 1000000);
+$first = fwrite($a, $s);
+var_dump(is_int($first) && $first > 0);
+var_dump(fwrite($a, $s));
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nint(0)\n");
+}
+
 /// scandir() of a missing directory keeps its `array<string>` type (an `array|false` result
 /// would stop `array_diff(scandir(...), ...)` compiling) but is no longer silent about it.
 #[test]
