@@ -98,6 +98,14 @@ std::thread_local! {
     /// one resolution unit, which is pathological).
     static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
         const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
+    /// The physical file each source identity was lexed from, for diagnostics.
+    ///
+    /// A checker error carries only a span; without this a diagnostic from an included or
+    /// autoloaded file printed `error[line:col]` with no way to tell which of thousands of files
+    /// it came from. Entries are overwritten when an identity is handed out again after
+    /// [`Span::reset_source_ids`], so a lookup always names the latest file lexed with that id.
+    static SOURCE_PATHS: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -166,6 +174,20 @@ impl Span {
             next.set(id.checked_add(1).expect("included source identity counter overflowed u32"));
             id
         })
+    }
+
+    /// Records the physical file a source identity was lexed from.
+    pub fn register_source_path(source_id: u32, path: impl Into<String>) {
+        let path = path.into();
+        SOURCE_PATHS.with(|paths| {
+            paths.borrow_mut().insert(source_id, path);
+        });
+    }
+
+    /// Returns the physical file this span was lexed from, when one was registered.
+    pub fn source_path(self) -> Option<String> {
+        let source_id = self.source_id();
+        SOURCE_PATHS.with(|paths| paths.borrow().get(&source_id).cloned())
     }
 
     /// Resets source identities at the beginning of a new include-resolution unit.

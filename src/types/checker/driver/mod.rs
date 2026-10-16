@@ -131,7 +131,7 @@ pub(super) fn check_types_impl(
         let key = php_symbol_key(&class.name);
         if !seen_classes.insert(key) {
             errors.push(CompileError::new(
-                crate::span::Span::dummy(),
+                class.span,
                 &format!("Duplicate class declaration: {}", class.name),
             ));
             continue;

@@ -169,6 +169,9 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
             process::exit(1);
         }
     };
+    // The entry file lexes with the default source identity. Registered after the resolver,
+    // which rewinds the identity counter, so later diagnostics can name it (`Span::source_path`).
+    Span::register_source_path(0, filename.to_string());
     let ast = match autoload::collect_aliases(ast) {
         Ok(ast) => ast,
         Err(error) => {

@@ -123,6 +123,23 @@ pub fn resolve_collecting_includes_with_defines(
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
+        Span::reset_source_ids();
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+    })
+}
+
+/// Resolves the includes of a file loaded INTO an ongoing compile (an autoloaded class file).
+///
+/// Unlike [`resolve_collecting_includes_with_defines`] it keeps the source identities the
+/// compile already handed out, so a file this pulls in never reuses the identity of another
+/// file of the same program: spans of different files stay distinct, and each diagnostic can
+/// name its own file.
+pub fn resolve_collecting_includes_continuing(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
         resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
     })
 }
@@ -133,7 +150,6 @@ fn resolve_collecting_includes_with_defines_inner(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    Span::reset_source_ids();
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }
