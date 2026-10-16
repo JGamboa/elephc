@@ -334,6 +334,9 @@ pub(super) fn check_ref_assign(
             Ok(())
         }
         ExprKind::ArrayAccess { array, index } => {
+            crate::types::checker::stmt_check::assignments::widen_static_property_element_root(
+                checker, array, true,
+            );
             let array_ty = checker.infer_type(array, env)?;
             target_has_boxed_ref_provenance = match array_ty.codegen_repr() {
                 PhpType::AssocArray { .. } | PhpType::Mixed => true,
@@ -1377,4 +1380,15 @@ pub(super) fn check_static_var(
     checker.active_statics.insert(name.to_string());
     env.insert(name.to_string(), ty);
     Ok(())
+}
+
+/// Returns the static property an element chain (`C::$p[..]`, `C::$p[..][..]`) starts from.
+pub(super) fn element_static_property_root(
+    container: &Expr,
+) -> Option<(&crate::parser::ast::StaticReceiver, &str)> {
+    match &container.kind {
+        ExprKind::StaticPropertyAccess { receiver, property } => Some((receiver, property.as_str())),
+        ExprKind::ArrayAccess { array, .. } => element_static_property_root(array),
+        _ => None,
+    }
 }

@@ -353,6 +353,30 @@ fn resolve_static_property_assignment_target(
     })
 }
 
+/// Widens an UNTYPED static array property whose element is bound by reference (`$r = &C::$p[$k]`,
+/// `C::$p[$a] = &C::$p[$b]`, `unset` through the same addressable chain) to the general PHP array
+/// representation. The reference path reaches the static slot through a boxed cell, exactly like a
+/// declared `array` property; a raw packed or hash slot would be reinterpreted as that box.
+pub(super) fn widen_referenced_untyped_static_property(
+    checker: &mut Checker,
+    receiver: &StaticReceiver,
+    property: &str,
+    span: Span,
+    widen_null_default: bool,
+) {
+    let Ok(target) = resolve_static_property_assignment_target(checker, receiver, property, span) else {
+        return;
+    };
+    if target.property_has_declared_type || target.dynamic_eval_target {
+        return;
+    }
+    let array_like = matches!(target.prop_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let null_default = matches!(target.prop_ty, PhpType::Void | PhpType::Never);
+    if array_like || (widen_null_default && null_default) {
+        update_static_property_type(checker, property, &target.declaring_class, PhpType::php_array());
+    }
+}
+
 /// Returns true for a key type a PHP array write accepts (`int`, `string`, or `mixed`).
 fn is_php_array_key_or_mixed(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)

@@ -22,6 +22,26 @@ use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Widens the untyped static array property an element chain starts from (`C::$p[$k]..`) to
+/// the boxed PHP array representation its addressable (reference/unset) path needs.
+/// `widen_null_default` also widens a null-defaulted slot, which a reference autovivifies into
+/// an array; an `unset` leaves it null.
+pub(crate) fn widen_static_property_element_root(
+    checker: &mut Checker,
+    container: &Expr,
+    widen_null_default: bool,
+) {
+    if let Some((receiver, property)) = locals::element_static_property_root(container) {
+        static_properties::widen_referenced_untyped_static_property(
+            checker,
+            receiver,
+            property,
+            container.span,
+            widen_null_default,
+        );
+    }
+}
+
 impl Checker {
     /// Type-checks the parser-generated `$array[$index][] = $value` sequence when
     /// an empty indexed base needs its element type auto-vivified to an array.

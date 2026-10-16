@@ -122,6 +122,10 @@ fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
 /// Like `isset()`, `unset()` accepts a never-declared chain root (PHP's `unset($never)`
 /// is a silent no-op), so the root is bound to `null` for the operand.
 fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    // `unset(C::$p[$k])` removes the element through the static slot's boxed cell.
+    if let ExprKind::ArrayAccess { array, .. } = &arg.kind {
+        crate::types::checker::stmt_check::assignments::widen_static_property_element_root(checker, array, false);
+    }
     let probed = null_probe_env(checker, arg, env);
     let env = probed.as_ref().unwrap_or(env);
     if let ExprKind::PropertyAccess { object, property }
