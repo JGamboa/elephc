@@ -344,6 +344,20 @@ echo f(), g(), h([1, 2, 3]), i([1, 2, 3]);
     assert_eq!(out, "k2kkok3");
 }
 
+/// An unset() after extract() (of an extracted name or of another local) does not block it
+/// (P43 ronda 2).
+#[test]
+fn test_extract_then_later_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function f(array $d) { extract($d); $o = ($a ?? '-'); unset($a); return $o . ($a ?? '-') . ($b ?? '-'); }
+function g(array $d) { $tmp = 1; extract($d); unset($tmp); return ($a ?? '-') . ($tmp ?? '-'); }
+echo f(['a' => 1, 'b' => 2]), f([]), ' ', g(['a' => 1]), g(['tmp' => 5]);
+"#,
+    );
+    assert_eq!(out, "1-2--- 1---");
+}
+
 /// Destructuring targets that are variable variables write the named locals (review r1, H1).
 #[test]
 fn test_varvar_destructuring_targets() {

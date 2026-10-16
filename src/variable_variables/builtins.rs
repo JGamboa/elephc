@@ -198,9 +198,10 @@ impl Rewriter {
             .filter(|name| !(mode == EXTR_SKIP && entry.contains(*name)))
             .cloned()
             .collect();
-        // A conditional store into a local the frame also `unset()`s loses its value once
+        // A conditional store into a local an earlier `unset()` removed loses its value once
         // another statement follows (the read yields null), so refuse rather than miscompile.
-        if let Some(name) = names.iter().find(|name| self.scope.frame.unset_names.contains(*name)) {
+        // Only unsets that can run before this statement count (see `Scope::unset_before`).
+        if let Some(name) = names.iter().find(|name| self.scope.unset_before.contains(*name)) {
             let message = format!(
                 "extract() is not supported in a function that also unset()s ${name} (elephc): the conditional store into an unset local is not compiled reliably"
             );

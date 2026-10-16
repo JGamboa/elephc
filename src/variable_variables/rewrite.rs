@@ -47,6 +47,10 @@ pub(super) struct Scope {
     pub(super) definite: std::collections::HashSet<String>,
     /// `true` inside a closure or arrow function body.
     pub(super) in_closure: bool,
+    /// Locals some `unset()` may have removed before the statement being rewritten: the
+    /// unsets of already-rewritten statements plus those of every enclosing loop (a previous
+    /// iteration may have run them).
+    pub(super) unset_before: std::collections::HashSet<String>,
     /// Nesting depth of the statement block being rewritten (0 = the function body).
     pub(super) block_depth: usize,
 }
@@ -87,6 +91,7 @@ impl Rewriter {
                 frame: FrameNames::default(),
                 narrow: Vec::new(),
                 block_depth: 0,
+                unset_before: Default::default(),
             },
             errors: Vec::new(),
             counter: 0,
@@ -161,6 +166,7 @@ impl Rewriter {
                 frame,
                 narrow: Vec::new(),
                 block_depth: 0,
+                unset_before: Default::default(),
             },
         );
         self.block(body);
@@ -1080,6 +1086,12 @@ impl Rewriter {
         self.scope.block_depth += 1;
         let mut index = 0;
         while index < stmts.len() {
+            let tracks_unsets = !self.scope.frame.unset_names.is_empty();
+            if tracks_unsets && is_loop_stmt(&stmts[index]) {
+                let mut own = vec![stmts[index].clone()];
+                let unsets = collect_frame_names(&[], &mut own).unset_names;
+                self.scope.unset_before.extend(unsets);
+            }
             if is_extract_stmt(&stmts[index]) {
                 // `extract(..., EXTR_SKIP)` needs to know which locals may already exist.
                 let mut preceding = stmts[..index].to_vec();
@@ -1104,6 +1116,11 @@ impl Rewriter {
                     count = body.len();
                     stmts.splice(index..=index, body);
                 }
+            }
+            if tracks_unsets {
+                let mut done = stmts[index..index + count].to_vec();
+                let unsets = collect_frame_names(&[], &mut done).unset_names;
+                self.scope.unset_before.extend(unsets);
             }
             for stmt in &stmts[index..index + count] {
                 for name in definitely_assigned(stmt) {
@@ -1335,5 +1352,16 @@ fn ends_case(stmt: &Stmt) -> bool {
     matches!(
         stmt.kind,
         StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Return(_) | StmtKind::Throw(_)
+    )
+}
+
+/// Returns whether `stmt` is a loop, whose body may run again after its own `unset()`s.
+fn is_loop_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt.kind,
+        StmtKind::While { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::Foreach { .. }
     )
 }

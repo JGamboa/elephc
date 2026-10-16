@@ -107,6 +107,11 @@ fn test_error_extract_into_unset_local() {
         "<?php function f($a) { unset($a); extract(['a' => 2, 'b' => 3]); return $a . $b; }",
         "extract() is not supported in a function that also unset()s $a",
     );
+    // A loop may run its unset() before the next iteration's extract().
+    expect_error(
+        "<?php function f(array $rows) { $o = ''; foreach ($rows as $r) { extract($r); $o .= $a ?? '-'; unset($a); } return $o; }",
+        "extract() is not supported in a function that also unset()s $a",
+    );
 }
 
 /// Every mode other than EXTR_OVERWRITE / EXTR_SKIP (and EXTR_REFS combinations), and an
