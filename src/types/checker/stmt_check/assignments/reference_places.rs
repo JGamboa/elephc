@@ -172,14 +172,47 @@ fn check_dynamic_ref_place(
     if let ExprKind::ArrayAccess { index, .. } = &target.kind {
         checker.infer_type(index, env)?;
     }
+    let direct = matches!(target.kind, ExprKind::DynamicPropertyAccess { .. });
+    promote_runtime_name_candidates(checker, &object_ty, direct);
+    env.insert(source_name.to_string(), PhpType::Mixed);
+    Ok(())
+}
+
+/// Type-checks the source of `$r = &$o->{$k}`: the receiver and the name, and the promotion of
+/// every property the name can select, exactly as for a runtime-named place.
+pub(crate) fn check_dynamic_ref_source(
+    checker: &mut Checker,
+    object: &Expr,
+    name: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    if !matches!(object_ty, PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed) {
+        return Err(CompileError::new(span, "Property assignment requires an object"));
+    }
+    let name_ty = checker.infer_type(name, env)?;
+    if !matches!(name_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        return Err(CompileError::new(
+            name.span,
+            "Dynamic property name must be string or integer",
+        ));
+    }
+    promote_runtime_name_candidates(checker, &object_ty, true);
+    Ok(())
+}
+
+/// Records the property-hash reservation for a runtime-named reference and promotes every
+/// property of the receiver's class subtree that can share the reference (`direct`: the
+/// property itself; otherwise an element of it).
+fn promote_runtime_name_candidates(checker: &mut Checker, object_ty: &PhpType, direct: bool) {
     crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
         checker,
-        &object_ty,
+        object_ty,
     );
-    let direct = matches!(target.kind, ExprKind::DynamicPropertyAccess { .. });
-    let receiver_class = match &object_ty {
+    let receiver_class = match object_ty {
         PhpType::Object(class) => Some(class.trim_start_matches('\\').to_string()),
-        _ => checker.union_single_object_class(&object_ty),
+        _ => checker.union_single_object_class(object_ty),
     };
     if let Some(class) = receiver_class {
         let subtree: Vec<String> = checker
@@ -219,8 +252,6 @@ fn check_dynamic_ref_place(
             }
         }
     }
-    env.insert(source_name.to_string(), PhpType::Mixed);
-    Ok(())
 }
 
 /// Returns the property an element place's container chain starts from, if any.

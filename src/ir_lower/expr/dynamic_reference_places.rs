@@ -252,6 +252,233 @@ pub(crate) fn lower_dynamic_ref_place(
     ctx.restore_initialized_slots(split_initialized);
 }
 
+/// Lowers `$target = &$o->{$k}` (and `$x = &$x->{$k}`): every arm produces the selected
+/// property's managed cell, the cells meet in one merge-block parameter, and the target is bound
+/// to it once. A declared property gives its reference-property cell (`LoadPropRefCell`), a name
+/// that selects none gives its property-hash entry's cell (`LoadDynamicPropRefCell`, which creates
+/// a missing property as null, as PHP's fetch for writing does).
+pub(crate) fn lower_ref_assign_dynamic_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::DynamicPropertyAccess { object, property: name } = &source.kind else {
+        return;
+    };
+    let var = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), span);
+    let object_value = lower_expr(ctx, object);
+    let object_type = normalize_value_php_type(ctx.builder.value_php_type(object_value.value));
+    let object_local = ctx.declare_synthetic_php_local(object_type.clone());
+    store_value_into_temp(ctx, &object_local, object_type.clone(), object_value, span);
+    let name_local = ctx.declare_synthetic_php_local(PhpType::Str);
+    store_expr_into_temp(
+        ctx,
+        &name_local,
+        PhpType::Str,
+        &Expr::new(ExprKind::Cast { target: CastType::String, expr: Box::new((**name).clone()) }, span),
+        span,
+    );
+    let pointer = PhpType::Pointer(None);
+    let merge = ctx
+        .builder
+        .create_named_block("dyn_ref_source.merge", vec![(IrType::I64, pointer.clone())]);
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let mut reached = false;
+    let receiver_repr = match object_type.codegen_repr() {
+        PhpType::Object(class_name)
+            if !crate::types::checker::builtin_stdclass::is_stdclass(class_name.trim_start_matches('\\'))
+                && !ctx.classes.contains_key(class_name.trim_start_matches('\\')) =>
+        {
+            PhpType::Mixed
+        }
+        other => other,
+    };
+    match receiver_repr {
+        PhpType::Object(class_name) => {
+            let class_name = class_name.trim_start_matches('\\').to_string();
+            let mut arms: Vec<(String, Option<String>, Arm)> = declared_arms(ctx, &class_name, true)
+                .into_iter()
+                .map(|(property, arm)| (property, None, arm))
+                .collect();
+            let known: HashSet<String> = arms.iter().map(|(property, _, _)| property.clone()).collect();
+            for subclass in subclasses_of(ctx, &class_name) {
+                for (property, arm) in declared_arms(ctx, &subclass, true) {
+                    if !known.contains(&property) {
+                        arms.push((property, Some(subclass.clone()), arm));
+                    }
+                }
+            }
+            for (property, subclass, arm) in arms {
+                let arm_block = ctx.builder.create_named_block("dyn_ref_source.arm", Vec::new());
+                let skip = ctx.builder.create_named_block("dyn_ref_source.skip", Vec::new());
+                let condition = name_condition(&name_local, &object_local, &property, subclass.as_deref(), span);
+                let matches = lower_expr(ctx, &condition);
+                conditional_branch(ctx, matches.value, arm_block, skip);
+                ctx.builder.position_at_end(arm_block);
+                ctx.restore_initialized_slots(split_initialized.clone());
+                match arm {
+                    Arm::Throw(message) => crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span),
+                    Arm::Bind => {
+                        let receiver = match &subclass {
+                            Some(subclass) => {
+                                let ty = PhpType::Object(subclass.clone());
+                                let local = ctx.declare_synthetic_php_local(ty.clone());
+                                store_expr_into_temp(ctx, &local, ty, &var(&object_local), span);
+                                local
+                            }
+                            None => object_local.clone(),
+                        };
+                        let receiver = lower_expr(ctx, &var(&receiver));
+                        let data = ctx.intern_string(&property);
+                        let cell = ctx.emit_value(
+                            Op::LoadPropRefCell,
+                            vec![receiver.value],
+                            Some(Immediate::Data(data)),
+                            pointer.clone(),
+                            Op::LoadPropRefCell.default_effects(),
+                            Some(span),
+                        );
+                        ctx.builder.terminate(Terminator::Br { target: merge, args: vec![cell.value] });
+                        reached = true;
+                    }
+                }
+                ctx.builder.position_at_end(skip);
+                ctx.restore_initialized_slots(split_initialized.clone());
+            }
+            reached |= hash_source_arm(ctx, &object_local, &class_name, &name_local, merge, span);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            let arm_block = ctx.builder.create_named_block("dyn_ref_source.stdclass", Vec::new());
+            let other = ctx.builder.create_named_block("dyn_ref_source.other", Vec::new());
+            let condition = Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(var(&object_local)),
+                    target: InstanceOfTarget::Name(Name::from("stdClass".to_string())),
+                },
+                span,
+            );
+            let matches = lower_expr(ctx, &condition);
+            conditional_branch(ctx, matches.value, arm_block, other);
+            ctx.builder.position_at_end(arm_block);
+            ctx.restore_initialized_slots(split_initialized.clone());
+            let receiver = unbox_stdclass(ctx, &object_local, span);
+            reached |= hash_source_arm(ctx, &receiver, "stdClass", &name_local, merge, span);
+            ctx.builder.position_at_end(other);
+            ctx.restore_initialized_slots(split_initialized.clone());
+            crate::ir_lower::stmt::lower_throw_access_error(
+                ctx,
+                "elephc: a reference taken through a runtime property name (`$r = &$obj->{$name}`) \
+                 on a receiver whose class is not known at compile time is only supported for \
+                 stdClass; give the receiver a class type",
+                span,
+            );
+        }
+        other => {
+            crate::ir_lower::diagnostics::refuse(
+                span,
+                &format!("Reference to a runtime-named property needs an object, got {other:?}"),
+            );
+            return;
+        }
+    }
+    if !ctx.builder.insertion_block_is_terminated() {
+        crate::ir_lower::stmt::lower_throw_access_error(ctx, "elephc: unreachable runtime-named reference", span);
+    }
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(split_initialized);
+    if !reached {
+        ctx.builder.terminate(Terminator::Unreachable);
+        let after = ctx.builder.create_named_block("dyn_ref_source.after", Vec::new());
+        ctx.builder.position_at_end(after);
+        return;
+    }
+    let cell = LoweredValue { value: ctx.builder.block_param(merge, 0), ir_type: IrType::I64 };
+    ctx.bind_owned_local_ref_cell_ptr(target, cell, PhpType::Mixed, Some(span));
+}
+
+/// The property-hash arm of a runtime-named reference source; returns whether it reaches `merge`.
+fn hash_source_arm(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &str,
+    class_name: &str,
+    name_local: &str,
+    merge: BlockId,
+    span: Span,
+) -> bool {
+    if let Some(message) = hash_storage_refusal(ctx, class_name) {
+        crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span);
+        return false;
+    }
+    let var = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), span);
+    let object = lower_expr(ctx, &var(receiver));
+    let name = lower_expr(ctx, &var(name_local));
+    let cell = ctx.emit_value(
+        Op::LoadDynamicPropRefCell,
+        vec![object.value, name.value],
+        None,
+        PhpType::Pointer(None),
+        Op::LoadDynamicPropRefCell.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::Br { target: merge, args: vec![cell.value] });
+    true
+}
+
+/// `strcmp($name, 'p') === 0`, and `&& $object instanceof Sub` for a subclass-only property.
+fn name_condition(name_local: &str, object_local: &str, property: &str, subclass: Option<&str>, span: Span) -> Expr {
+    let var = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), span);
+    let mut condition = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("strcmp"),
+                    args: vec![var(name_local), literal(property, span)],
+                },
+                span,
+            )),
+            op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), span)),
+        },
+        span,
+    );
+    if let Some(subclass) = subclass {
+        condition = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(condition),
+                op: BinOp::And,
+                right: Box::new(Expr::new(
+                    ExprKind::InstanceOf {
+                        value: Box::new(var(object_local)),
+                        target: InstanceOfTarget::Name(Name::from(subclass.to_string())),
+                    },
+                    span,
+                )),
+            },
+            span,
+        );
+    }
+    condition
+}
+
+/// Unboxes a `mixed` local already known to hold a `stdClass` into a `stdClass`-typed local.
+fn unbox_stdclass(ctx: &mut LoweringContext<'_, '_>, object_local: &str, span: Span) -> String {
+    let ty = PhpType::Object("stdClass".to_string());
+    let boxed = lower_expr(ctx, &Expr::new(ExprKind::Variable(object_local.to_string()), span));
+    let unboxed = ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![boxed.value],
+        None,
+        ty.clone(),
+        Op::mixed_unbox_effects(&ty),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(span));
+    let receiver = ctx.declare_synthetic_php_local(ty.clone());
+    store_value_into_temp(ctx, &receiver, ty, unboxed, span);
+    receiver
+}
+
 /// Binds a name that selects no declared property: an entry of the receiver's property hash.
 #[allow(clippy::too_many_arguments)]
 fn lower_hash_arm(

@@ -711,6 +711,19 @@ fn test_error_reference_new_element_container() {
     );
 }
 
+/// Verifies a runtime-named reference source checks its receiver and its name.
+#[test]
+fn test_error_reference_dynamic_property_source() {
+    expect_error(
+        "<?php $x = 5; $k = 'a'; $r = &$x->{$k};",
+        "Property assignment requires an object",
+    );
+    expect_error(
+        "<?php $o = new stdClass; $k = 1.5; $r = &$o->{$k};",
+        "Dynamic property name must be string or integer",
+    );
+}
+
 /// Verifies a runtime-named reference place checks its receiver and its name.
 #[test]
 fn test_error_reference_dynamic_property_place() {

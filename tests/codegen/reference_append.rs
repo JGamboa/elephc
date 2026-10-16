@@ -481,3 +481,183 @@ var_dump(f(), $g);
         "array(2) {\n  [0]=>\n  NULL\n  [1]=>\n  int(2)\n}\narray(1) {\n  [0]=>\n  NULL\n}\n"
     );
 }
+
+/// `$r = &$o->{$k}` / `$r = &$o->$k` on declared, dynamic and stdClass properties; a missing one is created as null.
+#[test]
+fn test_reference_dynamic_property_source() {
+    let out = compile_and_run(
+        r#"<?php
+// $r = &$o->{$k} y $r = &$o->$k sobre propiedades declaradas, dinámicas y de stdClass.
+class P { public $decl = 1; }
+$o = new P();
+$k = 'decl';
+$r = &$o->{$k};
+$r = 2;
+var_dump($o->decl);
+$s = new stdClass();
+$s->a = 'a0';
+$n = 'a';
+$t = &$s->$n;
+$t = 'a1';
+$m = 'missing';
+$u = &$s->{$m};
+var_dump($u);
+$u = 'created';
+var_dump($s);
+$d = 'dyn';
+$w = &$o->{$d};
+$w = 'w';
+var_dump($o->{$d});
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"int(2)
+NULL
+object(stdClass)#2 (2) {
+  ["a"]=>
+  &string(2) "a1"
+  ["missing"]=>
+  &string(7) "created"
+}
+string(1) "w"
+"#
+    );
+}
+
+/// nette `Arrays::associate`: `$x = &$x->{$k}` walks and creates properties, and `$r = &$o->{$k}[$i]`.
+#[test]
+fn test_reference_dynamic_property_source_walk() {
+    let out = compile_and_run(
+        r#"<?php
+// nette Arrays::associate: $x = &$x->{$k} recorre y crea propiedades, y $r = &$o->{$k}[$i].
+$res = new stdClass();
+foreach ([['id' => 'a', 'v' => 1], ['id' => 'b', 'v' => 2]] as $row) {
+    $x = &$res;
+    $x = &$x->{$row['id']};
+    if ($x === null) {
+        $x = new stdClass();
+    }
+    $x = &$x->{'value'};
+    $x = $row['v'];
+    unset($x);
+}
+var_dump($res);
+$s = new stdClass();
+$s->list = [10, 20];
+$k = 'list';
+$e = &$s->{$k}[1];
+$e = 21;
+$f = &$s->{$k}['new'];
+$f = 'n';
+unset($e, $f);
+var_dump($s);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"object(stdClass)#1 (2) {
+  ["a"]=>
+  object(stdClass)#2 (1) {
+    ["value"]=>
+    int(1)
+  }
+  ["b"]=>
+  object(stdClass)#3 (1) {
+    ["value"]=>
+    int(2)
+  }
+}
+object(stdClass)#4 (1) {
+  ["list"]=>
+  array(3) {
+    [0]=>
+    int(10)
+    [1]=>
+    int(21)
+    ["new"]=>
+    string(1) "n"
+  }
+}
+"#
+    );
+}
+
+/// A runtime-named reference source to a readonly property throws PHP's Error.
+#[test]
+fn test_reference_dynamic_property_source_readonly() {
+    let out = compile_and_run(
+        r#"<?php
+// Una referencia a una propiedad readonly por nombre dinámico lanza Error.
+final class R {
+    public function __construct(public readonly array $v = [1]) {}
+    public function take(string $k) {
+        try { $r = &$this->{$k}; echo "taken\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        try { $r = &$this->{$k}[0]; echo "taken\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    }
+}
+(new R())->take('v');
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"Error: Cannot indirectly modify readonly property R::$v
+Error: Cannot indirectly modify readonly property R::$v
+"#
+    );
+}
+
+/// Every runtime-named source form in a 2000-iteration loop leaves a clean heap.
+#[test]
+fn test_reference_dynamic_property_source_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class P { public $decl = 1; }
+$total = 0;
+for ($i = 0; $i < 2000; $i++) {
+    $o = new P();
+    $k = 'decl';
+    $r = &$o->{$k};
+    $r = $i;
+    $s = new stdClass();
+    $n = 'p' . ($i % 3);
+    $t = &$s->{$n};
+    $t = 'x';
+    $s->l = [1, 2];
+    $e = &$s->{'l'}[1];
+    $e = $i;
+    $res = new stdClass();
+    $x = &$res;
+    $x = &$x->{'a' . $i};
+    $x = new stdClass();
+    $x = &$x->{'v'};
+    $x = $i;
+    unset($x, $r, $t, $e);
+    $total += $o->decl + $s->l[1] + count((array) $res);
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "4000000\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// PREEXISTING BUG, not fixed here: an element reference (or a by-reference foreach) through a
+/// local that aliases a TYPED list by reference crashes (`$x = &$res; $y = &$x[0];` with
+/// `$res = [1]`). `promote_by_ref_foreach_source` retypes the shared cell to a hash while the
+/// other alias keeps its indexed type. A mixed list works (nette's real shape).
+#[test]
+#[ignore = "preexisting crash: element reference through a by-reference alias of a typed list"]
+fn test_reference_element_through_alias_of_typed_list() {
+    let out = compile_and_run(
+        r#"<?php
+$res = [1];
+$x = &$res;
+$y = &$x[0];
+$y = 5;
+var_dump($res);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  &int(5)\n}\n");
+}

@@ -323,6 +323,16 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        // `$r = &$o->{$k}` (nette `Arrays::associate`): the name selects a declared property or a
+        // property-hash entry at run time, all of which share a boxed `Mixed` cell.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            super::reference_places::check_dynamic_ref_source(checker, object, property, span, env)?;
+            target_has_boxed_ref_provenance = true;
+            env.insert(target.to_string(), PhpType::Mixed);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         ExprKind::ArrayAccess { array, index } => {
             let array_ty = checker.infer_type(array, env)?;
             target_has_boxed_ref_provenance = match array_ty.codegen_repr() {

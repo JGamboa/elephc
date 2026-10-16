@@ -178,7 +178,9 @@ pub(crate) fn lower_local_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match source {
-        RefSource::Expr(source) => Ok(Stmt::new(StmtKind::RefAssign { target, source }, span)),
+        RefSource::Expr(source) if dynamic_element_source(&source).is_none() => {
+            Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+        }
         source => {
             let mut prelude = Vec::new();
             let mut temps = Vec::new();
@@ -200,7 +202,24 @@ fn push_local_ref_assign(
     span: Span,
 ) -> Result<(), CompileError> {
     let source = match source {
-        RefSource::Expr(source) => source,
+        RefSource::Expr(source) => match dynamic_element_source(&source) {
+            // `$r = &$o->{$k}[$i]`: bind a hidden local to the runtime-named property first
+            // (`$c = &$o->{$k}`, which fetches it for writing), then take the element through it.
+            Some(root) => {
+                let root = stabilize_place(root.clone(), span, prelude, temps);
+                let cell = crate::names::generated_local_name(&format!(
+                    "__elephc_ref_dyn_source_{}_{}_{}",
+                    span.line,
+                    span.col,
+                    prelude.len()
+                ));
+                prelude.push(Stmt::new(StmtKind::RefAssign { target: cell.clone(), source: root }, span));
+                temps.push(cell.clone());
+                let source = replace_dynamic_root(source, Expr::new(ExprKind::Variable(cell), span));
+                stabilize_place(source, span, prelude, temps)
+            }
+            None => source,
+        },
         RefSource::NewElement(container) => {
             check_new_element_container(&container, span)?;
             let container = stabilize_place(container, span, prelude, temps);
@@ -444,4 +463,32 @@ fn stabilize_operand_as(
         temps.push(name.clone());
     }
     Expr::new(ExprKind::Variable(name), operand_span)
+}
+
+/// The runtime-named property (`$o->{$k}`) an ELEMENT source (`&$o->{$k}[$i]`) is reached
+/// through, if any.
+fn dynamic_element_source(source: &Expr) -> Option<&Expr> {
+    let ExprKind::ArrayAccess { array, .. } = &source.kind else {
+        return None;
+    };
+    let mut current: &Expr = array;
+    loop {
+        match &current.kind {
+            ExprKind::DynamicPropertyAccess { .. } => return Some(current),
+            ExprKind::ArrayAccess { array, .. } => current = array,
+            _ => return None,
+        }
+    }
+}
+
+/// Replaces the runtime-named root of an element chain.
+fn replace_dynamic_root(expr: Expr, root: Expr) -> Expr {
+    match expr.kind {
+        ExprKind::DynamicPropertyAccess { .. } => root,
+        ExprKind::ArrayAccess { array, index } => Expr::new(
+            ExprKind::ArrayAccess { array: Box::new(replace_dynamic_root(*array, root)), index },
+            expr.span,
+        ),
+        kind => Expr::new(kind, expr.span),
+    }
 }

@@ -772,6 +772,12 @@ Property-hash readers already dereference tag 11 (`__rt_hash_get`) and writers w
 (`__rt_hash_set`). A receiver of unknown class is accepted only when it is a `stdClass` at run
 time; a class whose subclasses place the hash at different offsets throws an explicit `Error`.
 
+The source form `$r = &$o->{$k}` (and `$x = &$x->{$k}`) uses the same arms: each one produces the
+selected property's cell (`LoadPropRefCell` for a declared property, `LoadDynamicPropRefCell` for
+a property-hash entry, which creates a missing property as null), the cells meet in one
+merge-block parameter and the target is bound to it once. `$r = &$o->{$k}[$i]` is desugared by
+the parser to a hidden `$c = &$o->{$k}` followed by `$r = &$c[$i]`.
+
 ## Array layout
 
 Arrays are heap-allocated with a 24-byte header followed by contiguous elements:

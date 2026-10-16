@@ -121,7 +121,11 @@ fn parse_ref_assign(
         ));
     }
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+    super::reference_places::lower_local_ref_assign(
+        target,
+        super::reference_places::RefSource::Expr(source),
+        span,
+    )
 }
 
 /// Returns true when an expression is a legal source for `$x = &<source>`.
@@ -134,6 +138,7 @@ pub(super) fn is_valid_reference_source(kind: &ExprKind) -> bool {
         ExprKind::Variable(_)
             | ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
             | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::FunctionCall { .. }
             | ExprKind::MethodCall { .. }
