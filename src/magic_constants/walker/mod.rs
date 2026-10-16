@@ -236,6 +236,23 @@ pub(crate) trait Pass {
         method
     }
 
+    /// Transforms the PATH of an `include`/`require` (statement or expression position), after
+    /// its own children were walked. `span` is the include's span.
+    ///
+    /// Exists for one caller: `resolver::dynamic_includes::mark`, which tags a path that is not
+    /// literal-shaped with its site identity (file, `Class::method`, ordinal) while the lexical
+    /// scope is still known. The default makes every other pass ignore it entirely.
+    fn transform_include_path(&mut self, path: crate::parser::ast::Expr, _span: Span) -> crate::parser::ast::Expr {
+        path
+    }
+
+    /// Transforms a whole expression-position include, after its path went through
+    /// [`Pass::transform_include_path`]. Same single caller and default as that hook: a site the
+    /// manifest denies becomes a `throw` expression in place.
+    fn transform_include_value(&mut self, include: crate::parser::ast::Expr) -> crate::parser::ast::Expr {
+        include
+    }
+
     /// Called when entering a `namespace` declaration (the `namespace Foo;` statement).
     fn enter_namespace_decl(&mut self, _name: &Option<Name>) {}
     /// Called when entering a namespace block scope.

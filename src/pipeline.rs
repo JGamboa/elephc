@@ -154,6 +154,9 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
 
     crate::progress::phase("resolve");
     let phase_started = Instant::now();
+    // Site ids of `elephc.includes.toml` are relative to the application root; without a
+    // manifest yet, `--dynamic-includes=report` names them relative to the entry's directory.
+    resolver::set_dynamic_include_app_root(parent);
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
     let (ast, opcache_included_files) =
@@ -161,6 +164,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
+            print_dynamic_include_report();
             errors::report(&e);
             process::exit(1);
         }
@@ -495,6 +499,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
+            print_dynamic_include_report();
             errors::report(&e);
             process::exit(1);
         }
@@ -517,11 +522,19 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
             Ok(resolved) => resolved,
             Err(e) => {
                 crate::progress::clear();
+                print_dynamic_include_report();
                 errors::report(&e);
                 process::exit(1);
             }
         };
     timings.record_since("autoload-run", phase_started);
+    // `--dynamic-includes=report` wants the inventory, not a binary: every file the program can
+    // reach has been resolved by now (autoloaded classes included).
+    if resolver::dynamic_include_report_mode() {
+        crate::progress::clear();
+        print_dynamic_include_report();
+        process::exit(0);
+    }
 
     // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
     // spells a `(object)` cast, so other binaries carry nothing.
@@ -895,4 +908,11 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+/// Prints the `--dynamic-includes=report` inventory, when that mode is on.
+fn print_dynamic_include_report() {
+    if resolver::dynamic_include_report_mode() {
+        print!("{}", resolver::render_dynamic_include_report());
+    }
 }

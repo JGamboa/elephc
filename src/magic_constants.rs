@@ -46,7 +46,10 @@ pub fn substitute_file_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt
 pub fn substitute_file_and_scope_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt> {
     crate::compiler_stack::with_compiler_stack(|| {
         let stmts = substitute_file_constants(stmts, file_path);
-        substitute_scope_constants_in_file(stmts, file_path)
+        let stmts = substitute_scope_constants_in_file(stmts, file_path);
+        // Last, while the lexical scope is still this file's own: tag each dynamic include path
+        // with its site identity for `elephc.includes.toml` (see `resolver::dynamic_includes`).
+        crate::resolver::dynamic_includes::mark::mark_include_sites(stmts, file_path)
     })
 }
 

@@ -17,6 +17,8 @@ use super::state::{resolve_constant_ref, ResolveState};
 /// constants tracked in `state`. Returns the human-readable error message when
 /// the expression cannot be folded.
 pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<String, String> {
+    // A dynamic-include site marker folds (or fails) exactly like the path it wraps.
+    let expr = super::dynamic_includes::unwrap_site(expr);
     match &expr.kind {
         ExprKind::StringLiteral(s) => Ok(s.clone()),
         ExprKind::BinaryOp {
@@ -36,6 +38,17 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
                 name.as_str()
             )
         }),
+        // `require PHP_VERSION < 8.2 ? A : B`: a condition the compile profile decides picks
+        // its branch here (see `dynamic_includes::version_fold`).
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => match super::dynamic_includes::version_fold::fold_version_condition(condition, state) {
+            Some(true) => fold_include_path(then_expr, state),
+            Some(false) => fold_include_path(else_expr, state),
+            None => Err(include_path_error_message(expr)),
+        },
         _ => Err(include_path_error_message(expr)),
     }
 }

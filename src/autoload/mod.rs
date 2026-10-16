@@ -135,7 +135,19 @@ fn run_collecting_included_on_compiler_stack(
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
                     let (loaded, loaded_includes) =
-                        load_autoloaded_file(&canonical, base_dir, defines)?;
+                        match load_autoloaded_file(&canonical, base_dir, defines) {
+                            Ok(loaded) => loaded,
+                            // `--dynamic-includes=report` inventories the whole reachable
+                            // program: a class file that fails for an unrelated reason is
+                            // listed and skipped rather than ending the walk.
+                            Err(error) if crate::resolver::dynamic_include_report_mode() => {
+                                crate::resolver::dynamic_includes::record_skipped_file(
+                                    &canonical, &error,
+                                );
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        };
                     nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }

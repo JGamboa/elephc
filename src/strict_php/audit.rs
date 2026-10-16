@@ -234,7 +234,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             path,
             once: _,
             required: _,
-        } => audit_expr(path, errors),
+        } => audit_expr(crate::resolver::dynamic_includes::unwrap_site(path), errors),
         StmtKind::IncludeOnceMark { label: _ } => {}
         StmtKind::IncludeOnceGuard { label: _, body } => audit_stmts(body, errors),
         StmtKind::Throw(expr) => audit_expr(expr, errors),
@@ -691,7 +691,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             path,
             once: _,
             required: _,
-        } => audit_expr(path, errors),
+        } => audit_expr(crate::resolver::dynamic_includes::unwrap_site(path), errors),
         ExprKind::ClosureCall { var: _, args } => audit_exprs(args, errors),
         ExprKind::ExprCall { callee, args } => {
             audit_expr(callee, errors);
