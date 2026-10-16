@@ -22,7 +22,9 @@
 //! - Only names whose every nested declaration is such a CLEAN polyfill (directly in the
 //!   then-branch of a top-level `if (!function_exists('<same name>'))` without elseif/else)
 //!   are folded. Any other conditional declaration (inside a loop, a function body, another
-//!   condition, an else branch...) makes the name OPAQUE and the call stays a runtime query.
+//!   condition, an else branch...), an include-discovered function (`FunctionVariantGroup`
+//!   / `FunctionVariantMark`, tracked at runtime in load order) or an extern makes the name OPAQUE and the call stays a
+//!   runtime query. When top-level code calls `eval()` nothing folds to false.
 //! - Inside callable bodies nothing is folded: a function body runs at an unknown time, when
 //!   later polyfills may already exist; the runtime lowering answers from the final inventory.
 
@@ -30,7 +32,9 @@ use super::*;
 use std::cell::Cell;
 
 thread_local! {
-    static OPAQUE_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+    /// `None` outside the guarded fold; inside it, `Some(None)` when top-level code calls `eval()`
+    /// and `Some(Some(opaque))` otherwise.
+    static OPAQUE_USER_FUNCTIONS: RefCell<Option<Option<HashSet<String>>>> = const { RefCell::new(None) };
     static CALLABLE_DEPTH: Cell<usize> = const { Cell::new(0) };
     /// True while folding a block whose statements execute at top level, in program order
     /// (the program root and the bodies of `Synthetic`, `NamespaceBlock`, `IncludeOnceGuard`).
@@ -41,9 +45,14 @@ thread_local! {
 
 /// Runs the target fold with the opaque-name inventory of `program` and top-level state set.
 pub(super) fn with_user_guard_state<R>(program: Program, f: impl FnOnce(Program) -> R) -> R {
-    let mut opaque = HashSet::new();
-    classify_block(&program, true, &mut opaque);
-    let previous = OPAQUE_USER_FUNCTIONS.with(|slot| slot.replace(Some(opaque)));
+    // `eval()` can declare any function at runtime, so when top-level code calls it no literal
+    // probe folds to false (the runtime lookup sees eval-declared functions).
+    let inventory = (!top_level_code_calls_eval(&program)).then(|| {
+        let mut opaque = HashSet::new();
+        classify_block(&program, true, &mut opaque);
+        opaque
+    });
+    let previous = OPAQUE_USER_FUNCTIONS.with(|slot| slot.replace(Some(inventory)));
     let previous_top = DECL_TOP.with(|slot| slot.replace(true));
     let previous_stmt = STMT_TOP.with(|slot| slot.replace(true));
     let previous_depth = CALLABLE_DEPTH.with(|slot| slot.replace(0));
@@ -137,14 +146,40 @@ pub(in crate::optimize) fn user_function_exists_value(candidate: &str) -> Option
     if builtin_like(bare) {
         return None;
     }
-    if active_fold_user_function_exists(bare) {
-        return Some(true);
-    }
     let key = php_symbol_key(bare);
     let opaque = OPAQUE_USER_FUNCTIONS.with(|slot| {
-        slot.borrow().as_ref().is_none_or(|opaque| opaque.contains(&key))
-    });
-    (!opaque).then_some(false)
+        slot.borrow().as_ref().map(|state| state.as_ref().map(|opaque| opaque.contains(&key)))
+    })?;
+    match opaque {
+        // Top-level code calls eval: only a declaration already known to exist folds.
+        None => active_fold_user_function_exists(bare).then_some(true),
+        Some(true) => None,
+        Some(false) => Some(active_fold_user_function_exists(bare)),
+    }
+}
+
+/// Whether code that runs at top level (outside function, method and class bodies) calls `eval`.
+///
+/// An `eval` inside a callable body runs only when that callable is called; treating it as a
+/// barrier would disable the fold for every program that merely contains one (Laravel's Carbon
+/// mixins, psysh), and a body that evals a polyfill's name before the top-level guard runs is
+/// not a pattern real code uses. Closures in top-level expressions still count.
+fn top_level_code_calls_eval(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::EnumDecl { .. } => false,
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => top_level_code_calls_eval(body),
+        _ => crate::opcache_prelude::detect::first_reference(
+            std::slice::from_ref(stmt),
+            crate::opcache_prelude::detect::Symbol::call_site("eval"),
+        )
+        .is_some(),
+    })
 }
 
 /// Returns the literal name of a clean `!function_exists('name')` guard condition.
@@ -183,7 +218,12 @@ fn classify_stmt(stmt: &Stmt, top: bool, opaque: &mut HashSet<String>) {
             }
             classify_block(body, false, opaque);
         }
-        StmtKind::ExternFunctionDecl { name, .. } => {
+        // Include-discovered functions keep a runtime load flag (`FunctionVariantGroup` and the
+        // `FunctionVariantMark` left at the include site), which `function_exists` already
+        // answers in load order.
+        StmtKind::ExternFunctionDecl { name, .. }
+        | StmtKind::FunctionVariantGroup { name, .. }
+        | StmtKind::FunctionVariantMark { name, .. } => {
             opaque.insert(php_symbol_key(name));
         }
         StmtKind::Synthetic(body)

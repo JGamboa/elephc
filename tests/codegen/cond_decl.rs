@@ -193,3 +193,36 @@ bool(true)
 int(2)
 "#);
 }
+
+/// Verifies an include-discovered function keeps its runtime load-order answer next to a polyfill.
+#[test]
+fn test_function_exists_guard_leaves_include_variants_to_runtime() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_lib() { include 'lib.php'; }
+if (!function_exists('poly_cd')) { function poly_cd() { return 'poly'; } }
+echo function_exists('late_cd') ? 'yes' : 'no', '|', poly_cd(), '|';
+load_lib();
+echo function_exists('late_cd') ? late_cd() : 'no';
+"#,
+            ),
+            ("lib.php", "<?php function late_cd() { return 'late'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "no|poly|late");
+}
+
+/// Verifies top-level `eval()` keeps literal probes at runtime, where eval-declared names exist.
+#[test]
+fn test_function_exists_probe_after_top_level_eval_stays_runtime() {
+    let out = compile_and_run(r#"<?php
+echo function_exists('ev_cd') ? 'y' : 'n';
+eval('function ev_cd() { return "e"; }');
+echo function_exists('ev_cd') ? ev_cd() : 'n', "\n";
+"#);
+    assert_eq!(out, "ne\n");
+}
