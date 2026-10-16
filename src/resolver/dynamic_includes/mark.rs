@@ -91,6 +91,11 @@ const VERSION_CONSTANTS: [&str; 5] = [
 struct Declared {
     functions: std::collections::HashSet<String>,
     constants: std::collections::HashSet<String>,
+    /// Local names bound by `use function` (lowercased) and `use const` anywhere in the file:
+    /// `use function Other\\vc as version_compare;` makes an unqualified `version_compare` mean
+    /// `Other\\vc`, in the global namespace too.
+    imported_functions: std::collections::HashSet<String>,
+    imported_constants: std::collections::HashSet<String>,
 }
 
 impl Declared {
@@ -113,6 +118,19 @@ impl Declared {
                 }
                 StmtKind::ConstDecl { name, .. } => {
                     self.constants.insert(qualified_key(&ns, name));
+                }
+                StmtKind::UseDecl { imports } => {
+                    for item in imports {
+                        match item.kind {
+                            crate::parser::ast::UseKind::Function => {
+                                self.imported_functions.insert(item.alias.to_ascii_lowercase());
+                            }
+                            crate::parser::ast::UseKind::Const => {
+                                self.imported_constants.insert(item.alias.clone());
+                            }
+                            crate::parser::ast::UseKind::Class => {}
+                        }
+                    }
                 }
                 StmtKind::ExprStmt(expr) => {
                     if let ExprKind::FunctionCall { name, args } = &expr.kind {
@@ -156,15 +174,19 @@ impl Declared {
     /// The version names an unqualified use inside namespace `ns` does NOT resolve to the
     /// global for with certainty, comma-separated (empty in the global namespace).
     fn shadowed_in(&self, ns: &str) -> String {
-        if ns.is_empty() {
-            return String::new();
-        }
+        let in_namespace = !ns.is_empty();
         let mut names: Vec<&str> = VERSION_CONSTANTS
             .iter()
             .copied()
-            .filter(|c| self.constants.contains(&qualified_key(ns, c)))
+            .filter(|c| {
+                self.imported_constants.contains(*c)
+                    || (in_namespace && self.constants.contains(&qualified_key(ns, c)))
+            })
             .collect();
-        if self.functions.contains(&format!("{}\\version_compare", ns.to_ascii_lowercase())) {
+        if self.imported_functions.contains("version_compare")
+            || (in_namespace
+                && self.functions.contains(&format!("{}\\version_compare", ns.to_ascii_lowercase())))
+        {
             names.push("version_compare");
         }
         names.join(",")

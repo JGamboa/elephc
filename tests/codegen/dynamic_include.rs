@@ -262,6 +262,16 @@ fn test_version_fold_respects_namespace_declarations() {
          require version_compare(PHP_VERSION, '8.0', '>=') ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
         "<?php\nnamespace Foo;\nconst PHP_VERSION_ID = 1;\n\
          require PHP_VERSION_ID >= 80000 ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+        // `use function` / `use const` aliases bind the unqualified name too, also in the
+        // global namespace.
+        "<?php\nnamespace Foo;\nuse function Other\\vc as version_compare;\n\
+         require version_compare(PHP_VERSION, '8.0', '>=') ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+        "<?php\nnamespace Foo;\nuse const Other\\VID as PHP_VERSION_ID;\n\
+         require PHP_VERSION_ID >= 80000 ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+        "<?php\nuse function Other\\vc as version_compare;\n\
+         require version_compare(PHP_VERSION, '8.0', '>=') ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+        "<?php\nuse const Other\\PHP_VERSION;\n\
+         require PHP_VERSION < 8.2 ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
     ] {
         let err = compile_files_error_message(
             &[("main.php", main), ("a.php", "<?php\necho 'a';\n"), ("b.php", "<?php\necho 'b';\n")],
