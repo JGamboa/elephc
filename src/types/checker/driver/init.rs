@@ -33,7 +33,7 @@ impl Checker {
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target: Target) -> Self {
+    pub(crate) fn new(target: Target) -> Self {
         // Every unconditionally registered constant comes from the shared catalog; only its
         // TYPE is declared here, the value is baked per compilation by
         // `codegen_support::prescan::collect_constants`.

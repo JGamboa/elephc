@@ -16,7 +16,6 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
     /// Infers the type of a method call expression (`$obj->method(...)`).
@@ -569,6 +568,7 @@ impl Checker {
             &method_key,
             &arg_types,
         );
+        let joined = self.joined_param_observations(&impl_class_name, &method_key, false, &arg_types);
         if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
             if let Some(sig) = class_info.methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -597,7 +597,7 @@ impl Checker {
                         && !self.interface_method_boxed_params.contains(&(
                             format!("{}::{}", impl_class_name, method_key), i,
                         ))
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("{}::{}", impl_class_name, method_key), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -605,7 +605,7 @@ impl Checker {
                             self.param_specialization_seen.insert(key);
                             sig.params[i].1 = arg_ty.clone();
                         } else {
-                            sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                            sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                         }
                     }
                 }
@@ -638,7 +638,7 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
@@ -684,6 +684,7 @@ impl Checker {
                 .map(|info| Self::declared_method_param_flags(info, method_key, false))
                 .unwrap_or_default();
             let key_owner = format!("{}::{}", impl_class, method_key);
+            let joined = self.joined_param_observations(&impl_class, method_key, false, arg_types);
             let Some(sig) = self
                 .classes
                 .get_mut(&impl_class)
@@ -703,7 +704,7 @@ impl Checker {
                     || self
                         .interface_method_boxed_params
                         .contains(&(key_owner.clone(), i))
-                    || matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                    || matches!(*arg_ty, PhpType::Void | PhpType::Never)
                 {
                     continue;
                 }
@@ -713,10 +714,37 @@ impl Checker {
                     self.param_specialization_seen.insert(key);
                     sig.params[i].1 = arg_ty.clone();
                 } else {
-                    sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                    sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                 }
             }
         }
+    }
+
+    /// Joins every call-site argument type into the stored type of the parameter it binds
+    /// (`crate::types::checker::lattice`), computed before the signature is borrowed mutably
+    /// because a class join reads the hierarchy. `None` past the signature's parameters.
+    fn joined_param_observations(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+        arg_types: &[PhpType],
+    ) -> Vec<Option<PhpType>> {
+        let sig = self.classes.get(class_name).and_then(|class_info| {
+            if is_static {
+                class_info.static_methods.get(method_key)
+            } else {
+                class_info.methods.get(method_key)
+            }
+        });
+        arg_types
+            .iter()
+            .enumerate()
+            .map(|(i, arg_ty)| {
+                sig.and_then(|sig| sig.params.get(i))
+                    .map(|(_, stored)| self.join_observed_type(stored, arg_ty))
+            })
+            .collect()
     }
 
     /// Returns `ancestor` (when it is a registered class) and every registered class below it.
@@ -882,6 +910,18 @@ impl Checker {
             .get(&impl_class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, method_key, is_static))
             .unwrap_or_default();
+        // The declared generic `array $args` resolves to `array<mixed>`, a placeholder rather
+        // than an observation, so the first call site's element type is ADOPTED over it — once.
+        // Re-adopting whenever the stored element was `mixed` turned the join into a
+        // replacement: `C::days(1); C::hours(1.5); C::mins(2)` went int → mixed → int, the float
+        // was read as an int's bit pattern, and on Laravel `CarbonInterval::__callStatic`
+        // alternated `array<int>` / `array<float>` between the method pass and the top level
+        // for every outer round (E6-bis, `crate::types::checker::lattice`).
+        let adopt_key = (
+            format!("magic:{}::{}", impl_class_name, method_key),
+            1usize,
+        );
+        let may_adopt = !self.param_specialization_seen.contains(&adopt_key);
         let sig_slot = self.classes.get_mut(&impl_class_name).and_then(|class_info| {
             if is_static {
                 class_info.static_methods.get_mut(method_key)
@@ -895,9 +935,13 @@ impl Checker {
             }
             if sig.params.len() > 1 {
                 let declared_array_param = declared_flags.get(1).copied().unwrap_or(false);
+                if !matches!(elem_ty, PhpType::Never) {
+                    self.param_specialization_seen.insert(adopt_key);
+                }
                 sig.params[1].1 = match &sig.params[1].1 {
                     PhpType::Array(existing)
                         if declared_array_param
+                            && may_adopt
                             && matches!(existing.as_ref(), PhpType::Mixed)
                             && !matches!(elem_ty, PhpType::Mixed) =>
                     {
@@ -1351,6 +1395,7 @@ impl Checker {
             .get(class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, true))
             .unwrap_or_default();
+        let joined = self.joined_param_observations(class_name, &method_key, true, &arg_types);
         if let Some(class_info) = self.classes.get_mut(class_name) {
             if let Some(sig) = class_info.static_methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -1372,7 +1417,7 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("static:{}::{}", class_name, method), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -1380,7 +1425,7 @@ impl Checker {
                             self.param_specialization_seen.insert(key);
                             sig.params[i].1 = arg_ty.clone();
                         } else {
-                            sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                            sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                         }
                     }
                 }
@@ -1413,7 +1458,7 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
@@ -1431,6 +1476,12 @@ impl Checker {
                 .get(&direct_impl_class_name)
                 .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
                 .unwrap_or_default();
+            let joined = self.joined_param_observations(
+                &direct_impl_class_name,
+                &method_key,
+                false,
+                &arg_types,
+            );
             if let Some(sig) = self
                 .classes
                 .get_mut(&direct_impl_class_name)
@@ -1455,7 +1506,7 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("{}::{}", direct_impl_class_name, method), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -1463,7 +1514,7 @@ impl Checker {
                             self.param_specialization_seen.insert(key);
                             sig.params[i].1 = arg_ty.clone();
                         } else {
-                            sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                            sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                         }
                     }
                 }
@@ -1478,7 +1529,7 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
@@ -1618,11 +1669,15 @@ fn method_variadic_tail_needs_iterable(
 /// alternated between the two until its pass budget ran out (Laravel's
 /// `Illuminate\Http\Request::is(...$patterns)`: thousands of rounds). A `mixed` element holds any
 /// argument already, so it stays.
+///
+/// Since P49 both the per-call fold and this widening are the lattice join of
+/// `crate::types::checker::lattice` (scalar tags never absorb each other): `wider_type_syntactic`
+/// typed `cat('x', 1, 2.0)`'s collector `array<string>` and read the int and float through it.
 fn widen_method_variadic_element(existing: &PhpType, incoming: &PhpType) -> PhpType {
     if *existing == PhpType::Mixed {
         return PhpType::Mixed;
     }
-    wider_type_syntactic(existing, incoming)
+    Checker::union_param_type(existing, incoming)
 }
 
 /// Returns whether a method signature stores its variadic slot by reference.

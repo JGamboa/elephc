@@ -423,6 +423,10 @@ pub(super) fn check_types_impl(
     patch_builtin_generator_signatures(&mut checker);
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
+    // A declared `public function __toString(): string` makes the class `Stringable` before any
+    // body or call is checked, so `f(Stringable $s)` accepts it at the first top-level pass.
+    // Untyped `__toString` methods join after the method pass infers their return (below).
+    apply_implicit_stringable_interfaces(&mut checker.classes);
 
     checker.prescan_extern_decls(program, &mut errors);
 
@@ -469,6 +473,7 @@ pub(super) fn check_types_impl(
     // function signature, the method bodies, the function bodies and the top level all run
     // again, until none of them moves.
     let mut final_rounds_remaining = (methods_to_check.len().max(1) * 2) + 1;
+    let mut oscillation = super::fixpoint_trace::OscillationDetector::new("outer");
     let (final_global_env, final_top_level_errors) = loop {
         let classes_before = checker.classes.clone();
         let functions_before = checker.functions.clone();
@@ -492,6 +497,14 @@ pub(super) fn check_types_impl(
             checker.classes == classes_before && checker.functions == functions_before;
         if stabilized || final_rounds_remaining == 0 {
             break outcome;
+        }
+        if let Some(message) = oscillation.record(
+            &classes_before,
+            &checker.classes,
+            Some((&functions_before, &checker.functions)),
+        ) {
+            errors.push(CompileError::new(crate::span::Span::dummy(), &message));
+            return Err(CompileError::from_many(errors));
         }
         final_rounds_remaining -= 1;
         errors.truncate(method_errors_start);

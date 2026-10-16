@@ -135,6 +135,10 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if matches!((a, b), (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)) {
         return PhpType::Bool;
     }
+    // `Mixed` is the top of the lattice: nothing absorbs it, not even `Str`.
+    if *a == PhpType::Mixed || *b == PhpType::Mixed {
+        return PhpType::Mixed;
+    }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
@@ -147,7 +151,11 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if *b == PhpType::Void {
         return a.clone();
     }
-    a.clone()
+    // Anything else is a disagreement no single arm describes, so the join is the top,
+    // `Mixed` — never `a`, which made the result depend on argument order (`(int, mixed)` gave
+    // `int` and `(mixed, int)` gave `mixed`; two classes gave whichever came first) and let a
+    // fixpoint fed by this join alternate (`crate::types::checker::lattice`).
+    PhpType::Mixed
 }
 
 /// Computes the result type of PHP's `??` / `??=` merge.
