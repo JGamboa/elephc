@@ -67,6 +67,17 @@ pub(crate) fn next_anonymous_class_name() -> String {
     format!("class@anonymous#{}", id)
 }
 
+/// Returns the next anonymous-class number, for [`restore_anonymous_class_counter`].
+pub(crate) fn anonymous_class_counter() -> usize {
+    ANONYMOUS_CLASS_COUNTER.with(|counter| counter.get())
+}
+
+/// Rewinds the anonymous-class numbering after a parse whose result is discarded (the autoload
+/// prelude probe), so the real parse names its anonymous classes exactly as without it.
+pub(crate) fn restore_anonymous_class_counter(next: usize) {
+    ANONYMOUS_CLASS_COUNTER.with(|counter| counter.set(next));
+}
+
 /// Records a hoisted anonymous-class `ClassDecl` so the current parse appends it to the program.
 pub(crate) fn register_anonymous_class(decl: Stmt) {
     ANONYMOUS_CLASSES.with(|classes| classes.borrow_mut().push(decl));

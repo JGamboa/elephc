@@ -57,6 +57,17 @@ fn stabilize_loop_storage(
 }
 
 /// Records the loop's fixed-point storage contracts (see [`stabilize_loop_storage`]).
+impl Checker {
+    /// Forgets every loop-storage contract recorded for `scope`, before its body is walked again.
+    pub(crate) fn clear_loop_storage_scope(&mut self, scope: &str) {
+        if let Some(spans) = self.loop_storage_scope_spans.remove(scope) {
+            for span in spans {
+                self.loop_storage_types.remove(&(scope.to_string(), span));
+            }
+        }
+    }
+}
+
 fn stabilize_loop_storage_contracts(
     checker: &mut Checker,
     loop_span: crate::span::Span,
@@ -108,7 +119,15 @@ fn stabilize_loop_storage_contracts(
             Some(inferred)
         },
     );
-    let recorded = checker.loop_storage_types.entry(key).or_default();
+    let (scope, span) = key;
+    if !checker.loop_storage_types.contains_key(&(scope.clone(), span)) {
+        checker
+            .loop_storage_scope_spans
+            .entry(scope.clone())
+            .or_default()
+            .push(span);
+    }
+    let recorded = checker.loop_storage_types.entry((scope, span)).or_default();
     for (name, storage_type) in contracts {
         recorded.insert(name.clone(), storage_type.clone());
         env.insert(name, storage_type);
