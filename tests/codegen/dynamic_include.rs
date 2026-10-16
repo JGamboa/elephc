@@ -190,3 +190,97 @@ fn test_dynamic_includes_report_lists_every_site() {
     assert!(stdout.contains(&format!("md5 = '{LOADER_MD5}'")), "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A one-site loader for the CLI fixtures below.
+const SITE: &str = "<?php\nclass S {\n    public function i($p) { return include $p; }\n}\n";
+
+/// Its manifest.
+const SITE_MANIFEST: &str = "[[site]]\nid = 'S.php@S::i#1'\nmd5 = '1dcc6bd67e2972105e07b87e27867e8d'\ncandidates = ['c/a.php']\n";
+
+/// Writes the one-site fixture into a fresh CLI directory, compiles it with the CLI and returns
+/// the directory (the binary is `main` there).
+fn compile_site_fixture(prefix: &str, main: &str, manifest: &str) -> (std::path::PathBuf, std::process::Output) {
+    let dir = make_cli_test_dir(prefix);
+    std::fs::create_dir_all(dir.join("c")).unwrap();
+    std::fs::write(dir.join("S.php"), SITE).unwrap();
+    std::fs::write(dir.join("elephc.includes.toml"), manifest).unwrap();
+    std::fs::write(dir.join("c/a.php"), "<?php\nreturn 'A';\n").unwrap();
+    std::fs::write(dir.join("main.php"), main).unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to run elephc");
+    (dir, output)
+}
+
+/// `./x` and `../x` resolve against the cwd ONLY (php_resolve_path): run from `/`, they miss
+/// with PHP's two `E_WARNING`s and `false`. A bare relative path still falls back to the site's
+/// directory, after the cwd.
+#[test]
+fn test_dynamic_include_dot_relative_paths_use_cwd_only() {
+    let main = "<?php\nrequire __DIR__ . '/S.php';\n$s = new S();\n\
+                set_error_handler(function ($no, $str) { echo $no, ':', $str, \"\\n\"; return true; });\n\
+                var_dump($s->i('./c/a.php'));\nvar_dump($s->i('c/a.php'));\n";
+    let (dir, output) = compile_site_fixture("elephc_dyn_dot_relative", main, SITE_MANIFEST);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let run = std::process::Command::new(dir.join("main")).current_dir("/").output().unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(
+        stdout,
+        "2:include(./c/a.php): Failed to open stream: No such file or directory\n\
+         2:include(): Failed opening './c/a.php' for inclusion (include_path='.:')\n\
+         bool(false)\nstring(1) \"A\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An `elephc.includes.toml` entry that matches no site of the program is a compile error.
+#[test]
+fn test_dynamic_include_orphan_manifest_entry_is_compile_error() {
+    let manifest = format!(
+        "{SITE_MANIFEST}[[site]]\nid = 'S.php@S::gone#1'\nmd5 = '1dcc6bd67e2972105e07b87e27867e8d'\ndeny = \"x\"\n"
+    );
+    let (dir, output) = compile_site_fixture(
+        "elephc_dyn_orphan",
+        "<?php\nrequire __DIR__ . '/S.php';\n",
+        &manifest,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "an orphan entry must not compile");
+    assert!(stderr.contains("match no include/require site"), "{stderr}");
+    assert!(stderr.contains("S.php@S::gone#1"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A namespace that declares its own `version_compare` or `PHP_VERSION_ID` is not folded to
+/// the global (PHP calls the namespaced one): the site stays dynamic, here a compile error.
+/// A fully qualified `\\PHP_VERSION_ID` in the same namespace still folds.
+#[test]
+fn test_version_fold_respects_namespace_declarations() {
+    for main in [
+        "<?php\nnamespace Foo;\nfunction version_compare($a, $b, $o = null) { return false; }\n\
+         require version_compare(PHP_VERSION, '8.0', '>=') ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+        "<?php\nnamespace Foo;\nconst PHP_VERSION_ID = 1;\n\
+         require PHP_VERSION_ID >= 80000 ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+    ] {
+        let err = compile_files_error_message(
+            &[("main.php", main), ("a.php", "<?php\necho 'a';\n"), ("b.php", "<?php\necho 'b';\n")],
+            "main.php",
+        )
+        .expect("a shadowed version name must not be folded");
+        assert!(err.contains("ternary path selection"), "{err}");
+    }
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nnamespace Foo;\nconst PHP_VERSION_ID = 1;\n\
+                 require \\PHP_VERSION_ID >= 80000 ? __DIR__ . '/a.php' : __DIR__ . '/b.php';\n",
+            ),
+            ("a.php", "<?php\necho 'a';\n"),
+            ("b.php", "<?php\necho 'b';\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "a");
+}

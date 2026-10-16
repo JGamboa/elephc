@@ -29,7 +29,7 @@ use std::sync::Mutex;
 
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::include_path::fold_include_path;
@@ -50,6 +50,54 @@ static APP_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
 static REPORT: Mutex<BTreeMap<String, ReportEntry>> = Mutex::new(BTreeMap::new());
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static SKIPPED_FILES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Every manifest consulted, with its entry ids, and every site id actually met, per manifest:
+/// an entry no site matched is a stale manifest or a misspelled id (see [`orphan_entries`]).
+static MANIFEST_IDS: Mutex<BTreeMap<PathBuf, Vec<String>>> = Mutex::new(BTreeMap::new());
+static SEEN_IDS: Mutex<BTreeMap<PathBuf, std::collections::BTreeSet<String>>> = Mutex::new(BTreeMap::new());
+
+/// Manifest entries that matched no include site of the compiled program, per manifest, split
+/// by whether the entry's FILE is part of the program.
+///
+/// Checked once the whole program is known (after autoload), with `program_files` the
+/// canonical paths of every source file compiled in. An entry whose file IS compiled but whose
+/// id no site matched is a stale manifest or a misspelled id: keeping it silently would hide
+/// exactly the drift the md5 pin exists to catch, so it is an error. An entry whose file is
+/// not compiled at all belongs to another entry point sharing the manifest (or to code this
+/// program does not reach): that is only reported as a warning, or one manifest could never
+/// serve two binaries of the same app.
+pub fn orphan_entries(program_files: &std::collections::HashSet<PathBuf>) -> OrphanEntries {
+    let manifests = MANIFEST_IDS.lock().unwrap();
+    let seen = SEEN_IDS.lock().unwrap();
+    let mut orphans = OrphanEntries::default();
+    for (path, ids) in manifests.iter() {
+        let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let met = seen.get(path);
+        for id in ids {
+            if met.is_some_and(|m| m.contains(id)) {
+                continue;
+            }
+            let file = id.split_once('@').map_or(id.as_str(), |(file, _)| file);
+            let file = root.join(file);
+            let file = file.canonicalize().unwrap_or(file);
+            let entry = (path.clone(), id.clone());
+            if program_files.contains(&file) {
+                orphans.stale.push(entry);
+            } else {
+                orphans.unreached.push(entry);
+            }
+        }
+    }
+    orphans
+}
+
+/// The two kinds of orphan manifest entries (see [`orphan_entries`]).
+#[derive(Default)]
+pub struct OrphanEntries {
+    /// The site's file is compiled but no site has this id: an error.
+    pub stale: Vec<(PathBuf, String)>,
+    /// The site's file is not part of this program: a warning.
+    pub unreached: Vec<(PathBuf, String)>,
+}
 
 /// In report mode, the autoloader skips a class file that fails to compile instead of stopping,
 /// so the inventory still covers the rest of the program; the failure is listed in the report.
@@ -80,6 +128,17 @@ pub fn set_manifest_override(path: Option<PathBuf>) {
 pub fn set_app_root(root: &Path) {
     let root = if root.as_os_str().is_empty() { Path::new(".") } else { root };
     let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // The application's own manifest takes part in the orphan check even when no site of the
+    // program reaches it (then every entry is an orphan). A manifest that does not parse is
+    // left for the first site to report.
+    let override_path = MANIFEST_OVERRIDE.lock().unwrap().clone();
+    if let Some(path) = manifest::locate(&canonical.join("."), override_path.as_deref()) {
+        if let Ok(m) = Manifest::load(&path) {
+            let mut ids: Vec<String> = m.sites.keys().cloned().collect();
+            ids.sort();
+            MANIFEST_IDS.lock().unwrap().insert(m.path.clone(), ids);
+        }
+    }
     *APP_ROOT.lock().unwrap() = Some(canonical);
 }
 
@@ -149,6 +208,9 @@ pub(in crate::resolver) struct Site<'a> {
     scope: &'a str,
     ordinal: i64,
     line: i64,
+    /// Version names (`PHP_VERSION_ID`, `version_compare`...) the site's namespace declares
+    /// itself, so their unqualified uses must not be folded to the global.
+    shadowed: &'a str,
     path: &'a Expr,
 }
 
@@ -157,11 +219,16 @@ pub(in crate::resolver) fn site_of(expr: &Expr) -> Option<Site<'_>> {
     let ExprKind::FunctionCall { name, args } = &expr.kind else {
         return None;
     };
-    if name.parts.len() != 1 || name.parts[0] != MARKER || args.len() != 5 {
+    if name.parts.len() != 1 || name.parts[0] != MARKER || args.len() != 6 {
         return None;
     }
-    let (ExprKind::StringLiteral(file), ExprKind::StringLiteral(scope), ExprKind::IntLiteral(ordinal), ExprKind::IntLiteral(line)) =
-        (&args[0].kind, &args[1].kind, &args[2].kind, &args[3].kind)
+    let (
+        ExprKind::StringLiteral(file),
+        ExprKind::StringLiteral(scope),
+        ExprKind::IntLiteral(ordinal),
+        ExprKind::IntLiteral(line),
+        ExprKind::StringLiteral(shadowed),
+    ) = (&args[0].kind, &args[1].kind, &args[2].kind, &args[3].kind, &args[4].kind)
     else {
         return None;
     };
@@ -170,8 +237,17 @@ pub(in crate::resolver) fn site_of(expr: &Expr) -> Option<Site<'_>> {
         scope,
         ordinal: *ordinal,
         line: *line,
-        path: &args[4],
+        shadowed,
+        path: &args[5],
     })
+}
+
+/// The version names a site's namespace shadows (see [`Site::shadowed`]); empty when `expr`
+/// is not a site marker.
+pub(in crate::resolver) fn shadowed_names(expr: &Expr) -> Vec<String> {
+    site_of(expr)
+        .map(|site| site.shadowed.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 /// The original path under a site marker (or `expr` itself).
@@ -221,6 +297,12 @@ fn resolve_site(site: &Site<'_>, span: Span) -> Result<(ResolvedSite, String), C
         })
         .unwrap_or_else(|| site.file.to_string());
     let id = format!("{}@{}#{}", relative, site.scope, site.ordinal);
+    if let Some(m) = &manifest {
+        let mut ids: Vec<String> = m.sites.keys().cloned().collect();
+        ids.sort();
+        MANIFEST_IDS.lock().unwrap().insert(m.path.clone(), ids);
+        SEEN_IDS.lock().unwrap().entry(m.path.clone()).or_default().insert(id.clone());
+    }
     let md5 = manifest::file_md5(&file).map_err(&error)?;
     let entry = manifest.as_ref().and_then(|m| m.sites.get(&id).cloned());
     let mut status = match &entry {
@@ -393,15 +475,49 @@ pub(in crate::resolver) fn lower_dynamic_include(
     };
     let is_false = |name: &str| strict_eq(var(name), Expr::new(ExprKind::BoolLiteral(false), span), span);
     out.push(assign(&real_var, realpath(var(&path_var)), span));
-    // A relative path PHP did not find through `include_path` ('.', the cwd) is looked up next to
-    // the including script.
+    // php_resolve_path: an absolute path, or one starting with `./` or `../`, is resolved
+    // against the cwd ONLY. A bare relative path PHP did not find through `include_path`
+    // ('.:', i.e. the cwd) is looked up next to the including script.
     let site_dir = Path::new(site.file)
         .parent()
         .map(|d| d.display().to_string())
         .unwrap_or_default();
+    let starts_with = |prefix: &str| {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::from_parts(NameKind::FullyQualified, vec!["str_starts_with".to_string()]),
+                args: vec![
+                    Expr::new(
+                        ExprKind::Cast {
+                            target: CastType::String,
+                            expr: Box::new(var(&path_var)),
+                        },
+                        span,
+                    ),
+                    lit(prefix),
+                ],
+            },
+            unique_span(span),
+        )
+    };
+    let and = |left: Expr, right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: BinOp::And,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let not = |e: Expr| Expr::new(ExprKind::Not(Box::new(e)), span);
+    let bare_and_missing = and(
+        and(is_false(&real_var), not(starts_with("/"))),
+        and(not(starts_with("./")), not(starts_with("../"))),
+    );
     out.push(Stmt::new(
         StmtKind::If {
-            condition: is_false(&real_var),
+            condition: bare_and_missing,
             then_body: vec![assign(
                 &real_var,
                 realpath(concat(vec![lit(&format!("{}/", site_dir)), var(&path_var)])),
@@ -537,9 +653,10 @@ fn missing_body(path_var: &str, keyword: &str, required: bool, capture: &SiteCap
     let warning = |message: Expr| {
         Stmt::new(
             StmtKind::ExprStmt(Expr::new(
+                // PHP's own `E_WARNING` (errno 2), which `trigger_error()` cannot raise.
                 ExprKind::FunctionCall {
-                    name: Name::from_parts(NameKind::FullyQualified, vec!["trigger_error".to_string()]),
-                    args: vec![message, Expr::new(ExprKind::ConstRef(Name::from_parts(NameKind::FullyQualified, vec!["E_USER_WARNING".to_string()])), span)],
+                    name: Name::from_parts(NameKind::FullyQualified, vec!["__elephc_include_warning".to_string()]),
+                    args: vec![message],
                 },
                 unique_span(span),
             )),

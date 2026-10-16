@@ -530,10 +530,53 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     timings.record_since("autoload-run", phase_started);
     // `--dynamic-includes=report` wants the inventory, not a binary: every file the program can
     // reach has been resolved by now (autoloaded classes included).
+    // `elephc.includes.toml` entries no site matched: stale/misspelled when their file is
+    // compiled (an error), another entry point's when it is not (a warning).
+    let program_files: HashSet<std::path::PathBuf> = std::iter::once(
+        Path::new(filename).canonicalize().unwrap_or_else(|_| Path::new(filename).to_path_buf()),
+    )
+    .chain(opcache_included_files.iter().cloned())
+    .chain(opcache_autoloaded_files.iter().cloned())
+    .collect();
+    let orphans = resolver::dynamic_include_orphan_entries(&program_files);
+    let describe = |entries: &[(std::path::PathBuf, String)]| {
+        entries
+            .iter()
+            .map(|(path, id)| format!("{} ({})", id, path.display()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if resolver::dynamic_include_report_mode() {
         crate::progress::clear();
         print_dynamic_include_report();
+        for (label, entries) in [("STALE (file compiled, no such site)", &orphans.stale), ("unreached (file not in this program)", &orphans.unreached)] {
+            if !entries.is_empty() {
+                println!("\n# manifest entries matching no site, {}: {}", label, describe(entries));
+            }
+        }
         process::exit(0);
+    }
+    if !orphans.unreached.is_empty() {
+        errors::report_warning(&errors::CompileWarning::new(
+            Span::new(0, 0),
+            &format!(
+                "include manifest entries for files this program does not compile (another entry point's, or unreachable code): {}",
+                describe(&orphans.unreached)
+            ),
+        ));
+    }
+    if !orphans.stale.is_empty() {
+        crate::progress::clear();
+        errors::report(&errors::CompileError::new(
+            Span::new(0, 0),
+            &format!(
+                "include manifest entries match no include/require site of their (compiled) file \
+                 (stale manifest or misspelled id; fix or remove them, \
+                 `elephc --dynamic-includes=report` lists the real sites): {}",
+                describe(&orphans.stale)
+            ),
+        ));
+        process::exit(1);
     }
 
     // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program

@@ -33,9 +33,18 @@ enum Value {
 }
 
 /// Folds `condition` to a bool when it is a version check the profile decides.
-pub(in crate::resolver) fn fold_version_condition(condition: &Expr, state: &ResolveState) -> Option<bool> {
+///
+/// `shadowed` lists the version names the site's namespace declares itself (functions or
+/// constants); an UNQUALIFIED use of one of them is not folded, because PHP resolves it to the
+/// namespaced declaration, not the global. A fully qualified `\\PHP_VERSION` still folds.
+pub(in crate::resolver) fn fold_version_condition(
+    condition: &Expr,
+    state: &ResolveState,
+    shadowed: &[String],
+) -> Option<bool> {
     let php_version = crate::codegen_support::compile_php_version();
     let profile = Profile {
+        shadowed: shadowed.to_vec(),
         version: php_version.version_string().to_string(),
         version_id: i64::from(php_version.version_id()),
         major: i64::from(php_version.major()),
@@ -49,6 +58,7 @@ pub(in crate::resolver) fn fold_version_condition(condition: &Expr, state: &Reso
 
 /// The version surface of one profile.
 struct Profile {
+    shadowed: Vec<String>,
     version: String,
     version_id: i64,
     major: i64,
@@ -93,7 +103,10 @@ fn eval(expr: &Expr, state: &ResolveState, profile: &Profile, uses_version: &mut
                 }
             }
         }
-        ExprKind::FunctionCall { name, args } if is_global_function(name, "version_compare") => {
+        ExprKind::FunctionCall { name, args }
+            if is_global_function(name, "version_compare")
+                && !(name.is_unqualified() && profile.shadowed.iter().any(|s| s == "version_compare")) =>
+        {
             if args.len() < 2 || args.len() > 3 {
                 return None;
             }
@@ -136,6 +149,9 @@ fn is_global_function(name: &Name, function: &str) -> bool {
 /// The profile value of a version constant.
 fn version_constant(name: &Name, profile: &Profile) -> Option<Value> {
     if !(name.is_unqualified() || name.is_fully_qualified()) || name.parts.len() != 1 {
+        return None;
+    }
+    if name.is_unqualified() && profile.shadowed.iter().any(|s| s == &name.parts[0]) {
         return None;
     }
     match name.parts[0].as_str() {
@@ -515,11 +531,11 @@ mod tests {
             crate::codegen::set_compile_profile(version, false);
             let below = version.version_id() < 80_200;
             for condition in [&lt_float, &compare, &minor, &id] {
-                assert_eq!(fold_version_condition(condition, &state), Some(below), "{:?}", version);
+                assert_eq!(fold_version_condition(condition, &state, &[]), Some(below), "{:?}", version);
             }
         }
         crate::codegen::set_compile_profile(PhpVersion::default(), false);
         // A condition that reads no version constant is not folded.
-        assert_eq!(fold_version_condition(&Expr::new(ExprKind::BoolLiteral(true), Span::dummy()), &state), None);
+        assert_eq!(fold_version_condition(&Expr::new(ExprKind::BoolLiteral(true), Span::dummy()), &state, &[]), None);
     }
 }

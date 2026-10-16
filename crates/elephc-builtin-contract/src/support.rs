@@ -401,7 +401,10 @@ mod tests {
         // Plus the five internal Closure-conversion / Closure-reflection helpers behind
         // `$callback(...)`, `Closure::fromCallable()` and `ReflectionFunction` over a runtime
         // Closure, which AOT code calls directly.
-        assert_eq!(eval_internal, 120);
+        //
+        // Plus `__elephc_include_warning`, emitted only by the resolver's lowering of a
+        // dynamic include closed by `elephc.includes.toml`.
+        assert_eq!(eval_internal, 121);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
@@ -410,7 +413,7 @@ mod tests {
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest,
         // plus the three `__elephc_dynamic_*` `$class::X` desugar targets and the five internal
         // Closure-conversion / Closure-reflection helpers.
-        assert_eq!(aot_registry, 746);
+        assert_eq!(aot_registry, 747); // +1: `__elephc_include_warning`
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -464,8 +467,9 @@ mod tests {
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own; and the three
         // `__elephc_dynamic_*` `$class::X` desugar targets, which ir_lower expands inline; and
-        // the five internal Closure-conversion / Closure-reflection helpers (AOT only).
-        assert_eq!(unsupported, 473);
+        // the five internal Closure-conversion / Closure-reflection helpers (AOT only); and
+        // `__elephc_include_warning` (resolver lowering of dynamic includes, AOT only).
+        assert_eq!(unsupported, 474);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

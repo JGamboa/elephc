@@ -162,8 +162,9 @@ mod tests {
         // `$class::X`, +5 for the internal first-class-callable / Closure reflection helpers
         // (`__elephc_closure_from_callable{,_type_error}`, `__elephc_callable_is_anonymous`,
         // `__elephc_callable_scope_class`, `__elephc_reflection_class_named`), +1 for the
-        // `__elephc_dynamic_property_push` desugar target of `$obj->{$name}[] = $v`.
-        assert_eq!(contracts().len(), 1155 + curl_surface);
+        // `__elephc_dynamic_property_push` desugar target of `$obj->{$name}[] = $v`, +1 for
+        // `__elephc_include_warning`, the E_WARNING of a manifest-closed dynamic include.
+        assert_eq!(contracts().len(), 1156 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

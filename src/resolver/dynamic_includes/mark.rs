@@ -31,7 +31,10 @@ pub(crate) fn mark_include_sites(program: Program, file_path: &Path) -> Program 
     let canonical = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.to_path_buf());
+    let mut declared = Declared::default();
+    declared.scan(&program, "");
     let mut pass = SiteMarkPass {
+        declared,
         file: canonical.display().to_string(),
         namespace: None,
         namespace_stack: Vec::new(),
@@ -72,8 +75,114 @@ pub(super) fn is_literal_shaped(expr: &Expr) -> bool {
     }
 }
 
+/// Version-surface names this module folds (`version_fold`); a namespace declaring one of
+/// them shadows the global for its unqualified uses.
+const VERSION_CONSTANTS: [&str; 5] = [
+    "PHP_VERSION",
+    "PHP_VERSION_ID",
+    "PHP_MAJOR_VERSION",
+    "PHP_MINOR_VERSION",
+    "PHP_RELEASE_VERSION",
+];
+
+/// Namespaced functions and constants this FILE declares (functions lowercased; constants with
+/// a lowercased namespace part, as PHP compares them).
+#[derive(Default)]
+struct Declared {
+    functions: std::collections::HashSet<String>,
+    constants: std::collections::HashSet<String>,
+}
+
+impl Declared {
+    /// Records the declarations of `stmts` (namespace `ns`), descending into blocks and bodies.
+    fn scan(&mut self, stmts: &[crate::parser::ast::Stmt], ns: &str) {
+        use crate::parser::ast::StmtKind;
+        let mut ns = ns.to_string();
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::NamespaceDecl { name } => {
+                    ns = name.as_ref().map(Name::as_canonical).unwrap_or_default();
+                }
+                StmtKind::NamespaceBlock { name, body } => {
+                    let inner = name.as_ref().map(Name::as_canonical).unwrap_or_default();
+                    self.scan(body, &inner);
+                }
+                StmtKind::FunctionDecl { name, body, .. } => {
+                    self.functions.insert(qualified_key(&ns, name).to_ascii_lowercase());
+                    self.scan(body, &ns);
+                }
+                StmtKind::ConstDecl { name, .. } => {
+                    self.constants.insert(qualified_key(&ns, name));
+                }
+                StmtKind::ExprStmt(expr) => {
+                    if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                        if name.parts.len() == 1 && name.parts[0].eq_ignore_ascii_case("define") {
+                            if let Some(ExprKind::StringLiteral(defined)) = args.first().map(|a| &a.kind) {
+                                let defined = defined.trim_start_matches('\\');
+                                let (space, short) = defined.rsplit_once('\\').unwrap_or(("", defined));
+                                self.constants.insert(qualified_key(space, short));
+                            }
+                        }
+                    }
+                }
+                StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                    self.scan(then_body, &ns);
+                    for (_, body) in elseif_clauses {
+                        self.scan(body, &ns);
+                    }
+                    if let Some(body) = else_body {
+                        self.scan(body, &ns);
+                    }
+                }
+                StmtKind::Synthetic(body)
+                | StmtKind::While { body, .. }
+                | StmtKind::DoWhile { body, .. }
+                | StmtKind::For { body, .. }
+                | StmtKind::Foreach { body, .. } => self.scan(body, &ns),
+                StmtKind::Try { try_body, catches, finally_body } => {
+                    self.scan(try_body, &ns);
+                    for clause in catches {
+                        self.scan(&clause.body, &ns);
+                    }
+                    if let Some(body) = finally_body {
+                        self.scan(body, &ns);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The version names an unqualified use inside namespace `ns` does NOT resolve to the
+    /// global for with certainty, comma-separated (empty in the global namespace).
+    fn shadowed_in(&self, ns: &str) -> String {
+        if ns.is_empty() {
+            return String::new();
+        }
+        let mut names: Vec<&str> = VERSION_CONSTANTS
+            .iter()
+            .copied()
+            .filter(|c| self.constants.contains(&qualified_key(ns, c)))
+            .collect();
+        if self.functions.contains(&format!("{}\\version_compare", ns.to_ascii_lowercase())) {
+            names.push("version_compare");
+        }
+        names.join(",")
+    }
+}
+
+/// `ns\name` with the namespace part lowercased (PHP compares it case-insensitively).
+fn qualified_key(ns: &str, name: &str) -> String {
+    if ns.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}\\{}", ns.to_ascii_lowercase(), name)
+    }
+}
+
 /// Lexical scope tracker for the marking walk.
 struct SiteMarkPass {
+    declared: Declared,
     file: String,
     namespace: Option<String>,
     namespace_stack: Vec<Option<String>>,
@@ -127,6 +236,7 @@ impl Pass for SiteMarkPass {
                     lit(scope),
                     Expr::new(ExprKind::IntLiteral(ordinal), path_span),
                     Expr::new(ExprKind::IntLiteral(i64::from(span.line)), path_span),
+                    lit(self.declared.shadowed_in(self.namespace.as_deref().unwrap_or(""))),
                     path,
                 ],
             },

@@ -17,8 +17,14 @@ use super::state::{resolve_constant_ref, ResolveState};
 /// constants tracked in `state`. Returns the human-readable error message when
 /// the expression cannot be folded.
 pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<String, String> {
-    // A dynamic-include site marker folds (or fails) exactly like the path it wraps.
-    let expr = super::dynamic_includes::unwrap_site(expr);
+    // A dynamic-include site marker folds (or fails) exactly like the path it wraps, except
+    // that version names its namespace declares itself are never folded to the global.
+    let shadowed = super::dynamic_includes::shadowed_names(expr);
+    fold_path(super::dynamic_includes::unwrap_site(expr), state, &shadowed)
+}
+
+/// [`fold_include_path`] over an unwrapped path, with the site's shadowed version names.
+fn fold_path(expr: &Expr, state: &ResolveState, shadowed: &[String]) -> Result<String, String> {
     match &expr.kind {
         ExprKind::StringLiteral(s) => Ok(s.clone()),
         ExprKind::BinaryOp {
@@ -26,8 +32,8 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
             op: BinOp::Concat,
             right,
         } => {
-            let l = fold_include_path(left, state)?;
-            let r = fold_include_path(right, state)?;
+            let l = fold_path(left, state, shadowed)?;
+            let r = fold_path(right, state, shadowed)?;
             Ok(l + &r)
         }
         ExprKind::ConstRef(name) => resolve_constant_ref(name, state).ok_or_else(|| {
@@ -44,9 +50,9 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
             condition,
             then_expr,
             else_expr,
-        } => match super::dynamic_includes::version_fold::fold_version_condition(condition, state) {
-            Some(true) => fold_include_path(then_expr, state),
-            Some(false) => fold_include_path(else_expr, state),
+        } => match super::dynamic_includes::version_fold::fold_version_condition(condition, state, shadowed) {
+            Some(true) => fold_path(then_expr, state, shadowed),
+            Some(false) => fold_path(else_expr, state, shadowed),
             None => Err(include_path_error_message(expr)),
         },
         _ => Err(include_path_error_message(expr)),
