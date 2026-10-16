@@ -640,7 +640,7 @@ impl Checker {
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_return_type
@@ -1390,7 +1390,7 @@ impl Checker {
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_static_return_type
@@ -1455,7 +1455,7 @@ impl Checker {
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_instance_return_type
@@ -1578,6 +1578,24 @@ fn method_variadic_tail_needs_iterable(
                     .any(|(param_name, _)| param_name == name)
         )
     })
+}
+
+/// Joins a call site's argument type into a method's untyped variadic element type.
+///
+/// MONOTONE: the stored element only ever widens. `wider_type_syntactic` follows PHP's coercion
+/// order, in which `Str` absorbs every other arm, so on its own it turned a `mixed` element back
+/// into `string` whenever a string argument arrived. `mixed` is exactly what a first-class
+/// callable or callable array promotes the collector to (the descriptor container,
+/// `crate::types::signatures::descriptor_variadic_container`), so the method pass promoted it,
+/// the top-level re-check of a string call site narrowed it again, and the outer fixpoint
+/// alternated between the two until its pass budget ran out (Laravel's
+/// `Illuminate\Http\Request::is(...$patterns)`: thousands of rounds). A `mixed` element holds any
+/// argument already, so it stays.
+fn widen_method_variadic_element(existing: &PhpType, incoming: &PhpType) -> PhpType {
+    if *existing == PhpType::Mixed {
+        return PhpType::Mixed;
+    }
+    wider_type_syntactic(existing, incoming)
 }
 
 /// Returns whether a method signature stores its variadic slot by reference.

@@ -29,6 +29,7 @@ pub(crate) mod clone_override_storage;
 pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
+mod fixpoint_trace;
 mod functions;
 mod generic_bounds;
 mod generic_method;

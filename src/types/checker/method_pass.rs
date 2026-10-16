@@ -108,6 +108,7 @@ impl Checker {
         // no re-inference still stabilizes in one pass.
         self.unify_override_family_returns();
         loop {
+            let pass_started = std::time::Instant::now();
             let classes_before_pass = self.classes.clone();
             let mut pass_errors = Vec::new();
 
@@ -285,6 +286,14 @@ impl Checker {
             // A caller typed through an abstract or overridden method must see the return every
             // override can share before the next pass re-infers from it.
             self.unify_override_family_returns();
+            if super::fixpoint_trace::enabled() {
+                super::fixpoint_trace::report_class_changes(
+                    &format!("method pass (remaining {method_passes_remaining})"),
+                    pass_started.elapsed(),
+                    &classes_before_pass,
+                    &self.classes,
+                );
+            }
             let stabilized = self.classes == classes_before_pass;
             let out_of_passes = method_passes_remaining == 0;
             if stabilized || out_of_passes {
