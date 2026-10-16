@@ -508,6 +508,53 @@ pub(super) fn resolve_expr(
             name: name.clone(),
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
         },
+        // Composite forms whose operands carry names. Without these arms their operands escaped
+        // resolution, so an imported class stayed unqualified: `yield new P` (doctrine/inflector),
+        // `clone new P`, `new $c(new P)` and `$o->{$k} = new P` all reported `Undefined class: P`.
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key
+                .as_ref()
+                .map(|key| Box::new(resolve_expr(key, current_namespace, imports, symbols))),
+            value: value
+                .as_ref()
+                .map(|value| Box::new(resolve_expr(value, current_namespace, imports, symbols))),
+        },
+        ExprKind::YieldFrom(inner) => {
+            ExprKind::YieldFrom(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(resolve_expr(name_expr, current_namespace, imports, symbols)),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
+        ExprKind::NewDynamicObject { class_name, fallback_class, required_parent, args } => {
+            ExprKind::NewDynamicObject {
+                class_name: Box::new(resolve_expr(class_name, current_namespace, imports, symbols)),
+                fallback_class: fallback_class.clone(),
+                required_parent: required_parent.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                    .collect(),
+            }
+        }
+        ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp } => {
+            ExprKind::Assignment {
+                target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+                value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+                result_target: result_target.as_ref().map(|result_target| {
+                    Box::new(resolve_expr(result_target, current_namespace, imports, symbols))
+                }),
+                prelude: resolve_stmt_list(prelude, current_namespace, imports, symbols)
+                    .expect("name resolver bug: assignment prelude resolution failed"),
+                conditional_value_temp: conditional_value_temp.clone(),
+            }
+        }
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)

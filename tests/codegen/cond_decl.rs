@@ -111,3 +111,44 @@ fn test_function_exists_guard_inside_loop_is_not_hoisted() {
     );
     assert!(err.contains("Undefined function: lp"), "{err}");
 }
+
+/// Verifies `use` imports apply inside `yield`, `yield $k =>`, `yield from`, arrow fns and closures
+/// in generators, `clone`, `new $c(...)` arguments, `$o->{$k} = ...` and assignment expressions.
+#[test]
+fn test_use_imports_resolve_inside_yield_and_composite_expressions() {
+    let out = compile_and_run(r#"<?php
+// C2: los imports `use` no se aplicaban dentro de yield (doctrine/inflector), clone, new $c(...),
+// asignaciones en expresión ni $o->{$k} = ...
+namespace A\R { class P { public function __construct(public $s) {} } }
+namespace A\R\E {
+use A\R\P;
+use A\R\P as Alias;
+class I {
+    public static function g(): iterable { yield new P('x'); yield 'k' => new Alias('y'); }
+    public static function h(): \Generator { yield from [new P('from')]; $gen = self::k(); yield from $gen; }
+    public static function k(): \Generator { yield 'kk' => new Alias('k'); }
+    public static function c(): \Generator { $f = fn ($v) => new P($v); yield $f('arrow'); $g = function () { yield new P('inner'); }; foreach ($g() as $p) { yield $p; } }
+}
+foreach (I::g() as $k => $p) echo $k, '=', $p->s, "\n";
+foreach (I::h() as $p) echo $p->s, "\n";
+foreach (I::c() as $p) echo $p->s, "\n";
+echo (clone new P('clone'))->s, "\n";
+$c = 'A\R\P'; echo (new $c(Alias::class))->s, "\n";
+$o = new \stdClass; $k = 'p'; $o->{$k} = new P('dynprop'); echo $o->p->s, "\n";
+if ($x = new P('assign')) { echo $x->s, "\n"; }
+echo ($y = new Alias('assign-expr'))->s, "\n";
+}
+"#);
+    assert_eq!(out, r#"0=x
+k=y
+from
+k
+arrow
+inner
+clone
+A\R\P
+dynprop
+assign
+assign-expr
+"#);
+}
