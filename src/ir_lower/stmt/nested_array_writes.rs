@@ -50,7 +50,20 @@ pub(super) fn lower_nested_array_assign(
             Some(span),
         );
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        // `__rt_mixed_array_set` takes its OWN reference to the value: a boxed value is
+        // incref'd and a concrete one is boxed by `__rt_mixed_from_value`, which retains
+        // refcounted payloads (strings are copied). An owning temporary that is not a string
+        // (`$c['a']['k'] = f()` returning an array, an object, a Mixed) therefore still held
+        // its producer reference afterwards and leaked one block per write (P48).
+        let parent_is_boxed = ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed;
+        if parent_is_boxed
+            && ctx.value_is_owning_temporary(value)
+            && ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Str
+        {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        } else {
+            release_persisted_string_operand(ctx, value, span);
+        }
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
