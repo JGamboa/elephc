@@ -31,6 +31,7 @@ pub mod __elephc_dynamic_static_property;
 pub mod __elephc_dynamic_property_push;
 pub mod __elephc_dynamic_static_call;
 pub mod __elephc_gmmktime_raw;
+pub mod __elephc_include_warning;
 pub mod __elephc_initialize_pdo_statement;
 pub mod __elephc_invoke_pdo_statement_constructor;
 pub mod __elephc_mktime_raw;

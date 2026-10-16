@@ -17,6 +17,13 @@ use std::path::{Path, PathBuf};
 mod contains;
 mod declarations;
 mod discovery;
+pub(crate) mod dynamic_includes;
+pub use dynamic_includes::{
+    orphan_entries as dynamic_include_orphan_entries,
+    render_report as render_dynamic_include_report, report_mode as dynamic_include_report_mode,
+    set_app_root as set_dynamic_include_app_root, set_manifest_override as set_include_manifest,
+    set_report_mode as set_dynamic_include_report_mode,
+};
 mod engine;
 mod engine_includes;
 mod exprs;

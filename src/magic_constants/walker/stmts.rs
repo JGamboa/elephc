@@ -583,7 +583,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             once,
             required,
         } => StmtKind::Include {
-            path: walk_expr(path, pass),
+            path: {
+                let walked = walk_expr(path, pass);
+                pass.transform_include_path(walked, span)
+            },
             once,
             required,
         },
