@@ -724,7 +724,7 @@ impl Checker {
     /// The same set the parent-chain walk `class is ancestor or one of its subclasses` selects
     /// over the whole table, found from the children index instead: a cycle in the parent
     /// links is cut by the visited set, exactly where the walk's hop limit cut it.
-    fn class_and_descendants(&mut self, ancestor: &str) -> Vec<String> {
+    pub(crate) fn class_and_descendants(&mut self, ancestor: &str) -> Vec<String> {
         let class_count = self.classes.len();
         if self
             .class_children_index
