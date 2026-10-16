@@ -1103,6 +1103,15 @@ pub(crate) fn lower_postfix_incdec_assignment(
                 index: *index,
                 value,
             },
+            // `++self::$rand[$i];` / `static::$n[$k]--;`
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                }
+            }
             _ => StmtKind::NestedArrayAssign {
                 target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
                 value,
