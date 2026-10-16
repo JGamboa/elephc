@@ -165,9 +165,6 @@ pub(super) fn lower_local_parent_fetch_for_write(
     // `$c[$e]['k'] = 'x'` onto key 0 (P48). The key is lowered before the container is loaded,
     // so a key expression that reallocates the container cannot leave a stale pointer behind.
     let syntactic_key_ty = index_expr_key_type(ctx, index);
-    if !matches!(syntactic_key_ty, PhpType::Int | PhpType::Str) {
-        return None;
-    }
     let key = lower_expr(ctx, index);
     let key_class = nested_parent_key_class(ctx, index, key, syntactic_key_ty);
     if assoc_mixed {

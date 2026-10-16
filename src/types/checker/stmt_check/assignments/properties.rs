@@ -275,6 +275,56 @@ pub(super) fn check_property_array_assign(
     }
 }
 
+/// Widens an UNTYPED instance property that is the root of a nested write (`$o->p[$k1][$k2] = v`).
+///
+/// The write autovivifies `$o->p[$k1]` as an array, so the slot must be able to hold Mixed
+/// elements under any key. A concrete inferred array type (`public $listeners = []` infers
+/// `array<never>`) cannot: the nested-write lowering only has a write-through path for boxed
+/// slots, and the copy it fell back to silently dropped the write — Symfony's
+/// `EventDispatcher::addListener` (`$this->listeners[$eventName][$priority][] = $listener`) left
+/// the property empty (P48). The slot is widened to the general PHP array representation that a
+/// declared `array` property already uses; a null-defaulted slot widens to `mixed`, which keeps
+/// the null observable. Declared, hooked or scope-dynamic slots are left alone.
+pub(super) fn widen_property_root_for_nested_write(
+    checker: &mut Checker,
+    object: &Expr,
+    property: &str,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let obj_ty = checker.infer_type(object, env)?;
+    let class_name = match &obj_ty {
+        PhpType::Object(class_name) => class_name.clone(),
+        other => match checker.union_single_object_class(other) {
+            Some(class_name) => class_name,
+            None => return Ok(()),
+        },
+    };
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, &class_name, property) {
+        return Ok(());
+    }
+    let widened = {
+        let Some(class_info) = checker.classes.get(&class_name) else {
+            return Ok(());
+        };
+        if class_info.visible_property_is_declared(property) {
+            return Ok(());
+        }
+        let Some((_, (_, current))) = class_info.visible_property(property) else {
+            return Ok(());
+        };
+        if current.is_php_array() || current.codegen_repr() == PhpType::Mixed {
+            return Ok(());
+        }
+        match current {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
+            PhpType::Void | PhpType::Never => PhpType::Mixed,
+            _ => return Ok(()),
+        }
+    };
+    update_inherited_property_slot_type(checker, &class_name, property, widened);
+    Ok(())
+}
+
 /// Validates a write to a named property of a class instance.
 ///
 /// Checks: property existence, `__set` magic method fallback, dynamic properties (`#[\AllowDynamicProperties]`),

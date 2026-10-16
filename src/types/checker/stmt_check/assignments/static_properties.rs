@@ -238,6 +238,37 @@ pub(super) fn check_static_property_array_assign(
     Ok(())
 }
 
+/// Widens an UNTYPED static property that is the root of a nested write
+/// (`self::$map[$k1][$k2] = v`) to the general PHP array representation, for the same reason as
+/// its instance twin `widen_property_root_for_nested_write`: the inner level autovivifies, so the
+/// slot needs Mixed elements under any key, and only the boxed representation writes through.
+pub(super) fn widen_static_property_root_for_nested_write(
+    checker: &mut Checker,
+    receiver: &StaticReceiver,
+    property: &str,
+    span: Span,
+) -> Result<(), CompileError> {
+    let Ok(target) = resolve_static_property_assignment_target(checker, receiver, property, span)
+    else {
+        // The ordinary inference of the target reports the real error.
+        return Ok(());
+    };
+    if target.dynamic_eval_target
+        || target.property_has_declared_type
+        || target.prop_ty.is_php_array()
+        || target.prop_ty.codegen_repr() == PhpType::Mixed
+    {
+        return Ok(());
+    }
+    let widened = match target.prop_ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        _ => return Ok(()),
+    };
+    update_static_property_type(checker, property, &target.declaring_class, widened);
+    Ok(())
+}
+
 /// Resolves `receiver` to a class name and fetches static property metadata.
 ///
 /// Returns `StaticPropertyAssignmentTarget` with class name, declaring class,

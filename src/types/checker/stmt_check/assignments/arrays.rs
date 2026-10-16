@@ -231,6 +231,21 @@ pub(super) fn check_nested_array_assign(
     };
 
     widen_nested_write_local_root(checker, target, env)?;
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    match &root.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            super::properties::widen_property_root_for_nested_write(checker, object, property, env)?;
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            super::static_properties::widen_static_property_root_for_nested_write(
+                checker, receiver, property, span,
+            )?;
+        }
+        _ => {}
+    }
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
