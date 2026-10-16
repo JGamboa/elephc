@@ -8,6 +8,8 @@
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
@@ -667,10 +669,10 @@ impl Checker {
         arg_types: &[PhpType],
     ) {
         let mut override_impls: Vec<String> = self
-            .classes
-            .iter()
-            .filter(|(name, _)| self.class_descends_from(name, receiver_class))
-            .filter_map(|(_, info)| info.method_impl_classes.get(method_key).cloned())
+            .class_and_descendants(receiver_class)
+            .into_iter()
+            .filter_map(|name| self.classes.get(&name))
+            .filter_map(|info| info.method_impl_classes.get(method_key).cloned())
             .filter(|impl_class| impl_class != receiver_impl_class)
             .collect();
         override_impls.sort();
@@ -717,21 +719,46 @@ impl Checker {
         }
     }
 
-    /// Returns whether `class_name` is `ancestor` or one of its subclasses.
-    fn class_descends_from(&self, class_name: &str, ancestor: &str) -> bool {
-        let mut current = Some(class_name.to_string());
-        let mut hops = 0usize;
-        while let Some(name) = current {
-            if name == ancestor {
-                return true;
+    /// Returns `ancestor` (when it is a registered class) and every registered class below it.
+    ///
+    /// The same set the parent-chain walk `class is ancestor or one of its subclasses` selects
+    /// over the whole table, found from the children index instead: a cycle in the parent
+    /// links is cut by the visited set, exactly where the walk's hop limit cut it.
+    fn class_and_descendants(&mut self, ancestor: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .class_children_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut children: HashMap<String, Vec<String>> = HashMap::new();
+            for (name, info) in &self.classes {
+                if let Some(parent) = &info.parent {
+                    children.entry(parent.clone()).or_default().push(name.clone());
+                }
             }
-            hops += 1;
-            if hops > self.classes.len() {
-                return false;
-            }
-            current = self.classes.get(&name).and_then(|info| info.parent.clone());
+            self.class_children_index = Some((class_count, children));
         }
-        false
+        let children = &self
+            .class_children_index
+            .as_ref()
+            .expect("children index built above")
+            .1;
+        let mut found = Vec::new();
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = vec![ancestor];
+        while let Some(name) = stack.pop() {
+            if !visited.insert(name) {
+                continue;
+            }
+            if self.classes.contains_key(name) {
+                found.push(name.to_string());
+            }
+            if let Some(direct) = children.get(name) {
+                stack.extend(direct.iter().map(String::as_str));
+            }
+        }
+        found
     }
 
     /// Returns preserved late-static return syntax for an instance method.
