@@ -39,6 +39,7 @@ mod eval_undefined_functions;
 mod operators;
 mod dyn_member;
 mod chained_call;
+mod cond_decl;
 mod control_flow;
 mod scalar_strings;
 mod array_basics;
