@@ -54,6 +54,7 @@ mod reference_loop_cleanup;
 mod static_callable_string_owners;
 mod reference_cells;
 mod reference_detach;
+mod reference_alias_promotion;
 mod reference_property_payload;
 mod reference_return_boundaries;
 mod callable_operand_owners;
