@@ -34,6 +34,30 @@ pub(crate) const UNIT_ENUM: &str = "UnitEnum";
 /// Name of PHP's implicit interface for every backed enum.
 pub(crate) const BACKED_ENUM: &str = "BackedEnum";
 const SERIALIZABLE: &str = "Serializable";
+
+/// Whether `name` is `UnitEnum`, `BackedEnum` or an interface extending them (never a class).
+///
+/// Such a receiver has no slot layout of its own, so `ir_lower` and codegen read its
+/// `->name` / `->value` through runtime (mixed) property dispatch on the actual enum class.
+pub(crate) fn is_enum_contract_interface(
+    interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+    name: &str,
+) -> bool {
+    let mut stack = vec![name.trim_start_matches('\\').to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current) = stack.pop() {
+        if current == UNIT_ENUM {
+            return true;
+        }
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(info) = interfaces.get(&current) {
+            stack.extend(info.parents.iter().cloned());
+        }
+    }
+    false
+}
 const SESSION_HANDLER_INTERFACE: &str = "SessionHandlerInterface";
 
 /// Registers `UnitEnum`, `BackedEnum`, `Serializable` and `SessionHandlerInterface`.

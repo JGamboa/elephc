@@ -152,3 +152,44 @@ assign
 assign-expr
 "#);
 }
+
+/// Verifies `UnitEnum`/`BackedEnum` as types: `instanceof`, parameter types (also nullable, in
+/// unions and through a derived interface), `->name`/`->value` dispatched on the runtime enum,
+/// and `cases()`/`from()`/`tryFrom()` called through the interface.
+#[test]
+fn test_unit_and_backed_enum_interfaces_as_types() {
+    let out = compile_and_run(r#"<?php
+// C3: UnitEnum/BackedEnum como tipo: instanceof, type hints, ->name/->value y cases/from/tryFrom vía interfaz.
+namespace League\Uri;
+use BackedEnum;
+use UnitEnum;
+enum S: string { case A = 'a'; }
+enum T: int { case B = 2; }
+enum U { case C; }
+interface HasLabel extends BackedEnum {}
+enum L: string implements HasLabel { case Q = 'q'; }
+function n(UnitEnum $e): string { return $e->name; }
+function v(BackedEnum $e): string { return (string) $e->value; }
+function host(BackedEnum|string|null $h): string {
+    return match (true) { null === $h => 'null', $h instanceof BackedEnum => (string) $h->value, default => (string) $h };
+}
+function lbl(HasLabel $l): string { return $l->name . '=' . $l->value; }
+function maybe(?UnitEnum $e): string { return $e?->name ?? 'none'; }
+echo n(S::A), n(T::B), n(U::C), ' ', v(S::A), v(T::B), "\n";
+echo host(S::A), host(T::B), host('s'), host(null), ' ', lbl(L::Q), ' ', maybe(U::C), maybe(null), "\n";
+var_dump(S::A instanceof BackedEnum, U::C instanceof BackedEnum, U::C instanceof UnitEnum, L::Q instanceof HasLabel);
+function kinds(UnitEnum $e): string { return count($e::cases()) . ($e instanceof BackedEnum ? $e::from($e->value)->name . ($e::tryFrom('zz') === null ? '-' : '+') : ''); }
+echo kinds(S::A), ' ', kinds(U::C), "\n";
+function raw(UnitEnum $e) { return $e->value; }
+var_dump(raw(T::B));
+"#);
+    assert_eq!(out, r#"ABC a2
+a2snull Q=q Cnone
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+1A- 1
+int(2)
+"#);
+}
