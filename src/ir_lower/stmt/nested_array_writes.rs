@@ -49,7 +49,9 @@ pub(super) fn lower_nested_array_assign(
             effects_lookup::runtime_effects(),
             Some(span),
         );
-        release_persisted_string_operand(ctx, key, span);
+        // The set helper normalizes the key without keeping it, so a call/concat key (string or
+        // boxed) is dead now.
+        release_nested_parent_key(ctx, key, span);
         // `__rt_mixed_array_set` takes its OWN reference to the value: a boxed value is
         // incref'd and a concrete one is boxed by `__rt_mixed_from_value`, which retains
         // refcounted payloads (strings are copied). An owning temporary that is not a string
