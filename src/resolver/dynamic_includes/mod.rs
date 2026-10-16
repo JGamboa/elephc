@@ -388,7 +388,7 @@ pub(in crate::resolver) fn lower_dynamic_include(
                 name: Name::from_parts(NameKind::FullyQualified, vec!["realpath".to_string()]),
                 args: vec![arg],
             },
-            span,
+            unique_span(span),
         )
     };
     let is_false = |name: &str| strict_eq(var(name), Expr::new(ExprKind::BoolLiteral(false), span), span);
@@ -487,14 +487,8 @@ pub(super) fn denied_value_replacement(site: &Site<'_>, once: bool, required: bo
         record(site, &resolved.id, &md5_and_status);
     }
     Some(Expr::new(
-        ExprKind::Throw(Box::new(Expr::new(
-            ExprKind::NewObject {
-                class_name: Name::from_parts(NameKind::FullyQualified, vec!["Error".to_string()]),
-                args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
-            },
-            span,
-        ))),
-        span,
+        ExprKind::Throw(Box::new(new_error(Expr::new(ExprKind::StringLiteral(message), span), span))),
+        unique_span(span),
     ))
 }
 
@@ -547,7 +541,7 @@ fn missing_body(path_var: &str, keyword: &str, required: bool, capture: &SiteCap
                     name: Name::from_parts(NameKind::FullyQualified, vec!["trigger_error".to_string()]),
                     args: vec![message, Expr::new(ExprKind::ConstRef(Name::from_parts(NameKind::FullyQualified, vec!["E_USER_WARNING".to_string()])), span)],
                 },
-                span,
+                unique_span(span),
             )),
             span,
         )
@@ -621,14 +615,25 @@ fn concat(mut parts: Vec<Expr>) -> Expr {
 
 /// `throw new \Error(<message>);`
 fn throw_error(message: Expr, span: Span) -> Stmt {
-    Stmt::new(
-        StmtKind::Throw(Expr::new(
-            ExprKind::NewObject {
-                class_name: Name::from_parts(NameKind::FullyQualified, vec!["Error".to_string()]),
-                args: vec![message],
-            },
-            span,
-        )),
-        span,
+    Stmt::new(StmtKind::Throw(new_error(message, span)), span)
+}
+
+/// `new \Error(<message>)`.
+fn new_error(message: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::from_parts(NameKind::FullyQualified, vec!["Error".to_string()]),
+            args: vec![message],
+        },
+        unique_span(span),
     )
+}
+
+/// A span at the site's position but with its own synthetic source identity.
+///
+/// The checker keys per-call facts by span (`builtin_call_types`, `throw_access_sites`), and
+/// every node this module synthesizes would otherwise share the site's span: `realpath()` then
+/// took `trigger_error()`'s result type and its string was read back as an integer (MEASURED).
+fn unique_span(span: Span) -> Span {
+    Span::new_in_source(span.line, span.col, Span::fresh_synthetic_source_id())
 }
