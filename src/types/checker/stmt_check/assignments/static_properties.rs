@@ -155,6 +155,37 @@ pub(super) fn check_static_property_array_assign(
             return Ok(());
         }
     }
+    // An UNTYPED static array written through a key that is not statically an int
+    // (`self::$cache[$path] = ...`, `static::$map['k'] = ...`): the indexed `array_set` below
+    // would coerce the key to int and silently store `[1]` instead of `{"a":1}`, and a
+    // hash-typed slot has no direct static write. Widen the slot to the general PHP array
+    // representation, whose runtime write path keeps string keys (the one a declared `array`
+    // property already uses).
+    if !target.property_has_declared_type
+        && normalized_idx_ty != PhpType::Int
+        && is_php_array_key_or_mixed(&normalized_idx_ty)
+        && matches!(target.prop_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        update_static_property_type(
+            checker,
+            property,
+            &target.declaring_class,
+            PhpType::php_array(),
+        );
+        return Ok(());
+    }
+    if !target.property_has_declared_type
+        && normalized_idx_ty == PhpType::Int
+        && matches!(target.prop_ty, PhpType::AssocArray { .. })
+    {
+        update_static_property_type(
+            checker,
+            property,
+            &target.declaring_class,
+            PhpType::php_array(),
+        );
+        return Ok(());
+    }
     // See `is_php_array_key_type` in the property path: a boxed index has no `array_set`
     // lowering — `array_set index PHP type Mixed`, which is what a genuinely `mixed` index gets
     // here too — so accepting `int|float` would only move the refusal into the backend and lose
@@ -320,6 +351,11 @@ fn resolve_static_property_assignment_target(
         prop_ty,
         dynamic_eval_target: false,
     })
+}
+
+/// Returns true for a key type a PHP array write accepts (`int`, `string`, or `mixed`).
+fn is_php_array_key_or_mixed(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
 }
 
 /// Returns true when a dynamic eval static-property key can be handled by runtime array writes.
