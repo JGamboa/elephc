@@ -70,7 +70,12 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.comment("--- runtime: file_put_contents (with PHP $flags) ---");
     emitter.label_global("__rt_file_put_contents_flagged");
     emitter.instruction("mov x6, #0");                                          // PHP-visible calls warn when the open fails
-    emitter.label("__rt_fpc_body");
+    emitter.instruction("b __rt_fpc_body");                                     // share the body (cross-atom safe: global target)
+
+    // The body label is GLOBAL: on Mach-O each global symbol starts its own atom, and a
+    // branch to a local label in another atom carries no relocation, so dead-strip could
+    // drop a body only the quiet entry referenced.
+    emitter.label_global("__rt_fpc_body");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
@@ -216,7 +221,8 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: file_put_contents (with PHP $flags) ---");
     emitter.label_global("__rt_file_put_contents_flagged");
     emitter.instruction("xor r9d, r9d");                                        // PHP-visible calls warn when the open fails
-    emitter.label("__rt_fpc_body_linux_x86_64");
+    emitter.instruction("jmp __rt_fpc_body_linux_x86_64");                      // share the body (global target, safe under section GC)
+    emitter.label_global("__rt_fpc_body_linux_x86_64");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file_put_contents uses stack locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for saved pointers and lengths
@@ -400,6 +406,32 @@ mod tests {
                 label,
                 target.arch
             );
+        }
+    }
+    /// A failed open() must never reach write(): on Darwin the svc leaves the errno in x0 with
+    /// the carry set, and ENOENT (2) is stderr's descriptor, so the payload went to stderr
+    /// (P41, php-src bug75679.phpt). Every target tests the open result before anything else.
+    #[test]
+    fn test_every_target_tests_the_open_result_before_writing() {
+        for (target, open_call, guard) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "svc #0x80", "b.cc __rt_fpc_opened"),
+            (Target::new(Platform::Linux, Arch::AArch64), "svc #0", "b.ge __rt_fpc_opened"),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "call open",
+                "js __rt_fpc_open_failed_linux_x86_64",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_file_put_contents(&mut emitter);
+            let asm = emitter.output();
+            let open_at = asm.find(open_call).expect("the writer opens the destination");
+            let after_open = &asm[open_at..];
+            let guard_at = after_open
+                .find(guard)
+                .unwrap_or_else(|| panic!("{:?}: no open-failure guard in:\n{}", target.arch, after_open));
+            let first_lock = after_open.find("__rt_flock").unwrap_or(usize::MAX);
+            assert!(guard_at < first_lock, "{:?}: the guard must precede the lock and the write", target.arch);
         }
     }
 }

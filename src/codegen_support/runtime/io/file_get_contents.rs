@@ -43,12 +43,16 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents ---");
+    // Every entry branches to a GLOBAL body label: on Mach-O each global symbol starts its own
+    // atom, and a branch to a local label in another atom carries no relocation, so the
+    // linker's dead-strip dropped the body when only the quiet entry was referenced.
     emitter.label_global("__rt_file_get_contents_quiet");
     emitter.instruction("mov x3, #1");                                          // internal callers (copy()) report their own failure
     emitter.instruction("b __rt_file_get_contents_body");                       // share the PHP-visible body
     emitter.label_global("__rt_file_get_contents");
     emitter.instruction("mov x3, #0");                                          // PHP-visible calls warn when the open fails
-    emitter.label("__rt_file_get_contents_body");
+    emitter.instruction("b __rt_file_get_contents_body");                       // share the body (cross-atom safe: global target)
+    emitter.label_global("__rt_file_get_contents_body");
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + locals + frame
@@ -162,7 +166,8 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_file_get_contents_body_x86");                 // share the PHP-visible body
     emitter.label_global("__rt_file_get_contents");
     emitter.instruction("xor r9d, r9d");                                        // PHP-visible calls warn when the open fails
-    emitter.label("__rt_file_get_contents_body_x86");
+    emitter.instruction("jmp __rt_file_get_contents_body_x86");                 // share the body (global target, safe under section GC)
+    emitter.label_global("__rt_file_get_contents_body_x86");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file_get_contents uses stat and I/O spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary path, size, fd, and heap pointer slots
