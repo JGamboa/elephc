@@ -42,6 +42,22 @@ pub(crate) fn mark_include_sites(program: Program, file_path: &Path) -> Program 
     walk_program(program, &mut pass)
 }
 
+/// `stmts` with every site marker removed (each path back to what the source wrote), for
+/// comparisons that must not see the site identity: `spl_autoload_unregister` matches a closure
+/// against the one registered earlier, whose includes carry other ordinals and lines.
+pub(crate) fn strip_include_sites(stmts: Vec<crate::parser::ast::Stmt>) -> Vec<crate::parser::ast::Stmt> {
+    struct Strip;
+    impl Pass for Strip {
+        fn transform_magic(&self, _span: Span, mc: MagicConstant) -> ExprKind {
+            ExprKind::MagicConstant(mc)
+        }
+        fn transform_include_path(&mut self, path: Expr, _span: Span) -> Expr {
+            super::unwrap_site(&path).clone()
+        }
+    }
+    walk_program(stmts, &mut Strip)
+}
+
 /// Whether a path is built only from literals, concatenation and constant references: the
 /// shapes `fold_include_path` folds without any further knowledge.
 pub(super) fn is_literal_shaped(expr: &Expr) -> bool {
