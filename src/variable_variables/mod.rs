@@ -35,6 +35,7 @@ mod respan;
 mod rewrite;
 mod scan;
 mod scope;
+pub(crate) mod static_props;
 mod walk;
 
 use crate::errors::CompileError;
@@ -147,9 +148,13 @@ pub(crate) fn is_identifier_name(name: &str) -> bool {
 pub fn desugar(program: Program) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
         let mut program = program;
+        let (static_box, static_errors) = static_props::desugar(&mut program);
+        if !static_errors.is_empty() {
+            return Err(CompileError::from_many(static_errors));
+        }
         let mut rewriter = rewrite::Rewriter::new();
         let rewritten = rewriter.run_top_level(&mut program);
-        if rewriter.used_box {
+        if rewriter.used_box || static_box {
             program.insert(0, box_helper_decl());
         }
         let mut errors = rewriter.into_errors();

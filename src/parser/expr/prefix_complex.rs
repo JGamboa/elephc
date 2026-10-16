@@ -842,6 +842,15 @@ pub(super) fn parse_named_expr(
                     span,
                 ));
             }
+            // `Foo::$$name` / `Foo::${expr}`: a static property named at run time.
+            Some(Token::Dollar) => {
+                return crate::parser::variable_variables::parse_dynamic_static_property(
+                    tokens,
+                    pos,
+                    span,
+                    receiver.clone(),
+                );
+            }
             // `C::{'is' . $kind}(args)`: a computed method name.
             Some(Token::LBrace) => {
                 let method = super::calls::parse_braced_member_name(tokens, pos, span)?;

@@ -62,6 +62,12 @@ pub(super) fn parse_scoped_static_call(
             *pos += 1;
             return Ok(Expr::new(ExprKind::ClassConstant { receiver }, span));
         }
+        // `self::$$name` / `static::${'x' . $y}`: a static property named at run time.
+        Some(Token::Dollar) => {
+            return crate::parser::variable_variables::parse_dynamic_static_property(
+                tokens, pos, span, receiver,
+            );
+        }
         // PHP 8 allows semi-reserved keywords as static method / class-constant names
         // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.
         Some(t)
