@@ -39,6 +39,7 @@ mod eval_undefined_functions;
 mod operators;
 mod dyn_member;
 mod static_member;
+mod static_ref;
 mod chained_call;
 mod checker_converge;
 mod cond_decl;

@@ -477,6 +477,7 @@ pub(super) fn check_types_impl(
     let (final_global_env, final_top_level_errors) = loop {
         let classes_before = checker.classes.clone();
         let functions_before = checker.functions.clone();
+        let statics_before = checker.static_local_declared_types.clone();
         checker.recheck_resolved_function_bodies();
         checker.widen_dynamic_only_passthrough_returns();
         let outcome = checker.check_top_level_program(program);
@@ -493,8 +494,9 @@ pub(super) fn check_types_impl(
                 &checker.functions,
             );
         }
-        let stabilized =
-            checker.classes == classes_before && checker.functions == functions_before;
+        let stabilized = checker.classes == classes_before
+            && checker.functions == functions_before
+            && checker.static_local_declared_types == statics_before;
         if stabilized || final_rounds_remaining == 0 {
             break outcome;
         }

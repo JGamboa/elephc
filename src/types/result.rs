@@ -119,6 +119,10 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// The declared type the checker settled on for each written `static $x = [<array>];` local,
+    /// keyed by `(function-like scope, local name)`: the literal's own type while every write
+    /// keeps it, boxed PHP `array` otherwise (see `Checker::decide_written_static_type`).
+    pub static_local_declared_types: HashMap<(String, String), PhpType>,
     /// Locals that may be undefined where they are read (see [`MaybeUndefinedLocals`]).
     pub maybe_undefined: MaybeUndefinedLocals,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local

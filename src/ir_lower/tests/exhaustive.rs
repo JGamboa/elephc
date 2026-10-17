@@ -153,6 +153,7 @@ fn dummy_check_result() -> CheckResult {
         loop_storage_types: HashMap::new(),
         maybe_undefined: Default::default(),
         string_incdec_locals: Default::default(),
+        static_local_declared_types: Default::default(),
         local_bind_kill_sites: Default::default(),
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),

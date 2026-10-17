@@ -1680,7 +1680,7 @@ fn test_ref_aliased_local_can_detach_and_rebind() {
 /// Static locals are never killable.
 #[test]
 fn test_static_local_not_killable() {
-    expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "cannot reassign");
+    expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "unset() of the static local $a");
 }
 
 /// Global-bound locals are never killable.

@@ -54,14 +54,12 @@ pub(super) static HOIST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// rewritten statement, which reads the temporaries and keeps any conditionally evaluated
 /// include as a statement expression.
 ///
-/// `static_locals` names the function's `static $x;` locals seen so far. A conditional hoist
-/// leaves a value the checker types `mixed` (see `Hoister::hoist_conditional`), and elephc does
-/// not persist a `mixed` store into an untyped `static` local (MEASURED on elephc principal:
-/// `static $q; if ($c) { $t = 5; } $q = $t;` reads `null` again on the next call), so
-/// `static $p; $p ??= require F;` is refused instead of re-including on every call.
+/// A `static $x;` local assigned a conditional hoist (`static $p; $p ??= require F;`) needs no
+/// special case: an uninformative static initializer gives the local boxed `Mixed` storage (see
+/// `static_local_declared_type`), so the `mixed` value the hoist leaves persists across calls and
+/// the include runs only while the static is still null.
 pub(super) fn hoist_value_includes(
     stmt: &Stmt,
-    static_locals: &HashSet<String>,
 ) -> Result<Option<(Vec<Stmt>, Stmt)>, CompileError> {
     if !stmt_head_has_includes(stmt) {
         return Ok(None);
@@ -92,17 +90,6 @@ pub(super) fn hoist_value_includes(
     hoister.walk_stmt(&mut rewritten.kind, stmt.span)?;
     if hoister.hoisted.is_empty() {
         return Ok(None);
-    }
-    if let StmtKind::Assign { name, .. } = &stmt.kind {
-        if hoister.hoisted_conditional && static_locals.contains(name) {
-            return Err(CompileError::new(
-                stmt.span,
-                &format!(
-                    "include/require in a conditional operand assigned to `static ${name}` is \
-                     not supported yet; assign the include to a plain local inside an `if` first"
-                ),
-            ));
-        }
     }
     Ok(Some((hoister.hoisted, rewritten)))
 }

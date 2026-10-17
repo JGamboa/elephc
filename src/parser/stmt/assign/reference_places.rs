@@ -348,8 +348,18 @@ pub(crate) fn parse_new_element_source(
 pub(crate) fn is_reference_place(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. } => true,
-        ExprKind::ArrayAccess { array, .. } => is_reference_container(array),
+        ExprKind::ArrayAccess { array, .. } => is_element_place_container(array),
         _ => false,
+    }
+}
+
+/// Returns whether `expr` can hold an EXISTING element reference place: any reference container,
+/// or a static property at its root (`self::$c[$d] = &self::$c[$k]`, symfony DebugClassLoader).
+fn is_element_place_container(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => is_element_place_container(array),
+        _ => is_reference_container(expr),
     }
 }
 

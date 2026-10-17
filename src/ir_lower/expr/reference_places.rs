@@ -285,6 +285,26 @@ pub(super) fn param_escapes_by_reference(name: &str, index: usize) -> bool {
     ESCAPING_REF_PARAMS.with(|cell| cell.borrow().contains(&(name.to_string(), index)))
 }
 
+thread_local! {
+    /// The checker's `static_local_declared_types` for the current lowering run.
+    static STATIC_LOCAL_DECLARED_TYPES: std::cell::RefCell<
+        std::collections::HashMap<(String, String), PhpType>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Installs the declared types the checker settled on for written array `static` locals.
+pub(crate) fn install_static_local_declared_types(
+    types: &std::collections::HashMap<(String, String), PhpType>,
+) {
+    STATIC_LOCAL_DECLARED_TYPES.with(|cell| *cell.borrow_mut() = types.clone());
+}
+
+/// The checker's declared type for the written array `static $name` in `scope`, if any.
+pub(crate) fn static_local_declared_type_for(scope: &str, name: &str) -> Option<PhpType> {
+    STATIC_LOCAL_DECLARED_TYPES
+        .with(|cell| cell.borrow().get(&(scope.to_string(), name.to_string())).cloned())
+}
+
 /// Whether `name` is one of PHP's superglobals, which elephc keeps in program-global storage.
 fn is_superglobal_name(name: &str) -> bool {
     matches!(

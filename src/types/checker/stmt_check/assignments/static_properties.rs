@@ -384,6 +384,102 @@ fn resolve_static_property_assignment_target(
     })
 }
 
+/// Widens an UNTYPED static array property whose element is bound by reference (`$r = &C::$p[$k]`,
+/// `C::$p[$a] = &C::$p[$b]`, `unset` through the same addressable chain) to the general PHP array
+/// representation. The reference path reaches the static slot through a boxed cell, exactly like a
+/// declared `array` property; a raw packed or hash slot would be reinterpreted as that box.
+pub(super) fn widen_referenced_untyped_static_property(
+    checker: &mut Checker,
+    receiver: &StaticReceiver,
+    property: &str,
+    span: Span,
+    widen_null_default: bool,
+) -> Result<(), CompileError> {
+    let Ok(target) = resolve_static_property_assignment_target(checker, receiver, property, span) else {
+        return Ok(());
+    };
+    if target.dynamic_eval_target {
+        return Ok(());
+    }
+    widen_one_referenced_static_property(checker, &target, property, widen_null_default);
+    // `static::$p[..]` resolves to the CALLED class at run time, so every subclass that
+    // redeclares the property is a possible slot too (review P52 H2). Each must take the same
+    // boxed representation, or the reference/unset reads a raw layout as a box and crashes.
+    if matches!(receiver.written_class_receiver(), StaticReceiver::Static) {
+        let base = target.class_name.clone();
+        let subclasses: Vec<String> = checker
+            .classes
+            .keys()
+            .filter(|class| crate::types::class_inherits_from(&checker.classes, class, &base))
+            .cloned()
+            .collect();
+        for class in subclasses {
+            let declared_here = checker
+                .classes
+                .get(&class)
+                .and_then(|info| info.static_property_declaring_classes.get(property))
+                .is_some_and(|declaring| declaring == &class);
+            if !declared_here {
+                continue;
+            }
+            let named = StaticReceiver::Named(crate::names::Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                vec![class.clone()],
+            ));
+            let Ok(redeclared) = resolve_static_property_assignment_target(checker, &named, property, span) else {
+                continue;
+            };
+            if redeclared.property_has_declared_type {
+                let repr = redeclared.prop_ty.codegen_repr();
+                if !(redeclared.prop_ty.is_php_array() || repr == PhpType::Mixed) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "A reference to or unset of an element of `static::${property}` is not \
+                             supported here: subclass {class} redeclares the property with a type \
+                             whose storage is not a boxed array"
+                        ),
+                    ));
+                }
+                continue;
+            }
+            if !widen_one_referenced_static_property(checker, &redeclared, property, widen_null_default)
+                && redeclared.prop_ty.codegen_repr() != PhpType::Mixed
+                && !redeclared.prop_ty.is_php_array()
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "A reference to or unset of an element of `static::${property}` is not \
+                         supported here: subclass {class} redeclares the property with a \
+                         non-array default"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Widens one untyped static property slot to boxed `array`; returns whether it was array-like.
+fn widen_one_referenced_static_property(
+    checker: &mut Checker,
+    target: &StaticPropertyAssignmentTarget,
+    property: &str,
+    widen_null_default: bool,
+) -> bool {
+    if target.property_has_declared_type {
+        return false;
+    }
+    let array_like = matches!(target.prop_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let null_default = matches!(target.prop_ty, PhpType::Void | PhpType::Never);
+    if array_like || (widen_null_default && null_default) {
+        update_static_property_type(checker, property, &target.declaring_class, PhpType::php_array());
+        return true;
+    }
+    false
+}
+
 /// Returns true for a key type a PHP array write accepts (`int`, `string`, or `mixed`).
 fn is_php_array_key_or_mixed(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)

@@ -19,6 +19,7 @@ mod effect_refinement;
 mod effects_lookup;
 mod entry_locals;
 mod expr;
+pub(crate) use expr::written_static_locals;
 mod fibers;
 mod function;
 pub(crate) mod maybe_undefined;

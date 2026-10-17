@@ -432,6 +432,19 @@ impl Checker {
                 // Recorded before the iterable is inferred so an iterable that fails to type is
                 // still treated as aliased.
                 if *value_by_ref {
+                    // A `static` local's elements live in the function's static symbol, which
+                    // the by-reference loop cannot republish into: the writes were dropped.
+                    if let ExprKind::Variable(name) = &array.kind {
+                        if self.active_statics.contains(name) {
+                            return Err(CompileError::new(
+                                array.span,
+                                &format!(
+                                    "foreach by reference over the static local ${name} is not \
+                                     supported yet; iterate a plain local copy and assign it back"
+                                ),
+                            ));
+                        }
+                    }
                     self.record_reference_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
                 }

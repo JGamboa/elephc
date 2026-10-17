@@ -426,6 +426,223 @@ pub(super) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 
+/// How a function-like body writes each `static` local it declares (at any block depth), for
+/// the locals it writes after their declaration: `true` when every write is a plain value store
+/// (`$s = v`, `$s[k] = v`, `$s[] = v`, `$s[a][b] = v`, and the nested-append desugar), `false`
+/// when any write is something else (an increment, a reference, a by-reference call, a closure
+/// capture...). The declaration's own binding is not a write. Anything this walk cannot rule out
+/// is a write, exactly as for `body_writes_local`.
+pub(crate) fn written_static_locals(body: &[Stmt]) -> std::collections::HashMap<String, bool> {
+    let mut names = Vec::new();
+    collect_static_var_names(body, &mut names);
+    let mut result = std::collections::HashMap::new();
+    for name in names {
+        let mut usage = StaticWrites::default();
+        classify_static_writes(body, &name, &mut usage);
+        if usage.written || usage.other {
+            result.insert(name, !usage.other);
+        }
+    }
+    result
+}
+
+#[derive(Default)]
+struct StaticWrites {
+    written: bool,
+    other: bool,
+}
+
+fn classify_static_writes(body: &[Stmt], name: &str, usage: &mut StaticWrites) {
+    for stmt in body {
+        classify_static_write(stmt, name, usage);
+    }
+}
+
+fn classify_static_write(stmt: &Stmt, name: &str, usage: &mut StaticWrites) {
+    let expr_other = |expr: &Expr, usage: &mut StaticWrites| {
+        if expr_writes_local(expr, name) {
+            usage.other = true;
+        }
+    };
+    match &stmt.kind {
+        StmtKind::StaticVar { init, .. } => expr_other(init, usage),
+        StmtKind::Assign { name: target, value } => {
+            usage.written |= target == name;
+            expr_other(value, usage);
+        }
+        StmtKind::ArrayAssign { array, index, value } => {
+            usage.written |= array == name;
+            expr_other(index, usage);
+            expr_other(value, usage);
+        }
+        StmtKind::ArrayPush { array, value } => {
+            usage.written |= array == name;
+            expr_other(value, usage);
+        }
+        // A direct nested store (`$s[a][b] = v`, `$s[a][b]++`) needs a boxed container: on a
+        // concretely typed static the checker refuses it ("Nested array assignment requires a
+        // Mixed or ArrayAccess target"), so it is not a plain value store here.
+        StmtKind::NestedArrayAssign { target, value } => {
+            if element_root_is(target, name) {
+                usage.other = true;
+            }
+            expr_other(target, usage);
+            expr_other(value, usage);
+        }
+        // `$r = &$s[k]` binds an element cell, which widens the container in lowering.
+        StmtKind::RefAssign { target, source } => {
+            if target == name || element_root_is(source, name) {
+                usage.other = true;
+            }
+            expr_other(source, usage);
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            if element_root_is(target, name) || element_root_is(source, name) {
+                usage.other = true;
+            }
+            expr_other(target, usage);
+            expr_other(source, usage);
+        }
+        StmtKind::Synthetic(body) => classify_static_writes(body, name, usage),
+        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+            expr_other(condition, usage);
+            classify_static_writes(then_body, name, usage);
+            for (condition, clause) in elseif_clauses {
+                expr_other(condition, usage);
+                classify_static_writes(clause, name, usage);
+            }
+            if let Some(else_body) = else_body {
+                classify_static_writes(else_body, name, usage);
+            }
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            expr_other(condition, usage);
+            classify_static_writes(body, name, usage);
+        }
+        StmtKind::For { init, condition, update, body } => {
+            if let Some(init) = init {
+                classify_static_write(init, name, usage);
+            }
+            if let Some(condition) = condition {
+                expr_other(condition, usage);
+            }
+            if let Some(update) = update {
+                classify_static_write(update, name, usage);
+            }
+            classify_static_writes(body, name, usage);
+        }
+        StmtKind::Foreach { array, key_var, value_var, value_by_ref, body } => {
+            if value_var == name
+                || key_var.as_deref() == Some(name)
+                || (*value_by_ref && element_root_is(array, name))
+            {
+                usage.other = true;
+            }
+            expr_other(array, usage);
+            classify_static_writes(body, name, usage);
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            expr_other(subject, usage);
+            for (labels, case_body) in cases {
+                for label in labels {
+                    expr_other(label, usage);
+                }
+                classify_static_writes(case_body, name, usage);
+            }
+            if let Some(default) = default {
+                classify_static_writes(default, name, usage);
+            }
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            classify_static_writes(try_body, name, usage);
+            for catch in catches {
+                if catch.variable.as_deref() == Some(name) {
+                    usage.other = true;
+                }
+                classify_static_writes(&catch.body, name, usage);
+            }
+            if let Some(finally_body) = finally_body {
+                classify_static_writes(finally_body, name, usage);
+            }
+        }
+        _ => {
+            if stmt_writes_local(stmt, name) || stmt_mentions_nested_write(stmt, name) {
+                usage.other = true;
+            }
+        }
+    }
+}
+
+/// Whether an element chain (`$name[a][b]`) or the bare variable is rooted at `name`.
+fn element_root_is(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(variable) => variable == name,
+        ExprKind::ArrayAccess { array, .. } => element_root_is(array, name),
+        _ => false,
+    }
+}
+
+/// Conservative catch-all for statement kinds the classifier does not model: any nested element
+/// store rooted at `name` inside them counts as a write `stmt_writes_local` might not report.
+fn stmt_mentions_nested_write(stmt: &Stmt, name: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::IfDef { then_body, else_body, .. } => {
+            then_body.iter().chain(else_body.iter().flatten()).any(|stmt| {
+                let mut usage = StaticWrites::default();
+                classify_static_write(stmt, name, &mut usage);
+                usage.written || usage.other
+            })
+        }
+        StmtKind::IncludeOnceGuard { body, .. } => body.iter().any(|stmt| {
+            let mut usage = StaticWrites::default();
+            classify_static_write(stmt, name, &mut usage);
+            usage.written || usage.other
+        }),
+        _ => false,
+    }
+}
+
+/// Collects `static $x` names through the ordinary block statements of a body.
+fn collect_static_var_names(body: &[Stmt], out: &mut Vec<String>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::StaticVar { name, .. } => out.push(name.clone()),
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_static_var_names(then_body, out);
+                for (_, clause) in elseif_clauses {
+                    collect_static_var_names(clause, out);
+                }
+                if let Some(else_body) = else_body {
+                    collect_static_var_names(else_body, out);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::Synthetic(body) => collect_static_var_names(body, out),
+            StmtKind::Try { try_body, catches, finally_body } => {
+                collect_static_var_names(try_body, out);
+                for catch in catches {
+                    collect_static_var_names(&catch.body, out);
+                }
+                if let Some(finally_body) = finally_body {
+                    collect_static_var_names(finally_body, out);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_static_var_names(case_body, out);
+                }
+                if let Some(default) = default {
+                    collect_static_var_names(default, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Returns true when a statement can store into the local named `name`.
 fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
     match &stmt.kind {
