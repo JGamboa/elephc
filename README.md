@@ -70,6 +70,21 @@ The flagship showcase: a real-time 3D renderer that loads original DOOM WAD file
 
 See [showcases/doom/](showcases/doom/) for full source and build instructions.
 
+## Benchmarks
+
+CI measures native execution against equivalent C and PHP fixtures, plus
+Magician eval and buffer/array workloads. The nightly statistics workflow keeps
+the histories and graphs current. Times exclude compilation and linking.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/assets/native-dark.svg">
+  <img src="benchmark/assets/native-light.svg" alt="Native benchmark execution medians and recent trends" width="1000">
+</picture>
+
+See [benchmark/](benchmark/README.md) for every suite, generated reports,
+measurement methodology, and the interactive dashboard. Shared CI runner
+timings are useful for trends.
+
 ## Why
 
 My first "serious programming" book was *PHP 4 and MySQL*. After years of experimenting with code, that book turned my passion into a profession. I've worked with many languages over the past 20 years, but PHP is the one that has most consistently put food on the table.
@@ -582,7 +597,7 @@ Linked executables are stripped of their symbol table, which is about a quarter 
 elephc --keep-symbols hello.php
 ```
 
-If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking.
+If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking. For a program that uses generics, `--report-generics` instead prints how its monomorphized instantiations are distributed across templates, one line per template.
 
 ### Current optimization passes
 
@@ -673,6 +688,7 @@ src/
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── monitor/             # Exact, sampled, local, remote, service, and export profiling
+├── repl/                # Interactive eval session: parsing, cached native host, and history
 ├── call_graph.rs        # Profiling call-graph aggregation and DOT/HTML rendering
 ├── pprof_encode.rs      # Profiling export in pprof protobuf form
 ├── probe_key.rs         # Monitoring build-key creation and validation
@@ -809,7 +825,7 @@ The **[docs/](docs/)** directory is a complete wiki covering every aspect of the
 
 If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
 
-For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmarks/README.md`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmark/README.md`. For the buffer and array storage comparison, see `benchmark/cases/hot-path/buffer-vs-arrays/`.
 
 ## License
 

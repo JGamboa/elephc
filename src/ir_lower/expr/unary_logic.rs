@@ -47,16 +47,29 @@ pub(super) fn lower_numeric_unary(
     }
 }
 
+/// Returns the PHP type `lower_int_unary` stamps for `~` and the other integer unaries.
+///
+/// An `i64` or tagged scalar is `int`. A float or any other operand is the mixed runtime
+/// call, not an int: `~` does not coerce the way `%` and the bitwise binaries do.
+pub(super) fn int_unary_result_type(ir_type: IrType) -> PhpType {
+    if ir_type == IrType::I64 || ir_type == IrType::TaggedScalar {
+        PhpType::Int
+    } else {
+        PhpType::Mixed
+    }
+}
+
 /// Lowers an integer unary operation.
 pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, op: Op, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    let result_ty = int_unary_result_type(value.ir_type);
     if value.ir_type == IrType::I64 {
-        ctx.emit_value(op, vec![value.value], None, PhpType::Int, op.default_effects(), Some(expr.span))
+        ctx.emit_value(op, vec![value.value], None, result_ty, op.default_effects(), Some(expr.span))
     } else if value.ir_type == IrType::TaggedScalar {
         let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
-        ctx.emit_value(op, vec![narrowed.value], None, PhpType::Int, op.default_effects(), Some(expr.span))
+        ctx.emit_value(op, vec![narrowed.value], None, result_ty, op.default_effects(), Some(expr.span))
     } else {
-        ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span))
+        ctx.emit_value(Op::RuntimeCall, vec![value.value], None, result_ty, Effects::all(), Some(expr.span))
     }
 }
 

@@ -24,10 +24,13 @@ mod constructors;
 mod dispatch;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
+mod report;
+mod shared;
 mod site_scope;
 mod splice;
 pub mod variance;
 
+pub use report::report as instantiation_report;
 pub use splice::{
     instantiation_roots, splice_instantiations, strip_templates, substitute_in_body,
 };
@@ -60,7 +63,7 @@ pub struct GenericContext {
 /// The upper bound on monomorphization rounds.
 ///
 /// A backstop, not the primary defence: polymorphic recursion is caught by
-/// [`MAX_TYPE_ARGUMENT_DEPTH`] at the instantiation that creates it, which can name the type.
+/// [`elephc_generics::MAX_TYPE_ARGUMENT_DEPTH`] at the instantiation that creates it, which can name the type.
 /// Exceeding this bound means something grew that depth did not describe, so it is an ERROR —
 /// compiling on regardless would emit a program missing instantiations its call sites need.
 pub const MAX_INSTANTIATION_ROUNDS: usize = 16;
@@ -277,7 +280,7 @@ pub enum InferError {
     },
     /// The inferred type has no source spelling, so the template cannot be rewritten for it.
     Unspellable { param: String, ty: String },
-    /// The type argument is nested deeper than [`MAX_TYPE_ARGUMENT_DEPTH`].
+    /// The type argument is nested deeper than [`elephc_generics::MAX_TYPE_ARGUMENT_DEPTH`].
     ///
     /// This is what polymorphic recursion looks like from the inside: `f<T>()` calling
     /// `f<array<T>>()` instantiates `f<int>`, then `f<array<int>>`, then
@@ -285,28 +288,6 @@ pub enum InferError {
     /// signal because it is what actually grows; the instantiation COUNT does not distinguish
     /// a runaway from a template a program simply uses with many types.
     TooDeep { param: String, ty: String },
-}
-
-/// How deeply a type argument may nest before it is treated as polymorphic recursion.
-///
-/// Eight is far past anything a program writes by hand — `array<array<array<int>>>` is three —
-/// while still terminating a runaway in a handful of rounds.
-pub const MAX_TYPE_ARGUMENT_DEPTH: usize = 8;
-
-/// Returns how deeply `ty` nests, counting the outermost constructor as depth 1.
-fn type_expr_depth(ty: &TypeExpr) -> usize {
-    match ty {
-        TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
-            1 + type_expr_depth(inner)
-        }
-        TypeExpr::AssocArray { key, value } => {
-            1 + type_expr_depth(key).max(type_expr_depth(value))
-        }
-        TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
-            1 + members.iter().map(type_expr_depth).max().unwrap_or(0)
-        }
-        _ => 1,
-    }
 }
 
 /// Infers a type argument for every type parameter from the actual argument types.
@@ -361,32 +342,10 @@ pub fn infer_bindings_with_args(
         }
         unify(&names, declared, actual, &mut bound)?;
     }
-    let mut ordered: Bindings = Vec::with_capacity(type_params.len());
-    for param in type_params {
-        // A default is what an unconstrained parameter falls back to. Without one, nothing
-        // determines the parameter and guessing `mixed` would give up exactly the storage the
-        // annotation exists to pin, so it stays an error.
-        let ty = match bound.iter().find(|(name, _)| name == &param.name) {
-            Some((_, ty)) => ty.clone(),
-            // A default may NAME an earlier type parameter (`<T, U = T>`), which is a type only
-            // once that parameter is bound. `ordered` already holds every parameter declared
-            // before this one — they are filled in declaration order — so substituting through it
-            // turns `U = T` into `U = int` instead of leaving a name nothing downstream resolves.
-            None => param
-                .default
-                .clone()
-                .ok_or_else(|| InferError::Unconstrained(param.name.clone()))?
-                .substitute_type_params(&ordered),
-        };
-        if type_expr_depth(&ty) > MAX_TYPE_ARGUMENT_DEPTH {
-            return Err(InferError::TooDeep {
-                param: param.name.clone(),
-                ty: describe(&ty),
-            });
-        }
-        ordered.push((param.name.clone(), ty));
-    }
-    Ok(ordered)
+    let inferred = bound.iter().map(|(name, ty)| (name.clone(), shared::to_shared(ty))).collect();
+    elephc_generics::finish(&shared::parameters(type_params), &inferred)
+        .map(|bindings| bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect())
+        .map_err(shared::infer_error)
 }
 
 /// Places a call's arguments at the declaration positions they bind to.
@@ -614,53 +573,11 @@ fn unify_type_exprs(
     actual: &TypeExpr,
     bound: &mut Vec<(String, TypeExpr)>,
 ) -> Result<(), InferError> {
-    match declared {
-        TypeExpr::Named(name) if type_params.iter().any(|param| param == name.as_str()) => {
-            let param = name.as_str().to_string();
-            if let Some((_, existing)) = bound.iter().find(|(existing, _)| existing == &param) {
-                if existing != actual {
-                    return Err(InferError::Conflict {
-                        param,
-                        first: describe(existing),
-                        second: describe(actual),
-                    });
-                }
-                return Ok(());
-            }
-            bound.push((param, actual.clone()));
-            Ok(())
-        }
-        TypeExpr::Nullable(inner) => unify_type_exprs(type_params, inner, actual, bound),
-        TypeExpr::Array(inner) => match actual {
-            TypeExpr::Array(actual) => unify_type_exprs(type_params, inner, actual, bound),
-            _ => Ok(()),
-        },
-        TypeExpr::AssocArray { key, value } => match actual {
-            TypeExpr::AssocArray {
-                key: actual_key,
-                value: actual_value,
-            } => {
-                unify_type_exprs(type_params, key, actual_key, bound)?;
-                unify_type_exprs(type_params, value, actual_value, bound)
-            }
-            _ => Ok(()),
-        },
-        TypeExpr::GenericClass { name, args } => match actual {
-            TypeExpr::GenericClass {
-                name: actual_name,
-                args: actual_args,
-            } if actual_name.as_str().eq_ignore_ascii_case(name.as_str())
-                && actual_args.len() == args.len() =>
-            {
-                for (declared, actual) in args.iter().zip(actual_args.iter()) {
-                    unify_type_exprs(type_params, declared, actual, bound)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        },
-        _ => Ok(()),
-    }
+    let mut bindings = bound.iter().map(|(name, ty)| (name.clone(), shared::to_shared(ty))).collect();
+    elephc_generics::unify(type_params, &shared::to_shared(declared), &shared::to_shared(actual), &mut bindings)
+        .map_err(shared::infer_error)?;
+    *bound = bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect();
+    Ok(())
 }
 
 /// Decodes an instantiated class name back into the type it denotes.
@@ -672,10 +589,34 @@ fn unify_type_exprs(
 /// side table mapping instantiations to their arguments.
 ///
 /// Returns `None` for an ordinary class name, which has no `<` and therefore nothing to decode.
+/// The decode lexes and parses a synthesized source, and the SAME name is decoded repeatedly while
+/// one program is checked — generic inference, variance checks, and written-call resolution all
+/// decode the receiver's spelling — so the result is memoized per thread. The decode is a pure
+/// function of the name, and `None` is cached too: a name this module did not write loses nothing
+/// by answering nothing every time.
 pub fn instantiated_type(name: &str) -> Option<TypeExpr> {
     if !name.contains('<') {
         return None;
     }
+    if let Some(cached) = DECODED_INSTANTIATIONS.with(|cache| cache.borrow().get(name).cloned()) {
+        return cached;
+    }
+    let decoded = decode_instantiated_type(name);
+    DECODED_INSTANTIATIONS.with(|cache| {
+        cache.borrow_mut().insert(name.to_string(), decoded.clone());
+    });
+    decoded
+}
+
+thread_local! {
+    /// Per-thread memo for [`instantiated_type`], keyed by the instantiated name.
+    static DECODED_INSTANTIATIONS: std::cell::RefCell<
+        std::collections::HashMap<String, Option<TypeExpr>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Decodes one instantiated name from scratch, without consulting the memo.
+fn decode_instantiated_type(name: &str) -> Option<TypeExpr> {
     let source = format!("<?php {};", name);
     let tokens = crate::lexer::tokenize(&source).ok()?;
     let mut pos = 1usize;
@@ -765,31 +706,14 @@ pub fn bindings_from_written_arguments(
     type_params: &[TypeParam],
     written: &[TypeExpr],
 ) -> Result<Bindings, WrittenError> {
-    if written.len() > type_params.len() {
-        return Err(WrittenError::TooMany {
-            written: written.len(),
-            declared: type_params.len(),
-        });
-    }
-    let mut bindings = Bindings::new();
-    for (index, param) in type_params.iter().enumerate() {
-        let argument = match written.get(index) {
-            Some(argument) => argument.clone(),
-            // Same dependent default as the inferred path: `identity<int>` leaves `U` to its
-            // default `T`, which is only a type once `T` is bound. The bindings built so far are
-            // the earlier parameters, in declaration order.
-            None => param
-                .default
-                .clone()
-                .ok_or_else(|| WrittenError::Unbound {
-                    param: param.name.clone(),
-                    written: written.len(),
-                })?
-                .substitute_type_params(&bindings),
-        };
-        bindings.push((param.name.clone(), argument));
-    }
-    Ok(bindings)
+    let arguments = written.iter().map(shared::to_shared).collect::<Vec<_>>();
+    elephc_generics::written(&shared::parameters(type_params), &arguments)
+        .map(|bindings| bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect())
+        .map_err(|error| match error {
+            elephc_generics::Error::TooMany { written, declared } => WrittenError::TooMany { written, declared },
+            elephc_generics::Error::Unbound { param, written } => WrittenError::Unbound { param, written },
+            _ => unreachable!("written binding never performs inference"),
+        })
 }
 
 /// Splits `map<string>` into its base name and its decoded type arguments.
@@ -1068,5 +992,70 @@ mod tests {
         );
         // A name that is not a type parameter survives untouched.
         assert_eq!(t("Foo").substitute_type_params(&bindings), t("Foo"));
+    }
+
+    /// Decodes one name without the memo, so a test can compare a cached answer to a fresh one.
+    fn decode_ignoring_memo(name: &str) -> Option<TypeExpr> {
+        if !name.contains('<') {
+            return None;
+        }
+        decode_instantiated_type(name)
+    }
+
+    /// Number of names the per-thread memo holds, so a test can prove a hit did not re-decode.
+    fn memo_len() -> usize {
+        super::DECODED_INSTANTIATIONS.with(|cache| cache.borrow().len())
+    }
+
+    /// The memo answers exactly what a fresh decode would, for every shape a name can take.
+    ///
+    /// A cache that returned the wrong entry, or a stale one, would bind a type parameter to the
+    /// wrong argument while every other test still passed. Comparing the cached path against the
+    /// uncached one over scalar, nested, function-style and malformed names is what pins it.
+    #[test]
+    fn instantiated_type_memo_matches_a_fresh_decode() {
+        let names = [
+            "Box<int>",
+            "Box<string>",
+            "Box<Box<int>>",
+            "array<string, int>",
+            "identity<string>",
+            "not_a_type_without_angles",
+            "Box<int",
+            "Box<>",
+        ];
+        for name in names {
+            let first = instantiated_type(name);
+            let second = instantiated_type(name);
+            let fresh = decode_ignoring_memo(name);
+            assert_eq!(first, fresh, "first decode diverged for {name:?}");
+            assert_eq!(second, fresh, "cached decode diverged for {name:?}");
+        }
+    }
+
+    /// A repeated decode is served from the memo, and a new name is added to it.
+    ///
+    /// The assertion is on the memo's length: a second decode of the same name must not grow it,
+    /// and a new name must. Without that, the "optimization" could silently stop working while the
+    /// correctness test above still passed.
+    #[test]
+    fn instantiated_type_memoizes_repeated_decodes() {
+        let first_name = "MemoProbe<int>";
+        let second_name = "MemoProbe<string>";
+        // A unique pair keeps the deltas independent of whatever else this test thread decoded.
+        let before = memo_len();
+        let _ = instantiated_type(first_name);
+        let after_first = memo_len();
+        assert_eq!(after_first, before + 1, "a new name must be memoized");
+        let _ = instantiated_type(first_name);
+        assert_eq!(memo_len(), after_first, "a repeated decode must not re-insert");
+        let _ = instantiated_type(second_name);
+        assert_eq!(memo_len(), after_first + 1, "a distinct name is a distinct entry");
+        // The first name still decodes to its own type after a second entry was added: the memo is
+        // keyed by name, not by insertion order.
+        assert_eq!(
+            instantiated_type(first_name),
+            decode_ignoring_memo(first_name)
+        );
     }
 }

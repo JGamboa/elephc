@@ -12,6 +12,13 @@ declaration pruning before lowering; the EIR backend then runs value-, block-,
 and dominance-aware passes over the lowered module. This page focuses on the
 AST layer.
 
+EIR then runs its own passes. After that module reaches its ordinary optimization
+fixed point, an ownership finalizer may transfer a fresh checked-integer box
+through an assignment copy. The finalizer, and why it stays outside the inliner
+and the checked-integer sink, is documented in
+[Fresh Mixed Assignment Transfer](the-ir.md#fresh-mixed-assignment-transfer).
+`--ir-opt=off` retains the original copy path.
+
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants_for_target(program, target)` runs before type checking
@@ -807,6 +814,56 @@ runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
 
+During EIR lowering, `src/ir_lower/loop_closures/` checks a loop's condition,
+update, and complete body before emitting its closure calls. Identity and the
+numeric domain are separate proofs. Both apply with EIR optimization enabled or disabled.
+
+The existing direct path in `for` and `while` still requires an invariant local
+identity, by-value scalar captures, an exact positional argument list, and a
+scalar-or-Mixed signature without references or source variadics. Its arguments are
+literals or locals that the condition, update, and body never write, and those
+locals must already have physical `I64` or `F64` storage. Declared parameter
+types must match without coercion. Nested loops, assignment expressions,
+increments, and `continue` paths are part of that identity scan. A type seen on
+the first iteration is not proof of a later representation.
+
+A second path can direct-call a known local closure when an argument local is
+written. A fixed point over the straight-line condition, body, and update must
+show that every argument and the closure result stay in PHP `int|float`. The
+seed is the entry slot: logical `int` with `I64` storage, or logical `float`
+with `F64` storage. A `Mixed` label is unknown and blocks this path. Checked
+integer arithmetic widens the domain to `int|float`; that domain is not an `I64`
+proof and does not emit a truncating conversion. The call uses the ordinary
+Mixed operand ABI of `Op::Call`, including by-value captures and the usual
+owner cleanup. Locals in the proof whose final slot is Mixed are stored and
+loaded as Mixed from the first store, so a later float, null sentinel, or
+signed zero is not read back through an integer cast. The admission is recorded
+per call span. One admitted call does not admit a different call of the same
+local. Bindings retained by the numeric proof carry a separate marker, including
+during final-storage replay. An unadmitted call on such a binding keeps descriptor
+invocation instead of falling back to the unwritten-scalar gate.
+
+Both paths can retain the compiler-generated `func_args::HIDDEN_ARGS_PARAM`
+collector used by frame metadata, including eval-originated backtraces. This
+parameter does not count toward public arity. Its generated name, physical
+parameter position, array representation, and spanless ownership prologue must
+match the compiler contract. The collector may only be loaded into its owning
+parameter shadow; any other read, write, or escape rejects the target. The
+ordinary call binder still creates and passes the array with its normal
+ownership. User variadics, argument introspection, and other array values do
+not qualify. The collector seeds no numeric fact and does not broaden another
+call's admission.
+
+The numeric path requires an untyped Mixed signature, no references, source variadics,
+generators, named arguments, spreads, or omitted defaults, and captures that are
+absent or by-value int or float. The lowered body must be one block whose
+opcodes are in the closed primitive allowlist and have no throw, fatal, or
+warning effects. A branch, nested loop, `break`, `continue`, unmodeled
+assignment, or expression argument such as `$value + 0` keeps descriptor
+invocation. `do/while` does not use this path. Fresh bindings created in a
+condition do not bypass the identity gate. Refined call effects do not bypass
+the opcode allowlist.
+
 IR-level transformations also no longer live here. The EIR backend runs a
 fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
@@ -901,8 +958,13 @@ loop-invariant computations into loop preheaders, followed by CFG-aware dead
 instruction elimination for unused pure result-producing EIR instructions, CFG-aware dead
 store elimination
 for `store_local` writes to scalar PHP local slots that are never read before
-being overwritten, and branch simplification (constant-condition `cond_br`/`switch`
-folding, empty-block jump threading, and unreachable-block neutralization). These
+being overwritten, branch simplification (constant-condition `cond_br`/`switch`
+folding, empty-block jump threading, and unreachable-block neutralization), and
+concat scratch-state optimization (`src/ir_passes/concat_reset.rs`), which
+removes or coalesces statement-boundary `concat_reset` operations when CFG
+dataflow proves `_concat_off` is already at the frame base or post-dominated by
+another reset before any scratch allocation, call, output, exception, or `eval`
+path can observe it. These
 are rewrites the AST optimizer cannot express well because they need value
 identity, basic blocks, liveness, or dominance; see
 [Optimization Passes](the-ir.md#optimization-passes).

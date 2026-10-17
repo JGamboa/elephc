@@ -40,8 +40,8 @@ use crate::codegen_support::emit::Emitter;
 ///   - Recursive array/object decoding delegates to `super::arrays` and `super::objects`
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: json_decode_mixed ---");
-    emitter.label_global("__rt_json_decode_mixed");
+    emitter.comment("--- runtime: json_decode_mixed_value ---");
+    emitter.label_global("__rt_json_decode_mixed_value");
 
     // Frame layout (112 bytes):
     //   [sp + 0]   = saved input ptr
@@ -205,7 +205,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // payload = array pointer
     emitter.instruction("mov x0, #4");                                          // tag = indexed array
     emitter.instruction("mov x2, #0");                                          // load or prepare JSON decoder state
-    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(array)
+    emitter.instruction("bl __rt_json_box_owned_container");                    // box as Mixed(array)
     emitter.instruction("str x0, [sp, #88]");                                   // save the boxed array across depth_exit
     emitter.instruction("bl __rt_json_depth_exit");                             // leave the current JSON array depth
     emitter.instruction("ldr x0, [sp, #88]");                                   // restore the boxed array result
@@ -255,7 +255,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_json_decode_mixed_object_empty_stdclass"); // 0 → wrap in a stdClass instance
     emitter.instruction("mov x0, #5");                                          // tag = associative array
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for assoc payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(assoc)
+    emitter.instruction("bl __rt_json_box_owned_container");                    // box as Mixed(assoc)
     emitter.instruction("str x0, [sp, #88]");                                   // save the boxed assoc result across depth_exit
     emitter.instruction("bl __rt_json_depth_exit");                             // leave the current JSON object depth
     emitter.instruction("ldr x0, [sp, #88]");                                   // restore the boxed assoc result
@@ -267,7 +267,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov x0, #6");                                          // tag = object
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for object payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(object)
+    emitter.instruction("bl __rt_json_box_owned_container");                    // box as Mixed(object)
     emitter.instruction("str x0, [sp, #88]");                                   // save the boxed stdClass result across depth_exit
     emitter.instruction("bl __rt_json_depth_exit");                             // leave the current JSON object depth
     emitter.instruction("ldr x0, [sp, #88]");                                   // restore the boxed stdClass result

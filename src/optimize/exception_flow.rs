@@ -135,6 +135,10 @@ pub(super) struct ExceptionFlowAnalysis {
 /// of a declared scalar return type (`return_coerce_prelude`), which throws when the returned
 /// value does not fit (`mixed` into `: int`, `null` into `: bool`).
 fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
+    // Literal false arguments are checked before ABI truthiness coercion, even for pure bodies.
+    if signature.params.iter().any(|(_, ty)| ty == &PhpType::False) {
+        return true;
+    }
     let object_reference = signature.params.iter().enumerate().any(|(index, (_, ty))| {
         signature.ref_params.get(index).copied().unwrap_or(false)
             && signature.declared_params.get(index).copied().unwrap_or(false)

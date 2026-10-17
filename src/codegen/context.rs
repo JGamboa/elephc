@@ -35,8 +35,11 @@ use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
+mod machine_layout;
 mod operand_owners;
 mod ref_cell_state;
+
+pub(crate) use machine_layout::MachineLayoutState;
 
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,8 @@ pub(crate) struct FunctionContext<'a> {
     /// Box a first-class-callable conversion created for its typed input; a rejection releases
     /// it before throwing (see `callables::emit_callable_rejection`).
     pub(super) callable_rejection_release: Option<ValueId>,
+    /// Block order, compare fusion, and cold-path state for late machine layout.
+    pub(super) machine_layout: MachineLayoutState,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -175,6 +180,7 @@ impl<'a> FunctionContext<'a> {
             epilogue_label,
             block_labels,
             callable_rejection_release: None,
+            machine_layout: MachineLayoutState::default(),
         }
     }
 

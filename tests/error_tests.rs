@@ -310,6 +310,8 @@ mod exceptions_enums_magic;
 mod native_classes;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
+#[path = "error_tests/generics_review.rs"]
+mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
 #[path = "error_tests/strict_php.rs"]

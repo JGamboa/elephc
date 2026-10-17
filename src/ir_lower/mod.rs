@@ -23,6 +23,7 @@ pub(crate) use expr::{expr_writes_local, written_static_locals};
 mod fibers;
 mod function;
 pub(crate) mod maybe_undefined;
+mod loop_closures;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
 pub(crate) use function::dynamic_constructor_thunk_name;
 pub(crate) use function::eval_native_default_helper_name;

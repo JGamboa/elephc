@@ -33,6 +33,8 @@ mod control_flow_normalization;
 mod checked_int_sink;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
+#[path = "optimizer/concat_reset.rs"]
+mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]
 mod eir_common_subexpression;
 #[path = "optimizer/dead_code_elimination.rs"]
@@ -61,6 +63,8 @@ mod peephole;
 mod property_receiver_ownership;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
+#[path = "optimizer/fresh_mixed_transfer.rs"]
+mod fresh_mixed_transfer;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
@@ -77,3 +81,4 @@ mod warning_globals;
 #[path = "optimizer/loop_optimization.rs"]
 mod loop_optimization;
 mod rematerialization;
+mod machine_peepholes;

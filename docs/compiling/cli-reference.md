@@ -462,9 +462,9 @@ Elephc CLI process, not a signed iOS application bundle.
 
 | Flag | Values | Default | Env override | Description |
 |---|---|---|---|---|
-| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner — run to a module-level fixed point. |
+| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes in `src/ir_passes/`, including scalar promotion, canonical loop optimization, integer range analysis, concat scratch-state optimization, and the cross-function small-function inliner, run to a module-level fixed point. |
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
-| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
+| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan with cost-aware constant rematerialization, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
 
 See [Optimization and codegen controls](optimization.md).
@@ -893,6 +893,7 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--timings` | — | off | Print per-phase compiler timings to stderr. |
+| `--report-generics` | — | off | Print a per-template summary of monomorphized generic instantiations to stderr: the total count, then each template's instantiation count and names (e.g. `class x2 Box [Box<int>, Box<string>]`), followed by the shape-oracle section, which lowers every surviving candidate into an isolated emitter and counts the dispatch slots whose emitted bodies are identical — the same comparison the emission-time fold uses to share one body behind a jump. Diagnostic only; it changes nothing in the emitted program. |
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--counters` | — | off | Embed one BSS call counter per PHP function (a single prologue increment) and print exact `elephc-counters: <name> <count>` lines to stderr at exit. A fully inlined call site keeps its counter at zero, which makes inlining visible by difference. |

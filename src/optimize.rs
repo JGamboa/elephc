@@ -628,6 +628,7 @@ struct InstanceDispatchMetadata {
 struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
+    parameter_guard_may_throw: bool,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
@@ -636,6 +637,7 @@ struct StaticMethodBody<'a> {
     context: ClassEffectContext,
     body: &'a [Stmt],
     declared_never: bool,
+    parameter_guard_may_throw: bool,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.

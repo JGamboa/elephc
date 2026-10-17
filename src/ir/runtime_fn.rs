@@ -2253,6 +2253,11 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        // Decoding always constructs an independent Mixed graph. String payloads are
+        // persisted from decoder scratch; no result borrows the source argument pin.
+        if matches!(self, RuntimeFnId::JsonDecode) {
+            return BuiltinResultOwnership::Fresh;
+        }
         if self.uses_mbstring_runtime() {
             return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
                 | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {

@@ -110,6 +110,10 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr: inner,
+        } => array_cast_literal_element_type(ctx, inner),
         // Every lazily merged expression lowers through a merge temp typed from its branches;
         // typing the slot from the syntactic fallback (`int` for most branch shapes) coerced a
         // string or boxed branch into an integer element.

@@ -10,6 +10,8 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;
+mod block_layout;
+pub use block_emit::generic_body_sharing_oracle;
 pub(crate) mod callable_reachability;
 mod const_default_values;
 mod constant_materialization;
@@ -32,10 +34,13 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
+mod literal_method_index;
 mod local_analysis;
 mod mbstring_configuration;
 pub(crate) mod lower_inst;
 mod lower_term;
+mod machine_peephole;
+mod parallel_moves;
 mod runtime_callable_invoker;
 #[cfg(test)]
 pub(crate) use runtime_callable_invoker::function_returns_owned_string;

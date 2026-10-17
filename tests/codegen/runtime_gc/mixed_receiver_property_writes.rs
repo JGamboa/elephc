@@ -126,3 +126,35 @@ echo count($t->items), ":", $t->items[0], "\n";
     );
     assert_clean(out, "2:39\n");
 }
+
+/// A same-type write through a `mixed` receiver into a refined UNTYPED scalar property is accepted
+/// (#1319); the slot copies the payload out of the box, so the owned source box must retire each
+/// iteration.
+#[test]
+fn test_mixed_receiver_refined_untyped_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T { public $n = 1; public $s = "seed"; }
+function w(mixed $o, int $n, string $s): void { $o->n = $n; $o->s = $s; }
+$t = new T();
+for ($i = 0; $i < 40; $i++) { w($t, $i, "value" . $i); }
+echo $t->n, ":", $t->s, "\n";
+"#,
+    );
+    assert_clean(out, "39:value39\n");
+}
+
+/// Bool and float slots narrowed from a boxed value through a `mixed` receiver stay balanced.
+#[test]
+fn test_mixed_receiver_bool_float_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T { public bool $z = false; public float $f = 0.0; }
+function w(mixed $o): void { for ($i = 0; $i < 40; $i++) { $o->z = !$o->z; $o->f += 1.5; } }
+$t = new T();
+w($t);
+echo $t->z ? "T" : "F", ":", $t->f, "\n";
+"#,
+    );
+    assert_clean(out, "F:60\n");
+}

@@ -240,6 +240,7 @@ pub(super) use known_property_reads::{
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
 pub(super) use property_hash_references::lower_dynamic_prop_ref_cell;
+pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,

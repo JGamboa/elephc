@@ -73,6 +73,7 @@ mod named_spreads;
 mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
+mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
 mod array_access;

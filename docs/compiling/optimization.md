@@ -54,12 +54,17 @@ including fixed and variadic parameters.
 
 After the AST is lowered to EIR and validated, a fixed-point pass driver runs the
 registered transformation passes over each function until none reports a change.
-The whole pipeline runs to a **module-level fixed point**: each round runs the
-cross-function [small-function inliner](#small-function-inlining) and then drives the
-per-function passes to convergence on every function, repeating until neither the
-inliner nor any function pass changes anything. Interleaving lets the two layers feed
-each other — inlined bodies expose new constants and dead code, and the simplified
-functions expose new (smaller) inline candidates. The passes are **on by default**.
+The representation-changing pipeline runs to a **module-level fixed point**: each
+round runs the cross-function [small-function inliner](#small-function-inlining)
+and then drives the per-function passes to convergence on every function,
+repeating until neither the inliner nor any of those passes changes anything.
+Interleaving lets the two layers feed each other — inlined bodies expose new
+constants and dead code, and the simplified functions expose new (smaller) inline
+candidates. Passes that set `run_after_fixed_point` are partitioned out of that
+loop. [Fresh Mixed assignment transfer](#fresh-mixed-assignment-transfer) runs
+after `optimize_module_to_fixed_point` returns, so removing an assignment clone
+cannot restart the inliner or the checked-integer sink. The passes are **on by
+default**.
 
 ```bash
 # Default: EIR optimization passes enabled
@@ -349,6 +354,20 @@ The fourteenth registered pass simplifies the control-flow graph:
 Functions that use exception handling are skipped, because their handler blocks
 are reachable through implicit edges that the terminator graph does not show.
 
+### Concat scratch-state optimization
+
+The fifteenth registered pass (`src/ir_passes/concat_reset.rs`) removes or
+coalesces statement-boundary `concat_reset` operations when dataflow proves no
+scratch string can be live or consumed between resets. A forward analysis drops
+a reset that already finds `_concat_off` at the frame's `concat_base_offset`.
+A backward analysis drops an earlier reset when every outgoing path reaches a
+later reset before any instruction can allocate, read, or observe concat
+scratch, throw, or leave the function.
+
+Calls, output, `eval`, exception-handler entries, and stores or releases that
+may run a destructor stay barriers. Arithmetic-only and concrete-array loops
+can lose redundant resets inside the body while keeping one before the loop.
+
 ### Small-function inlining
 
 As part of the module-level fixed point, a cross-function pass inlines calls to small
@@ -383,13 +402,60 @@ parameters (which alias caller storage) are therefore excluded, because a value-
 splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
 inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
 
+### Fresh Mixed assignment transfer
+
+`FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is registered with
+the other passes, and `run_after_fixed_point` keeps it out of
+`optimize_module_to_fixed_point`. After the inliner and the
+representation-changing passes have stopped, `optimize_module` runs this
+finalizer phase once, through the ordinary per-function sweep. A change inside
+the phase repeats the finalizer until a sweep reports no change. That
+repetition stays inside the finalizer. The inliner and
+[checked-integer sinking](#checked-integer-sinking) have already finished.
+
+The finalizer removes a `MixedClone` of a fresh owned `ICheckedAdd`,
+`ICheckedSub`, or `ICheckedMul` result when that result is used only by the
+clone and by the next non-`nop` instruction in the same block, which must be
+the `Release` of the source. Uses of the clone result are redirected to the
+source, and the clone and that release become `nop`. The checked operation
+stays in place, including overflow-to-float promotion. Borrowed, acquired,
+shared, and otherwise observed sources, and a release in another block, keep
+the copy.
+
+The clone is a `Mixed` use, so the sink does not treat the producer as an
+integer-only observation while the copy is still there. Removing the clone
+inside the fixed point would leave the remaining integer cast or store looking
+like a sink, and a later sweep would rewrite the producer to `IChecked*ToInt`.
+The transfer runs only after that sink has finished, which keeps the overflow
+on the boxed `IChecked*` operation. `--ir-opt=off` skips `optimize_module`, so
+the original copy remains. The proof and the adjacency rules are in
+[The EIR Design](../internals/the-ir.md#fresh-mixed-assignment-transfer).
+
 Later releases extend this driver with further EIR passes.
+
+## Late machine optimizations
+
+After the EIR passes, the backend makes a final round of target-aware choices
+while it emits assembly: constant multiplies become shift/add/`lea` sequences
+when that is cheaper on the target (`x * 31` becomes `(x << 5) - x`), loop and
+`if` tests branch directly on compare flags instead of materializing a boolean,
+jumps to the next block and redundant register moves are removed, and the
+overflow paths of checked integer arithmetic are moved after the function's last
+block so hot loops fall straight through. These choices never change program
+behavior and apply with `--ir-opt` on or off. Inspect them with `--emit-asm`; see
+[The Code Generator](../internals/the-codegen.md#late-instruction-selection-and-machine-peepholes)
+for the cost model and the exact patterns.
 
 ## Register allocation
 
 The EIR backend uses a linear-scan register allocator (Poletto–Sarkar) by
 default, keeping hot scalar values in registers across calls instead of spilling
-them to the stack on every use.
+them to the stack on every use. Scalar constants use reconstruction recipes:
+cheap values are rebuilt at each use, including as a target-legal immediate,
+and a constant stays in a register only when its estimated loop savings exceed
+materialization and live-range cost. `--regalloc=stack` keeps backing slots as
+a diagnostic baseline. See
+[Scalar Constants and Immediate Operands](../internals/the-codegen.md#scalar-constants-and-immediate-operands).
 
 ```bash
 # Default: linear-scan registers

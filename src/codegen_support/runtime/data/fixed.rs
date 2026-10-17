@@ -29,7 +29,8 @@ use super::{
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
-    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
+    UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -169,7 +170,28 @@ pub(crate) fn emit_runtime_data_fixed(
             ".globl {label}\n{label}:\n    .ascii {name:?}\n"
         ));
     }
+    // A hydrated property TypeError spells a bool value as its literal `true`/`false`
+    // (unlike the argument-type diagnostics, which spell the type as `bool`).
+    out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(
+        ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    // `{pointer, length}` rows naming a rejected SPL offset's type, the shape of
+    // `_class_name_entries`; see `runtime::spl::offset_convert`.
+    out.push_str(".p2align 3\n.globl _spl_offset_type_rows\n_spl_offset_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::spl::SPL_OFFSET_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}\n    .quad {len}\n"));
+    }
+    out.push_str(&format!(
+        ".globl _spl_float_string_prefix\n_spl_float_string_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
@@ -729,6 +751,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),
         ("_spl_dll_peek_empty_msg", "Can't peek at an empty datastructure"),
         (
+            "_spl_dll_frozen_mode_msg",
+            "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen",
+        ),
+        (
             "_spl_dll_add_range_msg",
             "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range",
         ),
@@ -745,20 +771,20 @@ pub(crate) fn emit_runtime_data_fixed(
             "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) is out of range",
         ),
         (
-            "_spl_dll_offset_exists_type_msg",
-            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_exists_type_prefix",
+            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_get_type_msg",
-            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_get_type_prefix",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_set_type_msg",
-            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, non-int given",
+            "_spl_dll_offset_set_type_prefix",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, ",
         ),
         (
-            "_spl_dll_offset_unset_type_msg",
-            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_unset_type_prefix",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, ",
         ),
         (
             "_spl_fixed_construct_size_msg",
@@ -768,10 +794,8 @@ pub(crate) fn emit_runtime_data_fixed(
             "_spl_fixed_set_size_msg",
             "SplFixedArray::setSize(): Argument #1 ($size) must be greater than or equal to 0",
         ),
-        (
-            "_spl_fixed_offset_type_msg",
-            "Cannot access offset of type non-int on SplFixedArray",
-        ),
+        ("_spl_fixed_offset_type_prefix", "Cannot access offset of type "),
+        ("_spl_fixed_offset_type_suffix", " on SplFixedArray"),
         ("_spl_fixed_offset_range_msg", "Index invalid or out of range"),
         (
             "_spl_fixed_from_array_keys_msg",
