@@ -453,3 +453,53 @@ echo f("a"), f("b"), f("c"), "\n";
         out.stderr
     );
 }
+
+/// Verifies a never-written static local with a literal array initializer keeps its element types
+/// (review P52 H1): a nested array element is still an `array` for `: array`, an `array`
+/// parameter, `array_map`, `array_merge`, `max` and `sort` on a copy.
+#[test]
+fn test_read_only_static_local_literal_keeps_element_types() {
+    let out = compile_and_run(r#"<?php
+function f(): array { static $c = ["a" => ["b" => [1]]]; return $c["a"]["b"]; }
+function g(array $a) { return count($a); }
+function h() { static $c = ["a" => [3, 1]]; $x = $c["a"]; sort($x); return implode(",", $x) . g($c["a"]) . max($c["a"]); }
+function m() { static $c = ["a" => [1, 2]]; return json_encode(array_map(fn($x) => $x + 1, $c["a"])) . json_encode(array_merge($c["a"], [9])); }
+echo json_encode(f()), h(), m(), "\n";
+"#);
+    assert_eq!(out, "[1]1,323[2,3][1,2,9]\n");
+}
+
+/// Verifies `static::$p[..] = &...` and `unset(static::$p[..])` from the parent reach the late
+/// static binding's own untyped redeclaration (review P52 H2; it crashed).
+#[test]
+fn test_late_static_element_reference_and_unset_on_redeclared_property() {
+    let out = compile_and_run(r#"<?php
+class P {
+    public static $a = ["k" => "P", "j" => "J"];
+    static function l() { static::$a["k"] = &static::$a["j"]; static::$a["j"] = "z"; }
+    static function v() { $v = "v"; static::$a["v"] = &$v; $v = "w"; }
+    static function un() { unset(static::$a["k"]); }
+}
+class Q extends P { public static $a = ["k" => "Q", "j" => "QJ"]; }
+Q::l(); Q::v(); echo P::$a["k"], Q::$a["k"], Q::$a["v"], "\n";
+P::un(); echo count(P::$a), count(Q::$a), "\n";
+Q::un(); echo count(P::$a), count(Q::$a), "\n";
+"#);
+    assert_eq!(out, "Pzw\n13\n12\n");
+}
+
+/// Verifies `unset(C::$p[$a][$b])` with `$a` absent is a silent no-op that creates no key, and
+/// that a scalar intermediate throws php's `Error` (review P52).
+#[test]
+fn test_nested_static_unset_with_missing_intermediate_is_noop() {
+    let out = compile_and_run(r#"<?php
+class C {
+    public static $a = ["a" => ["b" => 1, "c" => 2]];
+    public static function f($x, $y) { unset(static::$a[$x][$y]); }
+}
+unset(C::$a["zz"]["q"]); C::f("q", "b"); C::f("a", "b");
+echo json_encode(C::$a), "\n";
+try { unset(C::$a["a"]["c"]["deep"]); } catch (\Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out, "{\"a\":{\"c\":2}}\nError: Cannot unset offset in a non-array variable\n");
+}
