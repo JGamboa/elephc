@@ -535,3 +535,21 @@ q(); echo json_encode(q()), "\n";
 "#);
     assert_eq!(out, "23\n[5,5]\n[3,2]\n[[1,2],[1,2]]\n");
 }
+
+/// Verifies a by-value `foreach` over a static local, a `global` and a static property iterates
+/// the array as it was when the loop started, even when the body appends to it (review P52 R2-1:
+/// the loop walked its own appends, and an associative variant exhausted the heap).
+#[test]
+fn test_foreach_by_value_over_static_global_and_static_property_iterates_snapshot() {
+    let out = compile_and_run(r#"<?php
+function f() { static $c = [1, 2]; $n = 0; foreach ($c as $v) { $c[] = $v; $n++; } return $n . ":" . count($c); }
+function a() { static $c = ["a" => 1, "b" => 2]; $n = 0; foreach ($c as $k => $v) { $c[$k . $n] = $v; $n++; } return $n . ":" . count($c); }
+function e() { static $c = []; $c[] = 1; $n = 0; foreach ($c as $v) { $c[] = 9; $n++; } return $n . ":" . count($c); }
+$g = [1, 2];
+function g() { global $g; $n = 0; foreach ($g as $v) { $g[] = $v; $n++; } return $n . ":" . count($g); }
+class D { public static array $a = [1, 2]; static function f() { $n = 0; foreach (self::$a as $v) { self::$a[] = $v; $n++; } return $n . ":" . count(self::$a); } }
+echo f(), " ", f(), " ", f(), "\n", a(), " ", a(), " ", a(), "\n", e(), " ", e(), " ", e(), "\n";
+echo g(), " ", g(), " ", D::f(), " ", D::f(), "\n";
+"#);
+    assert_eq!(out, "2:4 4:8 8:16\n2:4 4:6 6:8\n1:2 3:6 7:14\n2:4 4:8 2:4 4:8\n");
+}
