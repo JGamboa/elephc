@@ -137,7 +137,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     }
     // `unset(C::$p[$k])` removes the element through the static slot's boxed cell.
     if let ExprKind::ArrayAccess { array, .. } = &arg.kind {
-        crate::types::checker::stmt_check::assignments::widen_static_property_element_root(checker, array, false);
+        crate::types::checker::stmt_check::assignments::widen_static_property_element_root(checker, array, false)?;
     }
     let probed = null_probe_env(checker, arg, env);
     let env = probed.as_ref().unwrap_or(env);

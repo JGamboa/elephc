@@ -285,6 +285,22 @@ pub(super) fn param_escapes_by_reference(name: &str, index: usize) -> bool {
     ESCAPING_REF_PARAMS.with(|cell| cell.borrow().contains(&(name.to_string(), index)))
 }
 
+thread_local! {
+    /// The checker's `boxed_array_static_locals` for the current lowering run.
+    static BOXED_ARRAY_STATIC_LOCALS: std::cell::RefCell<std::collections::HashSet<(String, String)>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Installs the `static` locals with a literal array initializer that get boxed storage.
+pub(crate) fn install_boxed_array_static_locals(locals: &std::collections::HashSet<(String, String)>) {
+    BOXED_ARRAY_STATIC_LOCALS.with(|cell| *cell.borrow_mut() = locals.clone());
+}
+
+/// Whether the checker gave `static $name = [<literal>];` in `scope` boxed `array` storage.
+pub(crate) fn boxed_array_static_local(scope: &str, name: &str) -> bool {
+    BOXED_ARRAY_STATIC_LOCALS.with(|cell| cell.borrow().contains(&(scope.to_string(), name.to_string())))
+}
+
 /// Whether `name` is one of PHP's superglobals, which elephc keeps in program-global storage.
 fn is_superglobal_name(name: &str) -> bool {
     matches!(

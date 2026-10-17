@@ -426,6 +426,66 @@ pub(super) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 
+/// Names of the `static` locals declared in `body` (at any block depth) that the body can write
+/// after their declaration. The declaration's own binding is not a write; anything this walk
+/// cannot rule out is, exactly as for `body_writes_local`.
+pub(crate) fn written_static_locals(body: &[Stmt]) -> std::collections::HashSet<String> {
+    let mut names = Vec::new();
+    collect_static_var_names(body, &mut names);
+    names
+        .into_iter()
+        .filter(|name| {
+            body.iter().any(|stmt| match &stmt.kind {
+                StmtKind::StaticVar { name: target, init } if target == name => {
+                    expr_writes_local(init, name)
+                }
+                _ => stmt_writes_local(stmt, name),
+            })
+        })
+        .collect()
+}
+
+/// Collects `static $x` names through the ordinary block statements of a body.
+fn collect_static_var_names(body: &[Stmt], out: &mut Vec<String>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::StaticVar { name, .. } => out.push(name.clone()),
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_static_var_names(then_body, out);
+                for (_, clause) in elseif_clauses {
+                    collect_static_var_names(clause, out);
+                }
+                if let Some(else_body) = else_body {
+                    collect_static_var_names(else_body, out);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::Synthetic(body) => collect_static_var_names(body, out),
+            StmtKind::Try { try_body, catches, finally_body } => {
+                collect_static_var_names(try_body, out);
+                for catch in catches {
+                    collect_static_var_names(&catch.body, out);
+                }
+                if let Some(finally_body) = finally_body {
+                    collect_static_var_names(finally_body, out);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_static_var_names(case_body, out);
+                }
+                if let Some(default) = default {
+                    collect_static_var_names(default, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Returns true when a statement can store into the local named `name`.
 fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
     match &stmt.kind {

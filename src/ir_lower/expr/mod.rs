@@ -192,7 +192,7 @@ pub(crate) use callable_tracking::{
 };
 #[allow(unused_imports)]
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
-pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
+pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment, written_static_locals};
 pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
 };
@@ -206,7 +206,10 @@ pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
-pub(crate) use reference_places::{install_escaping_ref_params, lower_ref_assign_place};
+pub(crate) use reference_places::{
+    boxed_array_static_local, install_boxed_array_static_locals, install_escaping_ref_params,
+    lower_ref_assign_place,
+};
 pub(crate) use dynamic_reference_places::lower_ref_assign_dynamic_property;
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,

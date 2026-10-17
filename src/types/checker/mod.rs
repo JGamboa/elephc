@@ -473,6 +473,11 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// See `CheckResult::boxed_array_static_locals`.
+    pub boxed_array_static_locals: HashSet<(String, String)>,
+    /// Names of the `static` locals the function-like body being checked writes after their
+    /// declaration (`crate::ir_lower::static_local_written_in_body`).
+    pub written_static_locals: HashSet<String>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -1358,6 +1363,7 @@ fn check_types_on_compiler_stack(
         loop_storage_types: checker.loop_storage_types,
         maybe_undefined: checker.maybe_undefined_result,
         string_incdec_locals: checker.string_incdec_locals,
+        boxed_array_static_locals: checker.boxed_array_static_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_ref_detach_sites: checker.local_ref_detach_sites,
         escaping_ref_params: checker.escaping_ref_params,

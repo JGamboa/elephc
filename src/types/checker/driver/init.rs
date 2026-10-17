@@ -137,6 +137,8 @@ impl Checker {
             loop_storage_types: HashMap::new(),
             loop_storage_scope_spans: HashMap::new(),
             string_incdec_locals: HashSet::new(),
+            boxed_array_static_locals: HashSet::new(),
+            written_static_locals: HashSet::new(),
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),

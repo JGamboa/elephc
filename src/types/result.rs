@@ -119,6 +119,10 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs for `static $x = [<literal>];` locals the body
+    /// writes, which get boxed PHP `array` storage (see `static_local_declared_type`). A static
+    /// with a literal initializer the body never writes keeps the literal's precise type.
+    pub boxed_array_static_locals: HashSet<(String, String)>,
     /// Locals that may be undefined where they are read (see [`MaybeUndefinedLocals`]).
     pub maybe_undefined: MaybeUndefinedLocals,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local

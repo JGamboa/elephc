@@ -36,10 +36,18 @@ use super::super::Checker;
 /// builtins still accept it while its keys and elements are read at run time: a later call can
 /// store any key or value into it (`static $u = ['x' => 0]; $u[3] = 1;` rewrote a string-keyed
 /// hash slot as another layout and corrupted it, review P42a `s2`).
-pub(crate) fn static_local_declared_type(init_ty: PhpType) -> PhpType {
+///
+/// A non-empty literal array keeps its precise element types when the body never writes the
+/// static after its declaration (`static $map = ['x' => [1]]; return $map[$k];`): nothing can
+/// change its layout, and `$map['x']` stays an `array` for `: array`, `array_map`, `sort`...
+/// `written` is that body scan (`crate::ir_lower::written_static_locals`).
+pub(crate) fn static_local_declared_type(init_ty: PhpType, written: bool) -> PhpType {
     match init_ty.codegen_repr() {
         PhpType::Void | PhpType::Never => PhpType::Mixed,
-        PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
+        PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Never | PhpType::Void) => {
+            PhpType::php_array()
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } if written => PhpType::php_array(),
         _ => init_ty,
     }
 }
@@ -52,7 +60,7 @@ pub(crate) fn widen_static_property_element_root(
     checker: &mut Checker,
     container: &Expr,
     widen_null_default: bool,
-) {
+) -> Result<(), CompileError> {
     if let Some((receiver, property)) = locals::element_static_property_root(container) {
         static_properties::widen_referenced_untyped_static_property(
             checker,
@@ -60,8 +68,9 @@ pub(crate) fn widen_static_property_element_root(
             property,
             container.span,
             widen_null_default,
-        );
+        )?;
     }
+    Ok(())
 }
 
 impl Checker {

@@ -694,6 +694,10 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let saved_written_statics = std::mem::replace(
+            &mut self.written_static_locals,
+            crate::ir_lower::written_static_locals(body),
+        );
 
         let result = f(self);
 
@@ -701,6 +705,7 @@ impl Checker {
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
+        self.written_static_locals = saved_written_statics;
         self.foreach_key_locals = saved_foreach_keys;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;

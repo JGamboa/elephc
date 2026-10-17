@@ -337,7 +337,7 @@ pub(super) fn check_ref_assign(
         ExprKind::ArrayAccess { array, index } => {
             crate::types::checker::stmt_check::assignments::widen_static_property_element_root(
                 checker, array, true,
-            );
+            )?;
             let array_ty = checker.infer_type(array, env)?;
             target_has_boxed_ref_provenance = match array_ty.codegen_repr() {
                 PhpType::AssocArray { .. } | PhpType::Mixed => true,
@@ -1379,7 +1379,13 @@ pub(super) fn check_static_var(
         }
     };
     checker.active_statics.insert(name.to_string());
-    env.insert(name.to_string(), super::static_local_declared_type(ty));
+    let written = checker.written_static_locals.contains(name);
+    if written {
+        checker
+            .boxed_array_static_locals
+            .insert((checker.current_loop_storage_scope.clone(), name.to_string()));
+    }
+    env.insert(name.to_string(), super::static_local_declared_type(ty, written));
     Ok(())
 }
 
