@@ -205,3 +205,26 @@ echo json_last_error(), "\n";
     );
     assert_eq!(out, "bool(false)\n6 Recursion detected\nstring(6) \"[null]\"\nJsonException: Recursion detected\na:1:{i:0;a:1:{i:0;R:2;}}\na:2:{s:1:\"k\";s:1:\"v\";s:4:\"self\";a:2:{s:1:\"k\";s:1:\"v\";s:4:\"self\";R:3;}}\nstring(52) \"{\"a\":[1,2],\"b\":{\"c\":true},\"h\":{\"k\":\"v\",\"self\":null}}\"\nstring(26) \"{\"a\":[1,2],\"b\":{\"c\":true}}\"\n0\n");
 }
+
+/// `===` between two distinct self-referencing arrays throws php's catchable "Nesting level too
+/// deep - recursive dependency?" (it used to recurse until the stack overflowed); the guard is
+/// cleared by the throw, so later comparisons are unaffected.
+#[test]
+fn test_reference_cycle_strict_equality_throws_nesting_error() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[] = &$a;
+$b = [];
+$b[] = &$b;
+var_dump($a === $a);
+try { var_dump($a === $b); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$x = [1, [2, [3]]];
+$y = [1, [2, [3]]];
+var_dump($x === $y, $x === [1, [2, [4]]], [] === [], [1] === [1, 2]);
+try { var_dump($a === $b); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump($x === $y);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nError: Nesting level too deep - recursive dependency?\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nNesting level too deep - recursive dependency?\nbool(true)\n");
+}

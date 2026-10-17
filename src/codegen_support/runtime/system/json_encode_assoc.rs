@@ -54,10 +54,10 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     //    `null`, which is what JSON_PARTIAL_OUTPUT_ON_ERROR shows; otherwise the walk would
     //    recurse until it overran `_concat_buf`. Only a reference set can close such a cycle,
     //    and every cycle passes through a hash, so this encoder is the one that guards. --
-    emitter.instruction("bl __rt_vd_seen_find");                                // is this hash already being encoded? (x0 = hash)
+    emitter.instruction("bl __rt_json_seen_find");                                // is this hash already being encoded? (x0 = hash)
     emitter.instruction("cbnz x0, __rt_json_assoc_recursion");                  // a revisited hash encodes as null with JSON_ERROR_RECURSION
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
-    emitter.instruction("bl __rt_vd_seen_push");                                // mark the hash as being encoded
+    emitter.instruction("bl __rt_json_seen_push");                                // mark the hash as being encoded
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
 
     // -- initialize list-shape tracking. Associative arrays are emitted in
@@ -440,7 +440,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 
     // -- tear down and return --
-    emitter.instruction("bl __rt_vd_seen_pop");                                 // the hash is no longer being encoded
+    emitter.instruction("bl __rt_json_seen_pop");                                 // the hash is no longer being encoded
     emitter.instruction("ldr x19, [sp, #120]");                                 // restore caller x19 after using it as the flag cache
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
@@ -485,11 +485,11 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     //    recurse until it overran `_concat_buf`. Only a reference set can close such a cycle,
     //    and every cycle passes through a hash, so this encoder is the one that guards. --
     emitter.instruction("mov rdi, rax");                                        // pass the hash to the recursion guard
-    emitter.instruction("call __rt_vd_seen_find");                              // is this hash already being encoded?
+    emitter.instruction("call __rt_json_seen_find");                              // is this hash already being encoded?
     emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
     emitter.instruction("jnz __rt_json_assoc_recursion_x");                     // a revisited hash encodes as null with JSON_ERROR_RECURSION
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
-    emitter.instruction("call __rt_vd_seen_push");                              // mark the hash as being encoded
+    emitter.instruction("call __rt_json_seen_push");                              // mark the hash as being encoded
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the hash pointer for the encoder
 
     // Track list-shape while the object form is emitted. If every key is the
@@ -828,7 +828,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON object
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so later writers append after this JSON object
-    emitter.instruction("call __rt_vd_seen_pop");                               // the hash is no longer being encoded
+    emitter.instruction("call __rt_json_seen_pop");                               // the hash is no longer being encoded
     emitter.instruction("mov r15, QWORD PTR [rbp - 104]");                      // restore caller r15 after using it as the flag cache
     emitter.instruction("add rsp, 112");                                        // release the local JSON-assoc scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
