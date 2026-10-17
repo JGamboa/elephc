@@ -31,6 +31,9 @@
 //!   `codegen_support::runtime::objects::print_r_object`, which owns the whole
 //!   `ClassName Object\n(\n ... )\n` frame (and the enum header) the same way the
 //!   tag-4/5 branches own the array frame.
+//! - `__rt_print_r_indexed` / `__rt_print_r_hash` keep their table on var_dump's `_vd_seen`
+//!   stack while its entries render. A table reached again through a reference renders
+//!   ` *RECURSION*` right after its `Array\n` header, as php does, instead of recursing.
 //! - The AArch64 path is shared by macOS and Linux ARM64 (`emitter.syscall(4)`
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
 

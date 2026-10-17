@@ -369,9 +369,19 @@ mod tests {
                 .split("__rt_hash_clone_shallow_insert:")
                 .next()
                 .expect("reference path precedes insertion");
+            // Only a cell pointing back at the table being copied is retained directly (php's
+            // zend_array_dup rule); every other cell goes through singleton separation.
+            let (self_check, separate) = reference_path
+                .split_once("__rt_hash_clone_shallow_cell_separate:")
+                .unwrap_or_else(|| panic!("{name}: missing singleton-separation path"));
             assert!(
-                !reference_path.contains("__rt_incref"),
-                "{name}: reference entries must not bypass singleton separation",
+                self_check.contains("__rt_hash_clone_shallow_cell_self_check:")
+                    && self_check.contains("__rt_incref"),
+                "{name}: a self-reference must stay shared with the clone",
+            );
+            assert!(
+                separate.contains("__rt_reference_cell_clone") && !separate.contains("__rt_incref"),
+                "{name}: other reference entries must not bypass singleton separation",
             );
         }
     }

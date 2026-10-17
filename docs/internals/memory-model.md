@@ -778,6 +778,28 @@ a property-hash entry, which creates a missing property as null), the cells meet
 merge-block parameter and the target is bound to it once. `$r = &$o->{$k}[$i]` is desugared by
 the parser to a hidden `$c = &$o->{$k}` followed by `$r = &$c[$i]`.
 
+#### Self-references, readonly places and typed reference sets
+
+- **Self-referencing arrays** (`$a[] = &$a`, `$a[0][] = &$a[0]`, two arrays referencing each
+  other) are real cycles through a tag-11 entry. `var_dump` and `print_r` keep every array/hash
+  table they are walking on the same bounded `_vd_seen` stack the object walker uses (2048
+  entries), so a revisited table renders PHP's `*RECURSION*` marker (without the `&` of the
+  reference that reached it) instead of recursing until the stack overflows. Sibling copies of
+  one table are not on each other's walk path and render in full. When a hash is copied for
+  copy-on-write, a singleton tag-11 cell whose value is that very table stays SHARED, exactly as
+  php's `zend_array_dup` does, so `$b = $a; $b[0] = 1;` writes through the self-reference into
+  `$a` (bug69376); every other singleton cell still separates.
+- **Readonly properties** (an enum's `name`/`value` included) never become reference cells: every
+  reference to one throws `Cannot indirectly modify readonly property`, so the checker skips them
+  when it applies reference-property promotions, and lowering throws before any cell would be
+  loaded (`$r = &$o->ro`, `$o->ro = &$x`, `foreach ($o->ro as &$v)`, `foreach ($o->ro[$k] as &$v)`,
+  `foreach ($src as &$o->ro)`, and `return $o->ro;` from a by-reference function).
+- **A PHP variable bound by reference** (`$x = &$list`, `use (&$list)`) shares one cell with every
+  name of its reference set, and those names keep their own static type. Making its entries
+  referenceable (`foreach ($x as &$v)`, `$y = &$x[0]`, `$x[0] = &$z`) re-lays the shared payload
+  out as a hash of boxed Mixed entries, which a typed-element alias would misread, so that shape
+  is refused at compile time when the elements are typed; with mixed elements it binds.
+
 ## Array layout
 
 Arrays are heap-allocated with a 24-byte header followed by contiguous elements:

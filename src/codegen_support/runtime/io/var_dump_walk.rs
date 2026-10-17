@@ -43,6 +43,11 @@
 //! - Objects (tag 6) render their full body — see `super::var_dump_object` for
 //!   the per-class descriptor, the initialized-property count, and the
 //!   `*RECURSION*` guard, plus why PHP's `#id` handle is deliberately absent.
+//! - RECURSION GUARD FOR ARRAYS: `__rt_var_dump_indexed` / `__rt_var_dump_hash` push their
+//!   table on the `_vd_seen` stack (shared with the object walker) for the duration of the
+//!   walk, and `__rt_var_dump_value` consults it before opening a nested tag-4/5 container. A
+//!   table reached again through a reference (`$a[] = &$a`) renders `*RECURSION*`, and the
+//!   recursion line drops a pending `&` marker the way php does.
 //! - REMAINING GAP: resources (tag 9) nested inside a container render as
 //!   `NULL` rather than PHP's `resource(N) of type (...)`.
 

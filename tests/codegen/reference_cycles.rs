@@ -179,3 +179,29 @@ var_dump($o);
     assert_eq!(out.stdout, "Cannot indirectly modify readonly property R::$a\nCannot indirectly modify readonly property R::$a\nCannot indirectly modify readonly property R::$i\nCannot indirectly modify readonly property R::$i\nCannot indirectly modify readonly property R::$a\nCannot indirectly modify readonly property R::$a\nCannot indirectly modify readonly property R::$late\nobject(R)#1 (2) {\n  [\"late\"]=>\n  uninitialized(int)\n  [\"a\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [\"i\"]=>\n  int(3)\n}\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `json_encode()` of a self-referencing array records JSON_ERROR_RECURSION and returns false
+/// (`null` in its place under JSON_PARTIAL_OUTPUT_ON_ERROR, a JsonException under
+/// JSON_THROW_ON_ERROR), and `serialize()` closes the cycle with php's `R:<index>;`. Both used to
+/// recurse until they overran the concat buffer.
+#[test]
+fn test_reference_cycle_json_encode_and_serialize_terminate() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[] = &$a;
+var_dump(json_encode($a));
+echo json_last_error(), " ", json_last_error_msg(), "\n";
+var_dump(json_encode($a, JSON_PARTIAL_OUTPUT_ON_ERROR));
+try { json_encode($a, JSON_THROW_ON_ERROR); } catch (JsonException $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo serialize($a), "\n";
+$h = ['k' => 'v'];
+$h['self'] = &$h;
+echo serialize($h), "\n";
+var_dump(json_encode(['a' => [1, 2], 'b' => ['c' => true], 'h' => $h], JSON_PARTIAL_OUTPUT_ON_ERROR));
+var_dump(json_encode(['a' => [1, 2], 'b' => ['c' => true]]));
+echo json_last_error(), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(false)\n6 Recursion detected\nstring(6) \"[null]\"\nJsonException: Recursion detected\na:1:{i:0;a:1:{i:0;R:2;}}\na:2:{s:1:\"k\";s:1:\"v\";s:4:\"self\";a:2:{s:1:\"k\";s:1:\"v\";s:4:\"self\";R:3;}}\nstring(52) \"{\"a\":[1,2],\"b\":{\"c\":true},\"h\":{\"k\":\"v\",\"self\":null}}\"\nstring(26) \"{\"a\":[1,2],\"b\":{\"c\":true}}\"\n0\n");
+}
