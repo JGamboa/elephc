@@ -643,23 +643,24 @@ echo $total, "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// PREEXISTING BUG, not fixed here: an element reference (or a by-reference foreach) through a
-/// local that aliases a TYPED list by reference crashes (`$x = &$res; $y = &$x[0];` with
-/// `$res = [1]`). `promote_by_ref_foreach_source` retypes the shared cell to a hash while the
-/// other alias keeps its indexed type. A mixed list works (nette's real shape).
+/// An element reference (or a by-reference foreach) through a PHP variable that aliases a list
+/// by reference binds when the list's elements are mixed. The TYPED-list shape
+/// (`$x = &$res; $y = &$x[0];` with `$res = [1]`) used to crash and is now refused at lowering;
+/// `ir_lower::tests::reference_alias_promotion` pins that refusal.
 #[test]
-#[ignore = "preexisting crash: element reference through a by-reference alias of a typed list"]
-fn test_reference_element_through_alias_of_typed_list() {
+fn test_reference_element_through_alias_of_mixed_list() {
     let out = compile_and_run(
         r#"<?php
-$res = [1];
+$res = [1, 'a'];
 $x = &$res;
 $y = &$x[0];
 $y = 5;
-var_dump($res);
+foreach ($x as &$v) { $v = $v . '!'; }
+unset($v);
+echo implode(",", $res), "\n";
 "#,
     );
-    assert_eq!(out, "array(1) {\n  [0]=>\n  &int(5)\n}\n");
+    assert_eq!(out, "5!,a!\n");
 }
 
 /// A runtime-named reference that PHP would route to `__get`/`__set` (an undeclared or

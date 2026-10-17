@@ -297,7 +297,8 @@ pub(crate) use ob_status::{emit_ob_get_status, emit_ob_list_handlers, emit_ob_st
 pub(crate) use var_dump_object::{
     emit_var_dump_emit_object_key, emit_var_dump_emit_recursion_line,
     emit_var_dump_emit_uninit_line, emit_var_dump_object, emit_var_dump_open_object,
-    emit_vd_obj_count, emit_vd_obj_desc, emit_vd_seen_find, emit_vd_seen_pop, emit_vd_seen_push,
+    emit_seen_stack_helpers, emit_vd_obj_count, emit_vd_obj_desc, emit_vd_seen_find,
+    emit_vd_seen_pop, emit_vd_seen_push,
 };
 pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,

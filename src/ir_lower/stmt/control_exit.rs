@@ -220,6 +220,18 @@ fn lower_reference_return(
         Some(ExprKind::PropertyAccess { object, property }) => {
             let statically_incompatible = !property_reference_return_payload_matches(ctx, object, property);
             let object = lower_expr(ctx, object);
+            // `return $o->readonlyProp;` from a by-reference function: php raises
+            // "Cannot indirectly modify readonly property" (an enum's `name`/`value` included).
+            // The property is never a reference cell, so nothing may load one here.
+            if let Some(message) =
+                crate::ir_lower::expr::readonly_reference_error(ctx, object.value, property)
+            {
+                if ctx.value_is_owning_temporary(object) {
+                    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+                }
+                lower_throw_access_error(ctx, &message, span);
+                return;
+            }
             if statically_incompatible {
                 refuse_reference_return(
                     ctx,

@@ -1466,6 +1466,14 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             if info.reference_properties.contains(&prop) {
                 continue;
             }
+            // Every reference to a readonly property (an enum's `name`/`value` included) throws
+            // "Cannot indirectly modify readonly property" in PHP, so lowering raises that Error
+            // instead of binding and the storage never needs a cell. Promoting it anyway would
+            // re-layout the slot as a cell while enum singletons and constructors still write
+            // the plain value, and the next read would dereference the payload as a pointer.
+            if info.readonly_properties.contains(&prop) {
+                continue;
+            }
             info.reference_properties.insert(prop.clone());
             info.owned_reference_properties.insert(prop.clone());
             if let Some(slot) = info.visible_property_index(&prop) {

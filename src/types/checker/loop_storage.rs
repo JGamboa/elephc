@@ -119,6 +119,20 @@ pub fn loop_carried_storage_types(
             break;
         }
     }
+    // A local whose ENTRIES the body makes referenceable (`$y = &$a[$k]`, `$a[$k] = &$x`,
+    // `$a[] = &$x`, `foreach ($a as &$v)`) is re-laid out as a hash of boxed Mixed entries by
+    // lowering, so the next iteration starts from that hash. The header must hold it too, or
+    // the second iteration runs the packed-array ops on the hash (gc_012's
+    // `$a[$i][0] = &$a[$i]` SIGBUS'd on its second pass).
+    let mut referenced_roots = HashSet::new();
+    collect_referenced_element_roots(body, &mut referenced_roots);
+    for name in referenced_roots {
+        if let Some(current) = fixed.get(name).cloned() {
+            if let Some(hash) = referenceable_entries_storage(&current) {
+                fixed.insert(name.to_string(), hash);
+            }
+        }
+    }
 
     let mut contracts = entry
         .iter()
@@ -144,6 +158,71 @@ pub fn loop_carried_storage_types(
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
     contracts
+}
+
+/// The storage a container takes once its entries are referenceable: a hash whose entries are
+/// boxed Mixed (the cell lives in the entry), keeping an associative key type. `None` for a
+/// non-array or an already-referenceable hash.
+fn referenceable_entries_storage(current: &PhpType) -> Option<PhpType> {
+    match current.codegen_repr() {
+        PhpType::Array(_) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        }),
+        PhpType::AssocArray { key, value } if value.codegen_repr() != PhpType::Mixed => {
+            Some(PhpType::AssocArray {
+                key,
+                value: Box::new(PhpType::Mixed),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Collects the root local of every container whose entries a statement makes referenceable:
+/// the place of `<elem> = &$x`, the source of `$y = &<elem>`, and a by-reference `foreach` source.
+fn collect_referenced_element_roots<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    for statement in statements {
+        match &statement.kind {
+            StmtKind::RefAssignPlace { target, .. } => {
+                if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+                    insert_access_root(array, out);
+                }
+            }
+            StmtKind::RefAssign { source, .. } => {
+                if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+                    insert_access_root(array, out);
+                }
+            }
+            StmtKind::Foreach {
+                array,
+                value_by_ref,
+                body,
+                ..
+            } => {
+                if *value_by_ref {
+                    insert_access_root(array, out);
+                }
+                collect_referenced_element_roots(body, out);
+                continue;
+            }
+            _ => {}
+        }
+        for nested in nested_statement_bodies(statement) {
+            collect_referenced_element_roots(nested, out);
+        }
+    }
+}
+
+/// Records the local at the root of an `ArrayAccess` chain, if the chain starts at one.
+fn insert_access_root<'a>(expr: &'a Expr, out: &mut HashSet<&'a str>) {
+    let mut current = expr;
+    while let ExprKind::ArrayAccess { array, .. } = &current.kind {
+        current = array;
+    }
+    if let ExprKind::Variable(name) = &current.kind {
+        out.insert(name.as_str());
+    }
 }
 
 /// Applies every collected local assignment monotonically to one fixed-point iteration.

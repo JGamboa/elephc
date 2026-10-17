@@ -212,7 +212,8 @@ pub(crate) use dynamic_reference_places::lower_ref_assign_dynamic_property;
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
-    prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
+    prepare_scoped_addressable_ref_array_receiver, readonly_by_ref_foreach_source,
+    readonly_reference_error, static_property_result_type,
 };
 pub(crate) use property_fetch_for_write::{
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,

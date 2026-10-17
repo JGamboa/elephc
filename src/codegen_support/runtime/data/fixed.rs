@@ -648,6 +648,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _borrowed_reference_return_msg\n_borrowed_reference_return_msg:\n    .ascii \"Cannot return a reference to storage that has no independent reference cell\"\n");
     out.push_str(".globl _unmanaged_reference_bind_msg\n_unmanaged_reference_bind_msg:\n    .ascii \"Cannot bind a reference to storage that has no independent reference cell\"\n");
     out.push_str(".globl _reference_bind_scalar_container_msg\n_reference_bind_scalar_container_msg:\n    .ascii \"Cannot use a scalar value as an array\"\n");
+    out.push_str(".globl _nesting_too_deep_msg\n_nesting_too_deep_msg:\n    .ascii \"Nesting level too deep - recursive dependency?\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
@@ -1460,13 +1461,21 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _vd_uninit_prefix\n_vd_uninit_prefix:\n    .ascii \"uninitialized(\"\n");
     // `*RECURSION*` replaces the value of a container already on the walk stack.
     out.push_str(".globl _vd_recursion_line\n_vd_recursion_line:\n    .ascii \"*RECURSION*\\n\"\n");
-    // _vd_seen / _vd_seen_n: the var_dump recursion guard — a bounded stack of
-    // the object pointers currently being walked, pushed and popped around each
-    // object body by `__rt_var_dump_value`'s tag-6 branch. 256 entries × 8 B.
+    // _vd_seen / _vd_seen_n: the var_dump/print_r recursion guard — a bounded stack
+    // of the object pointers and array/hash tables currently being walked, pushed and
+    // popped around each object body and each array walk. 65536 entries × 8 B; the depth
+    // counter keeps counting past them, and a full stack is never reported as a revisit.
     // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
-    // a lookup that reaches the cap reports recursion, which is what bounds the walk.
-    out.push_str(&comm_directive("_vd_seen", 2048, target));
+    // storage beyond it is never written.
+    out.push_str(&comm_directive("_vd_seen", 524288, target));
     out.push_str(&comm_directive("_vd_seen_n", 8, target));
+    // _json_seen / _cmp_seen: the same guard for json_encode (which runs jsonSerialize()
+    // mid-walk) and for `===` on arrays, each on its own stack so the walks never see each
+    // other's tables. Same capacity as _vd_seen.
+    out.push_str(&comm_directive("_json_seen", 524288, target));
+    out.push_str(&comm_directive("_json_seen_n", 8, target));
+    out.push_str(&comm_directive("_cmp_seen", 524288, target));
+    out.push_str(&comm_directive("_cmp_seen_n", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
