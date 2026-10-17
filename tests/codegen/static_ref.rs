@@ -306,3 +306,150 @@ echo "after\n";
 "#);
     assert_eq!(out, "{\"x\":0,\"y\":1}{\"x\":0,\"y\":1,\"3\":1}\nafter\n");
 }
+
+/// Verifies `array_push` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_array_push() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $n = array_push($c, $x, $x); return $n . json_encode($c); } echo f("a"), f("b");
+"#);
+    assert_eq!(out, "2[\"a\",\"a\"]4[\"a\",\"a\",\"b\",\"b\"]");
+}
+
+/// Verifies `array_unshift` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_array_unshift() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; array_unshift($c, $x); return json_encode($c); } echo f(1), f(2), f(3);
+"#);
+    assert_eq!(out, "[1][2,1][3,2,1]");
+}
+
+/// Verifies `sort` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_sort() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $c[] = $x; sort($c); return json_encode($c); } echo f(3), f(1), f(2);
+"#);
+    assert_eq!(out, "[3][1,3][1,2,3]");
+}
+
+/// Verifies `ksort` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_ksort() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $c[$x] = strlen($x); ksort($c); return json_encode($c); } echo f("b"), f("a"), f("cc");
+"#);
+    assert_eq!(out, "{\"b\":1}{\"a\":1,\"b\":1}{\"a\":1,\"b\":1,\"cc\":2}");
+}
+
+/// Verifies `usort` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_usort() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $c[] = $x; usort($c, fn($a, $b) => $b <=> $a); return json_encode($c); } echo f(1), f(3), f(2);
+"#);
+    assert_eq!(out, "[1][3,1][3,2,1]");
+}
+
+/// Verifies `array_splice` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_array_splice() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $c[] = $x; array_splice($c, 0, count($c) > 2 ? 1 : 0); return json_encode($c); } echo f(1), f(2), f(3);
+"#);
+    assert_eq!(out, "[1][1,2][2,3]");
+}
+
+/// Verifies `end`/`reset` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_end_reset() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $c[] = $x; return end($c) . reset($c); } echo f(1), f(2), f(3);
+"#);
+    assert_eq!(out, "112131");
+}
+
+/// Verifies `array_shift` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_array_shift() {
+    let out = compile_and_run(r#"<?php
+function f($k) { static $c = []; $c[$k] = 1; if (count($c) > 2) { array_shift($c); } return json_encode($c); } echo f("a"), f("b"), f("c");
+"#);
+    assert_eq!(out, "{\"a\":1}{\"a\":1,\"b\":1}{\"b\":1,\"c\":1}");
+}
+
+/// Verifies `array_pop` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_array_pop() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = []; $c[] = $x; $c[] = $x * 10; return array_pop($c) . "/" . json_encode($c); } echo f(1), f(2), f(3);
+"#);
+    assert_eq!(out, "10/[1]20/[1,2]30/[1,2,3]");
+}
+
+/// Verifies `sort_non_empty_initializer` on a boxed `static` local matches php (front P52 round 0b: the
+/// builtin works on a hidden copy that is stored back into the static).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_sort_non_empty_initializer() {
+    let out = compile_and_run(r#"<?php
+function f($x) { static $c = [3]; $c[] = $x; sort($c); return json_encode($c); } echo f(1), f(2);
+"#);
+    assert_eq!(out, "[1,3][1,2,3]");
+}
+
+/// Verifies `preg_match(..., $m)` with a boxed `static` local `$m` matches php (front P52 round 0b).
+#[test]
+fn test_boxed_static_local_by_ref_builtin_preg_match() {
+    let out = compile_and_run_with_regex(r#"<?php
+function f($s) { static $m; $hit = preg_match("/(a)(b)?/", $s, $m); return $hit . json_encode($m); } echo f("ab"), f("a"), f("z");
+"#);
+    assert_eq!(out, "1[\"ab\",\"a\",\"b\"]1[\"a\",\"a\"]0[]");
+}
+
+/// Verifies `array_pop` rewinds the automatic index like php (`$a = [1, 2]; array_pop($a); $a[] = 3;` is `[1, 3]`).
+#[test]
+fn test_array_pop_rewinds_next_index_on_boxed_array() {
+    let out = compile_and_run(r#"<?php
+function f(array $c) { $c[] = 1; $c[] = 2; array_pop($c); $c[] = 3; return json_encode($c); }
+echo f([]), f(["k" => 0]), "\n";
+$h = ["a" => 1, 5 => 2]; array_pop($h); $h[] = 9; echo json_encode($h), "\n";
+$o = [7 => 1, 2 => 2]; array_pop($o); $o[] = 9; echo json_encode($o), "\n";
+"#);
+    assert_eq!(out, "[1,3]{\"k\":0,\"0\":1,\"1\":3}\n{\"a\":1,\"5\":9}\n{\"7\":1,\"8\":9}\n");
+}
+
+/// Verifies the hidden copy and write-back of by-reference builtins on boxed static locals
+/// release everything they own.
+#[test]
+fn test_boxed_static_local_by_ref_builtins_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f($x) {
+    static $c = [];
+    array_push($c, str_repeat($x, 2));
+    array_unshift($c, $x);
+    sort($c);
+    $p = array_pop($c);
+    $s = array_shift($c);
+    usort($c, fn($a, $b) => strcmp($b, $a));
+    return count($c) . $p . $s;
+}
+echo f("a"), f("b"), f("c"), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0aaa0bbb0ccc\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "boxed static builtins leaked: {}",
+        out.stderr
+    );
+}
