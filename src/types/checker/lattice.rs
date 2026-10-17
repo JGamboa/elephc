@@ -16,11 +16,19 @@
 //! - Two DIFFERENT scalar tags join to `Mixed`, never to one of them: `int ⊔ float = mixed`,
 //!   so each value keeps its own runtime tag (an int read from a float slot prints its bit
 //!   pattern; a float read as int prints garbage).
-//! - Two classes join to their nearest common ancestor (class or interface, see
-//!   [`Checker::common_object_type`]), and to `Mixed` when they share none. NEVER to one of the
-//!   two: the old "the last writer wins" rule (`propagate_constructor_arg_type`) and "the first
-//!   writer wins" rule (`union_param_type`) both let the stored class depend on the order the
-//!   writers ran in, which is exactly what made Laravel's outer fixpoint alternate
+//! - Two different classes join to their UNION (`B ⊔ C = B|C`, `P0 ⊔ P1 = P0|P1`, members
+//!   sorted by name), never to a shared ancestor and never to one of the two: PHP is
+//!   duck-typed, so `f(new B); f(new C)` may call `$x->m()` that only the children declare,
+//!   and `e(new P1); e(mkp(): P0)` may call `extra()` that only the child declares and get
+//!   PHP's `Error` when the runtime object is a `P0`. A method call on a union THIS JOIN
+//!   built (`Checker::joined_object_unions`; a union the program declares stays strict)
+//!   accepts the call when ANY member declares the method and dispatches on the runtime class id
+//!   (`inference::objects::methods`), which is exactly that behavior. A union of more than
+//!   [`MAX_OBJECT_UNION_MEMBERS`] classes is `Mixed`. The order is
+//!   `X ⊑ X|Y ⊑ X|Y|Z ⊑ mixed`.
+//!   Neither the old "the last writer wins" rule (`propagate_constructor_arg_type`) nor "the
+//!   first writer wins" (`union_param_type`) is a join: both let the stored class depend on the
+//!   order the writers ran in, which is exactly what made Laravel's outer fixpoint alternate
 //!   `HttpResponseException::$response` between Symfony's and Illuminate's `Response` forever.
 //! - Arrays join element-wise through `union_param_type`'s payload rule.
 //! - A writer may still ADOPT the first observation over a placeholder that is not an
@@ -50,11 +58,66 @@ impl Checker {
             {
                 PhpType::Union(members.clone())
             }
-            (PhpType::Object(left), PhpType::Object(right)) => self
-                .common_object_type(left, right)
-                .unwrap_or(PhpType::Mixed),
+            _ if object_shaped(stored) && object_shaped(incoming) => {
+                self.join_object_types(stored, incoming)
+            }
             _ => Self::union_param_type(stored, incoming),
         }
+    }
+
+    /// Joins two object-shaped types (`Object`, or a union of objects and `null`) into the
+    /// sorted union of their classes.
+    fn join_object_types(&self, stored: &PhpType, incoming: &PhpType) -> PhpType {
+        let mut classes: Vec<String> = Vec::new();
+        let mut nullable = false;
+        for ty in [stored, incoming] {
+            let members: &[PhpType] = match ty {
+                PhpType::Union(members) => members,
+                other => std::slice::from_ref(other),
+            };
+            for member in members {
+                match member {
+                    PhpType::Object(name) => classes.push(name.clone()),
+                    _ => nullable = true,
+                }
+            }
+        }
+        classes.sort();
+        classes.dedup();
+        // Related classes stay distinct members too: collapsing `P0|P1` to the ancestor `P0`
+        // lost the child's own methods (review H1-bis).
+        let kept = classes;
+        if kept.len() > MAX_OBJECT_UNION_MEMBERS {
+            return PhpType::Mixed;
+        }
+        let mut members: Vec<PhpType> = kept.into_iter().map(PhpType::Object).collect();
+        if nullable {
+            members.push(PhpType::Void);
+        }
+        if members.len() == 1 {
+            members.pop().expect("one member")
+        } else {
+            let union = PhpType::Union(members);
+            self.joined_object_unions.borrow_mut().insert(format!("{union:?}"));
+            union
+        }
+    }
+}
+
+/// Unrelated classes a join keeps as a union before it gives up to `Mixed`.
+pub(crate) const MAX_OBJECT_UNION_MEMBERS: usize = 8;
+
+/// Whether `ty` is an object or a union made only of objects and `null` (at least one object).
+fn object_shaped(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => {
+            members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                && members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
+        }
+        _ => false,
     }
 }
 
@@ -109,7 +172,10 @@ mod tests {
                 &PhpType::Object("Unrelated".to_string()),
                 &PhpType::Object("Other".to_string())
             ),
-            PhpType::Mixed
+            PhpType::Union(vec![
+                PhpType::Object("Other".to_string()),
+                PhpType::Object("Unrelated".to_string()),
+            ])
         );
     }
 }

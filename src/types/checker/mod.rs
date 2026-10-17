@@ -134,6 +134,11 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// Object unions the lattice join BUILT from untyped observations
+    /// (`crate::types::checker::lattice`). A method call on one of them accepts a method that
+    /// only some members declare, as PHP's runtime lookup does; a union the program DECLARES
+    /// (`A|B`, `static|Choice`) keeps the strict every-member rule.
+    pub joined_object_unions: std::cell::RefCell<HashSet<String>>,
     /// Direct subclasses of every class, keyed by parent name, plus the `classes.len()` it was
     /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
     ///

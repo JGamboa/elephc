@@ -110,23 +110,32 @@ fn report_detail(name: &str, before: Option<&FunctionSig>, after: &FunctionSig) 
     );
 }
 
-/// Default number of times one signature may change across a fixpoint before the checker
+/// Default number of times one entity may RETURN to a state it already had before the checker
 /// declares the fixpoint divergent (`ELEPHC_CHECKER_OSCILLATION_LIMIT` overrides it).
 ///
 /// Every widening the fixpoints perform is a JOIN (see `crate::types::checker::lattice`), so a
-/// signature only climbs, and each of its types climbs a lattice of small finite height: a
-/// legitimate signature changes a handful of times, bounded by its parameter count times that
-/// height. An entity that keeps changing far beyond that is not converging, it is oscillating
-/// — some writer replaces instead of joining — and looping on until the round budget runs out
-/// (thousands of rounds on Laravel) only hides it. The detector turns it into a clear internal
-/// error that names the entity.
-const DEFAULT_OSCILLATION_LIMIT: usize = 48;
+/// type only climbs and a converging entity never revisits a state: a method with sixty
+/// untyped parameters that each widen in a different pass changes sixty times and is still
+/// monotone. An oscillation is exactly a revisit — some writer replaces instead of joining, and
+/// the entity alternates `A -> B -> A` — so the detector keys on revisits, not on the number of
+/// changes. Looping on until the round budget runs out (thousands of rounds on Laravel) only
+/// hides it; the detector turns it into a clear internal error that names the entity.
+const DEFAULT_REVISIT_LIMIT: usize = 2;
 
-/// Counts how often each class member or function signature changes across fixpoint rounds.
+/// Remembers every state each class member or function signature took across fixpoint rounds.
 pub(crate) struct OscillationDetector {
     label: &'static str,
     limit: usize,
-    counts: HashMap<String, usize>,
+    /// Per entity: hashes of the states seen, and how many changes landed on a seen state.
+    states: HashMap<String, (std::collections::HashSet<u64>, usize)>,
+}
+
+/// Hashes one rendered entity state.
+fn state_hash(state: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    state.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl OscillationDetector {
@@ -136,11 +145,12 @@ impl OscillationDetector {
             .ok()
             .and_then(|raw| raw.parse::<usize>().ok())
             .filter(|limit| *limit > 0)
-            .unwrap_or(DEFAULT_OSCILLATION_LIMIT);
-        Self { label, limit, counts: HashMap::new() }
+            .unwrap_or(DEFAULT_REVISIT_LIMIT);
+        Self { label, limit, states: HashMap::new() }
     }
 
-    /// Records one round's changes; returns the internal error once an entity exceeds the limit.
+    /// Records one round's changes; returns the internal error once an entity has come back to
+    /// an earlier state more than the limit allows.
     pub(crate) fn record(
         &mut self,
         classes_before: &HashMap<String, ClassInfo>,
@@ -152,32 +162,38 @@ impl OscillationDetector {
             changed.extend(changed_function_entities(before, after));
         }
         let mut worst: Option<(String, usize, String)> = None;
-        for (entity, transition) in changed {
-            let count = self.counts.entry(entity.clone()).or_insert(0);
-            *count += 1;
-            if *count > self.limit
+        for (entity, before, after) in changed {
+            let (seen, revisits) = self
+                .states
+                .entry(entity.clone())
+                .or_insert_with(|| (std::collections::HashSet::new(), 0));
+            seen.insert(state_hash(&before));
+            if !seen.insert(state_hash(&after)) {
+                *revisits += 1;
+            }
+            if *revisits > self.limit
                 && worst.as_ref().is_none_or(|(name, _, _)| entity < *name)
             {
-                worst = Some((entity, *count, transition));
+                worst = Some((entity, *revisits, format!("{before} -> {after}")));
             }
         }
-        worst.map(|(entity, count, transition)| {
+        worst.map(|(entity, revisits, transition)| {
             format!(
                 "internal compiler error: the type checker's {} fixpoint does not converge: \
-                 `{}` changed {} times (limit {}; last change {}). A widening on this entity \
-                 replaces its previous type instead of joining it; set \
+                 `{}` returned to an earlier type {} times (limit {}; last change {}). A \
+                 widening on this entity replaces its previous type instead of joining it; set \
                  ELEPHC_CHECKER_TRACE=1 ELEPHC_CHECKER_TRACE_DETAIL='{}' to see the alternation",
-                self.label, entity, count, self.limit, transition, entity
+                self.label, entity, revisits, self.limit, transition, entity
             )
         })
     }
 }
 
-/// Lists `(entity, transition)` for every class member whose signature or storage moved.
+/// Lists `(entity, before, after)` for every class member whose signature or storage moved.
 fn changed_class_entities(
     before: &HashMap<String, ClassInfo>,
     after: &HashMap<String, ClassInfo>,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, String)> {
     let show = |sig: Option<&FunctionSig>| {
         sig.map(|sig| format!("params={:?} return={:?}", sig.params, sig.return_type))
             .unwrap_or_else(|| "<none>".to_string())
@@ -195,10 +211,7 @@ fn changed_class_entities(
             let old_sig = old.methods.get(key);
             if old_sig != Some(sig) {
                 any_member = true;
-                changed.push((
-                    format!("{name}::{key}"),
-                    format!("{} -> {}", show(old_sig), show(Some(sig))),
-                ));
+                changed.push((format!("{name}::{key}"), show(old_sig), show(Some(sig))));
             }
         }
         for (key, sig) in &info.static_methods {
@@ -207,32 +220,42 @@ fn changed_class_entities(
                 any_member = true;
                 changed.push((
                     format!("{name}::{key} (static)"),
-                    format!("{} -> {}", show(old_sig), show(Some(sig))),
+                    show(old_sig),
+                    show(Some(sig)),
                 ));
             }
         }
-        for (prop, ty) in &info.properties {
-            let old_ty = old.properties.iter().find(|(old_prop, _)| old_prop == prop);
+        // By slot, not by name: a class lists an inherited private property and its own
+        // same-named one separately, and pairing them by name compared two different slots and
+        // reported a change (and a revisit) on every round.
+        for (slot, (prop, ty)) in info.properties.iter().enumerate() {
+            let old_ty = old.properties.get(slot).filter(|(old_prop, _)| old_prop == prop);
             if old_ty.map(|(_, old_ty)| old_ty) != Some(ty) {
                 any_member = true;
                 changed.push((
                     format!("{name}::${prop}"),
-                    format!("{:?} -> {:?}", old_ty.map(|(_, ty)| ty), ty),
+                    format!("{:?}", old_ty.map(|(_, ty)| ty)),
+                    format!("{:?}", ty),
                 ));
             }
         }
         if !any_member {
-            changed.push((format!("{name} <non-signature fields>"), "<metadata>".to_string()));
+            // Metadata outside signatures and properties (rare): the whole record is the state.
+            changed.push((
+                format!("{name} <non-signature fields>"),
+                format!("{old:?}"),
+                format!("{info:?}"),
+            ));
         }
     }
     changed
 }
 
-/// Lists `(entity, transition)` for every function signature that moved.
+/// Lists `(entity, before, after)` for every function signature that moved.
 fn changed_function_entities(
     before: &HashMap<String, FunctionSig>,
     after: &HashMap<String, FunctionSig>,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, String)> {
     after
         .iter()
         .filter_map(|(name, sig)| {
@@ -240,10 +263,8 @@ fn changed_function_entities(
             (old != sig).then(|| {
                 (
                     name.clone(),
-                    format!(
-                        "params={:?} return={:?} -> params={:?} return={:?}",
-                        old.params, old.return_type, sig.params, sig.return_type
-                    ),
+                    format!("params={:?} return={:?}", old.params, old.return_type),
+                    format!("params={:?} return={:?}", sig.params, sig.return_type),
                 )
             })
         })
@@ -285,7 +306,7 @@ mod tests {
             PhpType::Float;
         let mut detector = OscillationDetector::new("outer");
         let mut reported = None;
-        for round in 0..(DEFAULT_OSCILLATION_LIMIT + 2) {
+        for round in 0..(DEFAULT_REVISIT_LIMIT + 3) {
             let (before, after) = if round % 2 == 0 {
                 (&int_classes, &float_classes)
             } else {
@@ -297,7 +318,8 @@ mod tests {
             }
         }
         let (round, message) = reported.expect("the oscillation must be reported");
-        assert_eq!(round, DEFAULT_OSCILLATION_LIMIT, "reported as soon as it passes the limit");
+        // Round 0 moves to a new state; every later round returns to a seen one.
+        assert_eq!(round, DEFAULT_REVISIT_LIMIT + 1, "reported as soon as it passes the limit");
         assert!(message.contains("`Osc::m`"), "names the entity: {message}");
         assert!(message.contains("does not converge"), "{message}");
     }
@@ -312,7 +334,7 @@ mod tests {
         b.get_mut("f").unwrap().return_type = PhpType::Int;
         let mut detector = OscillationDetector::new("outer");
         let mut message = None;
-        for round in 0..(DEFAULT_OSCILLATION_LIMIT * 2) {
+        for round in 0..(DEFAULT_REVISIT_LIMIT + 3) {
             let (before, after) = if round % 2 == 0 { (&a, &b) } else { (&b, &a) };
             message = detector.record(&classes, &classes, Some((before, after)));
             if message.is_some() {

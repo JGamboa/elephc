@@ -62,6 +62,7 @@ impl Checker {
             strict_types: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::new(),
+            joined_object_unions: std::cell::RefCell::new(HashSet::new()),
             class_children_index: None,
             method_impl_users_index: None,
             property_sharers_index: None,

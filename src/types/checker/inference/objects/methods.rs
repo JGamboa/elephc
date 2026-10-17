@@ -78,16 +78,38 @@ impl Checker {
             // the method must exist on every object member; codegen dispatches on
             // the runtime class id and the result is the union of each member's
             // return type. A non-object runtime value faults like PHP.
+            //
+            // On a union the lattice join built from untyped observations (never one the
+            // program declares), a member that does not declare the method at all is skipped as
+            // long as another member does: PHP resolves the method on the runtime class, and the codegen
+            // dispatch (`lower_mixed_method_call`) branches on the class id over every class
+            // that declares it, throwing PHP's `Call to undefined method` Error for any other.
+            // This is what keeps a parent|child join (`P0|P1` with `extra()` only on `P1`,
+            // `crate::types::checker::lattice`) as permissive as the single class the old
+            // "first writer wins" rule happened to keep (P49 review H1-bis).
             let object_classes = self.union_object_classes(&obj_ty);
             if object_classes.len() >= 2 {
+                let lenient = self.joined_object_unions.borrow().contains(&format!("{obj_ty:?}"));
                 let mut return_types = Vec::with_capacity(object_classes.len());
+                let mut first_missing: Option<CompileError> = None;
                 for class_name in &object_classes {
-                    let return_ty = if self.interfaces.contains_key(class_name) {
-                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
+                    let result = if self.interfaces.contains_key(class_name) {
+                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)
                     } else {
-                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
+                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)
                     };
-                    return_types.push(return_ty);
+                    match result {
+                        Ok(return_ty) => return_types.push(return_ty),
+                        Err(error) if lenient && error.message.starts_with("Undefined method:") => {
+                            first_missing.get_or_insert(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                if return_types.is_empty() {
+                    if let Some(error) = first_missing {
+                        return Err(error);
+                    }
                 }
                 return Ok(self.normalize_union_type(return_types));
             }

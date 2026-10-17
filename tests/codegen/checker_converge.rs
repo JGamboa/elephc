@@ -191,3 +191,118 @@ echo Cat::cat(3), "\n";
 "#);
     assert_eq!(out, "'x',1,2.5,true,\n3,\n");
 }
+
+/// Sibling classes joined in an untyped function, instance-method and static-method parameter
+/// form a union, so a method and a property only the children declare still type-check (P49
+/// review H1: the common ancestor `A` rejected `$x->m()`).
+#[test]
+fn test_checker_converge_sibling_classes_join_to_union_in_params() {
+    let out = compile_and_run(r#"<?php
+class A { public $tag = "a"; }
+class B extends A { public $only = "ob"; function m() { return "B::m"; } }
+class C extends A { public $only = "oc"; function m() { return "C::m"; } }
+function f($x) { return $x->m() . "/" . $x->only . "/" . $x->tag; }
+echo f(new B()), "\n";
+echo f(new C()), "\n";
+class K { function g($x) { return $x->m(); } static function s($x) { return $x->m(); } }
+$k = new K();
+echo $k->g(new B()), $k->g(new C()), K::s(new C()), K::s(new B()), "\n";
+function take(A $a) { return get_class($a); }
+function pass($x) { return take($x); }
+echo pass(new B()), pass(new C()), "\n";
+"#);
+    assert_eq!(out, "B::m/ob/a\nC::m/oc/a\nB::mC::mC::mB::m\nBC\n");
+}
+
+/// Sibling classes filling an untyped property from the constructor join to a union (H1).
+#[test]
+fn test_checker_converge_sibling_classes_join_to_union_in_ctor_property() {
+    let out = compile_and_run(r#"<?php
+class A { }
+class B extends A { function m() { return "B::m"; } }
+class C extends A { function m() { return "C::m"; } }
+class H { public $p; function __construct($p) { $this->p = $p; } function run() { return $this->p->m(); } }
+echo (new H(new B()))->run(), " ", (new H(new C()))->run(), "\n";
+"#);
+    assert_eq!(out, "B::m C::m\n");
+}
+
+/// A method whose sixty untyped parameters each widen in a different pass is monotone, so the
+/// oscillation detector must let it converge (P49 review H2: counting changes per signature
+/// raised an internal error at the 49th pass).
+#[test]
+fn test_checker_converge_many_params_widening_one_per_pass_is_not_an_oscillation() {
+    let n = 60;
+    let params: Vec<String> = (0..n).map(|i| format!("$p{i}")).collect();
+    let body: Vec<String> = (0..n).map(|i| format!("gettype($p{i})[0]")).collect();
+    let mut src = format!(
+        "<?php\nclass Hub {{ function m({}) {{ return {}; }} }}\n",
+        params.join(", "),
+        body.join(" . ")
+    );
+    for i in 0..n {
+        let v = if i + 1 < n {
+            format!("return (new C{}())->v();", i + 1)
+        } else {
+            "return \"s\";".to_string()
+        };
+        let args: Vec<String> = (0..n)
+            .map(|j| if j == i { "$this->v()".to_string() } else { "1".to_string() })
+            .collect();
+        src.push_str(&format!(
+            "class C{i} {{ function v() {{ {v} }} function use() {{ return (new Hub())->m({}); }} }}\n",
+            args.join(", ")
+        ));
+    }
+    for i in 0..n {
+        src.push_str(&format!("echo (new C{i}())->use(), \"\\n\";\n"));
+    }
+    let out = compile_and_run(&src);
+    let expected: String = (0..n)
+        .map(|i| {
+            let line: String = (0..n).map(|j| if j == i { 's' } else { 'i' }).collect();
+            format!("{line}\n")
+        })
+        .collect();
+    assert_eq!(out, expected);
+}
+
+/// A parent|child join (`e(new P1); e(mkp(): P0)`) keeps the child's own method callable (P49 review H1-bis).
+#[test]
+fn test_checker_converge_parent_child_join_keeps_child_method() {
+    let out = compile_and_run(r#"<?php
+class P0 { function base() { return "b"; } }
+class P1 extends P0 { function extra() { return "e1"; } }
+function e($o) { return $o->extra(); }
+function mkp(): P0 { return new P1(); }
+echo e(new P1()), e(mkp()), "\n";
+"#);
+    assert_eq!(out, "e1e1\n");
+}
+
+/// When the runtime object of a parent|child join is the parent, the child-only method throws PHP's catchable `Error` (H1-bis).
+#[test]
+fn test_checker_converge_parent_child_join_throws_php_error_on_parent() {
+    let out = compile_and_run(r#"<?php
+class P0 { function base() { return "b"; } }
+class P1 extends P0 { function extra() { return "e1"; } }
+function e($o) { try { return $o->extra(); } catch (Error $x) { return "err"; } }
+function mkp(): P0 { return new P0(); }
+echo e(new P1()), e(mkp()), "\n";
+"#);
+    assert_eq!(out, "e1err\n");
+}
+
+/// An untyped property filled with an interface and its sub-interface keeps the sub-interface method callable (H1-bis, `MessageInterface::getStatusCode`).
+#[test]
+fn test_checker_converge_interface_parent_child_ctor_property_join() {
+    let out = compile_and_run(r#"<?php
+interface Msg { function body(); }
+interface Resp extends Msg { function code(); }
+class R implements Resp { function body() { return "B"; } function code() { return 200; } }
+function asMsg(): Msg { return new R(); }
+class H { protected $r; function __construct($r) { $this->r = $r; } function s() { return $this->r->code(); } }
+echo (new H(asMsg()))->s(), " ", (new H(new R()))->s(), "\n";
+"#);
+    assert_eq!(out, "200 200\n");
+}
