@@ -178,6 +178,11 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
+        // Same as the indexed literal: a static property has declared slot storage, while the
+        // syntactic fallback types it `int` (`['k' => P::$a]` stored `1`, P42a j1).
+        ExprKind::StaticPropertyAccess { receiver, property } => ir_array_storage_type(
+            static_property_result_type(ctx, receiver, property, value),
+        ),
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
                 .and_then(materializable_array_element_type)

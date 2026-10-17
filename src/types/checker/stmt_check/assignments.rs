@@ -322,3 +322,47 @@ fn assignment_target_may_write_property(target: &Expr) -> bool {
         _ => true,
     }
 }
+
+/// Widens the untyped property or static property at the root of an element write chain.
+///
+/// Called for nested writes (`$o->p[$k1][$k2] = v`) and for element `unset()`s whose receiver is
+/// a property (`unset($o->p[$k])`, `unset($o->p[$k1][$k2])`): both mutate the slot through its
+/// stored cell, which only the boxed PHP-array representation provides (P48).
+pub(crate) fn widen_property_root_for_element_write(
+    checker: &mut Checker,
+    target: &Expr,
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    match &root.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            properties::widen_property_root_for_nested_write(checker, object, property, env)
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_properties::widen_static_property_root_for_nested_write(
+                checker, receiver, property, span,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Models write-context autovivification on the local root of a nested `unset()` target
+/// (`unset($c[$k1][$k2])`): the removal goes through the same boxed parent cells as a nested write,
+/// so the root's element type is widened the same way (P48).
+pub(crate) fn widen_local_root_for_nested_unset(
+    checker: &mut Checker,
+    target: &Expr,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::ArrayAccess { .. }) => {
+            arrays::widen_nested_write_local_root(checker, target, env)
+        }
+        _ => Ok(()),
+    }
+}

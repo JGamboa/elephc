@@ -335,7 +335,13 @@ impl Checker {
                     // `isset($never)` / `unset($never)` are exactly the constructs PHP provides
                     // for probing storage that may never have been declared, so a never-declared
                     // chain root reads as `null` for the operand.
+                    let is_unset = php_symbol_key(builtin_name) == "unset";
                     for arg in &expanded_args {
+                        if is_unset {
+                            crate::types::checker::stmt_check::assignments::widen_local_root_for_nested_unset(
+                                self, arg, env,
+                            )?;
+                        }
                         let probe = null_probe::begin_null_probe_root(self, arg, env);
                         let effects = self.infer_non_reading_arg_assignment_effects(arg, env);
                         null_probe::end_null_probe_root(probe, env);
