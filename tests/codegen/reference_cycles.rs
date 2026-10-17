@@ -270,3 +270,30 @@ var_dump($a[3]);
     );
     assert_eq!(out, "1000 1\narray(1) {\n  [0]=>\n  *RECURSION*\n}\n");
 }
+
+/// Review r1 (H1): an ACYCLIC array deeper than the guard's storage is not a cycle. `===` on two
+/// 2049-level nestings is true (it used to throw "Nesting level too deep" once the 2048-entry
+/// stack filled), and `print_r` of a 2100-level nesting renders every level instead of a false
+/// `*RECURSION*` at level 2048.
+#[test]
+fn test_reference_cycle_guard_full_stack_is_not_a_revisit() {
+    let out = compile_and_run(
+        r#"<?php
+$a = []; $b = [];
+for ($i = 0; $i < 2049; $i++) { $a = [$a]; $b = [$b]; }
+var_dump($a === $b);
+$c = [];
+for ($i = 0; $i < 2049; $i++) { $c = [$c]; }
+$c[0][0] = 1;
+var_dump($a === $c);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+    let out = compile_and_run(
+        r#"<?php
+$a = []; for ($i = 0; $i < 2100; $i++) { $a = [$a]; } print_r($a);
+"#,
+    );
+    assert_eq!(out.matches("RECURSION").count(), 0);
+    assert_eq!(out.matches("Array\n").count(), 2101);
+}

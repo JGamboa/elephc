@@ -1463,17 +1463,18 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _vd_recursion_line\n_vd_recursion_line:\n    .ascii \"*RECURSION*\\n\"\n");
     // _vd_seen / _vd_seen_n: the var_dump/print_r recursion guard — a bounded stack
     // of the object pointers and array/hash tables currently being walked, pushed and
-    // popped around each object body and each array walk. 2048 entries × 8 B.
+    // popped around each object body and each array walk. 65536 entries × 8 B; the depth
+    // counter keeps counting past them, and a full stack is never reported as a revisit.
     // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
-    // a lookup that reaches the cap reports recursion, which is what bounds the walk.
-    out.push_str(&comm_directive("_vd_seen", 16384, target));
+    // storage beyond it is never written.
+    out.push_str(&comm_directive("_vd_seen", 524288, target));
     out.push_str(&comm_directive("_vd_seen_n", 8, target));
     // _json_seen / _cmp_seen: the same guard for json_encode (which runs jsonSerialize()
     // mid-walk) and for `===` on arrays, each on its own stack so the walks never see each
     // other's tables. Same capacity as _vd_seen.
-    out.push_str(&comm_directive("_json_seen", 16384, target));
+    out.push_str(&comm_directive("_json_seen", 524288, target));
     out.push_str(&comm_directive("_json_seen_n", 8, target));
-    out.push_str(&comm_directive("_cmp_seen", 16384, target));
+    out.push_str(&comm_directive("_cmp_seen", 524288, target));
     out.push_str(&comm_directive("_cmp_seen_n", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
