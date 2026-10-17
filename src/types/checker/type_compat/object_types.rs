@@ -433,10 +433,16 @@ impl Checker {
         // `$response` (and `getResponse()`'s return) between the two classes every round.
         let incoming = if param_is_ref { PhpType::Mixed } else { arg_ty.clone() };
         for sharer in self.property_sharers(&prop_name, &declaring_class) {
-            let (property_slot, param_current) = {
+            let (property_slot, param_current, internal) = {
                 let Some(class_info) = self.classes.get(&sharer) else {
                     continue;
                 };
+                // Compiler-owned (prelude/builtin) classes keep the historical rebind: their slot
+                // storage is pinned again after every method pass by the builtin patches
+                // (`patch_builtin_spl_storage_signatures` forces `CallbackFilterIterator::$callback`
+                // to `callable`), so they are not a lattice writer, and the descriptor lowering of
+                // a runtime callable array relies on the constructor's last argument shape.
+                let internal = class_info.is_internal;
                 let property_slot = (!class_info.visible_property_is_declared(&prop_name))
                     .then(|| class_info.visible_property_index(&prop_name))
                     .flatten()
@@ -453,17 +459,17 @@ impl Checker {
                     .flatten()
                     .filter(|sig| !sig.declared_params.get(param_index).copied().unwrap_or(false))
                     .and_then(|sig| sig.params.get(param_index).map(|(_, ty)| ty.clone()));
-                (property_slot, param_current)
+                (property_slot, param_current, internal)
             };
             let property_key = (format!("ctor-prop:{}::${}", sharer, prop_name), 0usize);
             let new_property = property_slot.map(|(slot, current)| {
-                let adopt = !self.param_specialization_seen.contains(&property_key);
+                let adopt = internal || !self.param_specialization_seen.contains(&property_key);
                 let joined = if adopt { incoming.clone() } else { self.join_observed_type(&current, &incoming) };
                 (slot, joined)
             });
             let param_key = (format!("ctor-param:{}", sharer), param_index);
             let new_param = param_current.map(|current| {
-                if self.param_specialization_seen.contains(&param_key) {
+                if !internal && self.param_specialization_seen.contains(&param_key) {
                     self.join_observed_type(&current, &incoming)
                 } else {
                     incoming.clone()
