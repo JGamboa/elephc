@@ -33,7 +33,7 @@ impl Checker {
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target: Target) -> Self {
+    pub(crate) fn new(target: Target) -> Self {
         // Every unconditionally registered constant comes from the shared catalog; only its
         // TYPE is declared here, the value is baked per compilation by
         // `codegen_support::prescan::collect_constants`.
@@ -62,6 +62,7 @@ impl Checker {
             strict_types: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::new(),
+            joined_object_unions: std::cell::RefCell::new(HashSet::new()),
             class_children_index: None,
             method_impl_users_index: None,
             property_sharers_index: None,

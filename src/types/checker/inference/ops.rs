@@ -579,7 +579,14 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
-            if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+            // `$v instanceof Closure ? $v(...) : $v` narrows a mixed `$v` to `Closure` for the
+            // then-branch. The storage is still the boxed value, and a Closure is exactly what
+            // the runtime callable dispatch invokes, so the narrowed call is a runtime call like
+            // the mixed one. Rejecting it made Laravel's `value()` fail to re-resolve once its
+            // parameter widened, which silently kept the stale `int` return (P47).
+            if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed)
+                || is_closure_object_type(&var_ty)
+            {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
@@ -1786,4 +1793,11 @@ fn is_one_int_literal(expr: &Expr) -> bool {
 /// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
+}
+
+/// Whether `ty` is the builtin `Closure` class as an object type (an `instanceof Closure`
+/// narrowing), which the runtime callable dispatch can invoke.
+fn is_closure_object_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Object(name)
+        if crate::names::php_symbol_key(name.trim_start_matches('\\')) == "closure")
 }

@@ -36,6 +36,7 @@ mod generic_method;
 mod generic_new;
 mod generic_variance;
 mod inference;
+mod lattice;
 mod loop_storage;
 pub(crate) mod condition_edges;
 mod method_pass;
@@ -133,6 +134,11 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// Object unions the lattice join BUILT from untyped observations
+    /// (`crate::types::checker::lattice`). A method call on one of them accepts a method that
+    /// only some members declare, as PHP's runtime lookup does; a union the program DECLARES
+    /// (`A|B`, `static|Choice`) keeps the strict every-member rule.
+    pub joined_object_unions: std::cell::RefCell<HashSet<String>>,
     /// Direct subclasses of every class, keyed by parent name, plus the `classes.len()` it was
     /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
     ///
@@ -1325,6 +1331,26 @@ fn check_types_on_compiler_stack(
         &checker.retired_mixed_storage_store_sites,
     )?;
 
+    // A callable signature recorded for an UNTYPED free-function parameter describes the
+    // parameter only while every call site passed that callable. Once the joined parameter type
+    // is no longer `callable` (`value(fn () => 5); value('x')` makes it `mixed`), the one
+    // recorded signature is just the last closure seen, and lowering must not type the body's
+    // invocation (or preserve the parameter's ABI) through it (P47).
+    let mut callable_param_sigs = checker.callable_param_sigs;
+    callable_param_sigs.retain(|(owner, param), _| {
+        let Some(sig) = checker.functions.get(owner) else {
+            return true;
+        };
+        let Some(index) = sig.params.iter().position(|(name, _)| name == param) else {
+            return true;
+        };
+        let declared = sig.declared_params.get(index).copied().unwrap_or(false);
+        let ty = &sig.params[index].1;
+        declared
+            || *ty == PhpType::Callable
+            || matches!(ty, PhpType::Array(elem) if **elem == PhpType::Callable)
+            || matches!(ty, PhpType::AssocArray { value, .. } if **value == PhpType::Callable)
+    });
     Ok(CheckResult {
         requested_instantiations: checker.requested_instantiations,
         generic_call_sites: checker.generic_call_sites,
@@ -1336,7 +1362,7 @@ fn check_types_on_compiler_stack(
         functions: checker.functions,
         function_attribute_names,
         function_attribute_args,
-        callable_param_sigs: checker.callable_param_sigs,
+        callable_param_sigs,
         return_alias_summaries,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,

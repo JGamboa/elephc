@@ -107,6 +107,7 @@ impl Checker {
         // caller checked in that pass types the shared call correctly and a hierarchy that needs
         // no re-inference still stabilizes in one pass.
         self.unify_override_family_returns();
+        let mut oscillation = super::fixpoint_trace::OscillationDetector::new("method pass");
         loop {
             let pass_started = std::time::Instant::now();
             let classes_before_pass = self.classes.clone();
@@ -300,6 +301,11 @@ impl Checker {
                 break;
             }
 
+            if let Some(message) =
+                oscillation.record(&classes_before_pass, &self.classes, None)
+            {
+                return Err(CompileError::new(crate::span::Span::dummy(), &message));
+            }
             method_passes_remaining -= 1;
         }
         Ok(())

@@ -424,38 +424,75 @@ impl Checker {
             return;
         };
 
+        // Every write below is a JOIN (`crate::types::checker::lattice`), with a one-time
+        // adoption over the slot's pre-observation type. The last constructor call used to
+        // REPLACE the shared slot: `new A(1); new B("s"); new C(1.5)` typed the inherited `$v`
+        // `float` for all three (gettype printed `double` for the int and the string), and on
+        // Laravel `new HttpResponseException($symfonyResponse)` in one body and
+        // `new HttpResponseException($illuminateResponse)` in another alternated
+        // `$response` (and `getResponse()`'s return) between the two classes every round.
+        let incoming = if param_is_ref { PhpType::Mixed } else { arg_ty.clone() };
         for sharer in self.property_sharers(&prop_name, &declaring_class) {
+            let (property_slot, param_current, internal) = {
+                let Some(class_info) = self.classes.get(&sharer) else {
+                    continue;
+                };
+                // Compiler-owned (prelude/builtin) classes keep the historical rebind: their slot
+                // storage is pinned again after every method pass by the builtin patches
+                // (`patch_builtin_spl_storage_signatures` forces `CallbackFilterIterator::$callback`
+                // to `callable`), so they are not a lattice writer, and the descriptor lowering of
+                // a runtime callable array relies on the constructor's last argument shape.
+                let internal = class_info.is_internal;
+                let property_slot = (!class_info.visible_property_is_declared(&prop_name))
+                    .then(|| class_info.visible_property_index(&prop_name))
+                    .flatten()
+                    .and_then(|slot| class_info.properties.get(slot).map(|prop| (slot, prop.1.clone())));
+                // Sharing a property does not erase another constructor's declared contract or
+                // make a different parameter position refer to this property's constructor input.
+                let maps_same_property = class_info
+                    .constructor_param_to_prop
+                    .get(param_index)
+                    .and_then(|mapped| mapped.as_ref())
+                    == Some(&prop_name);
+                let param_current = (!param_has_declared_type && maps_same_property)
+                    .then(|| class_info.methods.get("__construct"))
+                    .flatten()
+                    .filter(|sig| !sig.declared_params.get(param_index).copied().unwrap_or(false))
+                    .and_then(|sig| sig.params.get(param_index).map(|(_, ty)| ty.clone()));
+                (property_slot, param_current, internal)
+            };
+            let property_key = (format!("ctor-prop:{}::${}", sharer, prop_name), 0usize);
+            let new_property = property_slot.map(|(slot, current)| {
+                let adopt = internal || !self.param_specialization_seen.contains(&property_key);
+                let joined = if adopt { incoming.clone() } else { self.join_observed_type(&current, &incoming) };
+                (slot, joined)
+            });
+            let param_key = (format!("ctor-param:{}", sharer), param_index);
+            let new_param = param_current.map(|current| {
+                if !internal && self.param_specialization_seen.contains(&param_key) {
+                    self.join_observed_type(&current, &incoming)
+                } else {
+                    incoming.clone()
+                }
+            });
+            if new_property.is_some() {
+                self.param_specialization_seen.insert(property_key);
+            }
+            if new_param.is_some() {
+                self.param_specialization_seen.insert(param_key);
+            }
             let Some(class_info) = self.classes.get_mut(&sharer) else {
                 continue;
             };
-
-            let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
-            if !property_has_declared_type {
-                if let Some(slot) = class_info.visible_property_index(&prop_name) {
-                    if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = if param_is_ref {
-                            PhpType::Mixed
-                        } else {
-                            arg_ty.clone()
-                        };
-                    }
+            if let Some((slot, ty)) = new_property {
+                if let Some(prop) = class_info.properties.get_mut(slot) {
+                    prop.1 = ty;
                 }
             }
-
-            // Sharing a property does not erase another constructor's declared contract or
-            // make a different parameter position refer to this property's constructor input.
-            let maps_same_property = class_info.constructor_param_to_prop.get(param_index)
-                .and_then(|mapped| mapped.as_ref()) == Some(&prop_name);
-            if !param_has_declared_type && maps_same_property {
+            if let Some(ty) = new_param {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
-                        if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = if param_is_ref {
-                                PhpType::Mixed
-                            } else {
-                                arg_ty.clone()
-                            };
-                        }
+                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                        *param_ty = ty;
                     }
                 }
             }

@@ -441,6 +441,9 @@ impl Checker {
                 }
             }
         }
+        // Sorted, so which member a diagnostic names and the order of the joined result do not
+        // depend on the HashMap iteration that built the union upstream (P49 H3).
+        classes.sort();
         classes
     }
 

@@ -270,7 +270,11 @@ impl Checker {
                 });
             if seen_idx < regular_param_count
                 && (!declared || generic_array_param)
-                && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
+                // A `Callable` argument is an observation like any other (P47): skipping it
+                // left `function value($v)` called with a closure AND with a string typed as
+                // whichever non-callable arrived, and the closure (or the string) was then
+                // read through the wrong representation. It joins, so the mix is `mixed`.
+                && !matches!(actual_ty, PhpType::Never)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())
             {
@@ -311,7 +315,7 @@ impl Checker {
                     // rather than a single (wrong) type. A no-op for an already-`Mixed`
                     // or patched parameter (so e.g. `Generator::send`'s value stays
                     // `Mixed`).
-                    let widened = Self::union_param_type(&param_types[seen_idx].1, &actual_ty);
+                    let widened = self.join_observed_type(&param_types[seen_idx].1, &actual_ty);
                     if param_types[seen_idx].1 != widened {
                         param_types[seen_idx].1 = widened;
                         changed = true;
@@ -333,8 +337,12 @@ impl Checker {
                     stored_sig.defaults.get(idx),
                     Some(Some(default)) if matches!(default.kind, ExprKind::Null)
                 );
-                if !declared && null_default && param_types[idx].1 == PhpType::Float {
-                    param_types[idx].1 = PhpType::Union(vec![PhpType::Float, PhpType::Void]);
+                if !declared
+                    && null_default
+                    && matches!(param_types[idx].1, PhpType::Float | PhpType::Callable)
+                {
+                    param_types[idx].1 =
+                        Self::union_param_type(&param_types[idx].1, &PhpType::Void);
                     changed = true;
                 }
             }

@@ -680,6 +680,13 @@ impl Checker {
             (PhpType::Void, PhpType::Float) | (PhpType::Float, PhpType::Void) => {
                 PhpType::Union(vec![PhpType::Float, PhpType::Void])
             }
+            // A callable slot has no null either: `tap($v, $callback = null)` called with a
+            // closure and without one typed `$callback` plain `callable`, `is_null()` folded to
+            // false, and the omitted call invoked a null descriptor (segfault). `callable|null`
+            // keeps both, boxed.
+            (PhpType::Void, PhpType::Callable) | (PhpType::Callable, PhpType::Void) => {
+                PhpType::Union(vec![PhpType::Callable, PhpType::Void])
+            }
             (PhpType::Void | PhpType::Never, other) | (other, PhpType::Void | PhpType::Never) => {
                 other.clone()
             }
