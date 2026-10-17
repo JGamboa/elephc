@@ -34,8 +34,25 @@ pub(super) fn lower_nested_array_assign(
         // so the shape is checked and anything else keeps the original order. Constant
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
-        let deferred = nested_target_is_all_bare_variables(target);
-        let value_first = deferred.then(|| lower_expr(ctx, value));
+        // A bare-variable right-hand side has no effects of its own, so reading it first is
+        // unobservable for the keys and is what lets it own its reference (below).
+        let deferred = nested_target_is_all_bare_variables(target)
+            || matches!(value.kind, ExprKind::Variable(_));
+        // A borrowed container value (`$b[0][0] = $b`) must hold its own reference BEFORE the
+        // parent chain is fetched for write: otherwise the fetch sees a unique container,
+        // mutates it in place and stores the container inside itself (an endless cycle, a
+        // crash in `var_dump`), where PHP copies the right-hand side first.
+        let value_is_variable = matches!(value.kind, ExprKind::Variable(_));
+        let value_first = deferred.then(|| {
+            let lowered = lower_expr(ctx, value);
+            if value_is_variable {
+                own_variable_container_value(ctx, lowered, span)
+            } else {
+                (lowered, false)
+            }
+        });
+        let acquired_value = value_first.and_then(|(v, acquired)| acquired.then_some(v.value));
+        let value_first = value_first.map(|(v, _)| v);
         let parent = lower_nested_assign_parent(ctx, array, span);
         let key = lower_expr(ctx, index);
         let value = match value_first {
@@ -63,6 +80,8 @@ pub(super) fn lower_nested_array_assign(
             && ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Str
         {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        } else if acquired_value == Some(value.value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         } else {
             release_persisted_string_operand(ctx, value, span);
         }
@@ -86,6 +105,38 @@ pub(super) fn lower_nested_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Acquires a variable's array or boxed value so a nested write cannot alias it in place.
+///
+/// Returns the value to store and whether this function took the reference (the caller then
+/// releases it after the set, which keeps its own reference).
+fn own_variable_container_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, bool) {
+    let is_container = matches!(
+        value.ir_type,
+        IrType::Heap(
+            crate::ir::IrHeapKind::Array
+                | crate::ir::IrHeapKind::Hash
+                | crate::ir::IrHeapKind::Mixed
+                | crate::ir::IrHeapKind::Union
+        )
+    );
+    if !is_container {
+        return (value, false);
+    }
+    let owned = ctx.emit_value(
+        Op::Acquire,
+        vec![value.value],
+        None,
+        ctx.builder.value_php_type(value.value),
+        Op::Acquire.default_effects(),
+        Some(span),
+    );
+    (owned, true)
 }
 
 /// Lowers the parent chain of a nested array assignment with write-context
@@ -147,10 +198,12 @@ pub(crate) fn lower_nested_assign_parent(
     // the leaf write would mutate the copy and vanish (P48). Refuse it instead
     // of compiling a write that silently does nothing; an object element
     // (ArrayAccess) is a handle and keeps working through the read.
+    // Only a chain rooted in named storage can lose a write this way: writing into an element
+    // of a call result (`debug_backtrace()[1]['args'][0] = ...`) mutates a temporary in PHP too.
     let receiver_is_by_value_container = matches!(
         receiver.ir_type,
         IrType::Heap(crate::ir::IrHeapKind::Array | crate::ir::IrHeapKind::Hash)
-    );
+    ) && nested_chain_root_is_named_storage(expr);
     let parent = lower_array_access_from_lowered_receiver(ctx, receiver, index, expr);
     if receiver_is_by_value_container
         && matches!(
@@ -172,6 +225,22 @@ pub(crate) fn lower_nested_assign_parent(
         );
     }
     parent
+}
+
+/// Returns whether a nested-write chain starts at a variable, property or static property (as
+/// opposed to a call result or another temporary value).
+fn nested_chain_root_is_named_storage(expr: &Expr) -> bool {
+    let mut root = expr;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    matches!(
+        root.kind,
+        ExprKind::Variable(_)
+            | ExprKind::This
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
 /// Returns whether `lower_nested_assign_parent(expr)` yields the STORED cell of the container,
