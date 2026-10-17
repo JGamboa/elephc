@@ -228,3 +228,45 @@ var_dump($x === $y);
     );
     assert_eq!(out, "bool(true)\nError: Nesting level too deep - recursive dependency?\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nNesting level too deep - recursive dependency?\nbool(true)\n");
 }
+
+/// A loop whose body makes a local's entries referenceable (by-reference foreach, `$r = &$b[$i]`,
+/// `$h[$k] = &$z`) carries the hash layout around the back edge, so the next iteration does not
+/// run packed-array ops on it.
+#[test]
+fn test_reference_cycle_loop_carried_reference_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2, 3];
+for ($i = 0; $i < 3; $i++) { foreach ($a as &$v) { $v++; } unset($v); }
+echo implode(",", $a), "\n";
+$b = [];
+for ($i = 0; $i < 3; $i++) { $b[$i] = $i; $r = &$b[$i]; $r *= 10; unset($r); }
+echo implode(",", $b), "\n";
+$h = ['x' => 1];
+$k = 0;
+while ($k < 2) { $z = $k; $h["k$k"] = &$z; unset($z); $k++; }
+echo implode(",", $h), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "4,5,6\n0,10,20\n1,0,1\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// gc_012's shape: a thousand elements that each reference themselves, built in a loop (it used
+/// to SIGBUS on the second iteration).
+#[test]
+fn test_reference_cycle_self_referencing_elements_in_a_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$a = array();
+for ($i = 0; $i < 1000; $i++) {
+    $a[$i] = array(array());
+    $a[$i][0] = & $a[$i];
+}
+echo count($a), " ", count($a[999]), "\n";
+var_dump($a[3]);
+"#,
+    );
+    assert_eq!(out, "1000 1\narray(1) {\n  [0]=>\n  *RECURSION*\n}\n");
+}
