@@ -306,3 +306,24 @@ echo (new H(asMsg()))->s(), " ", (new H(new R()))->s(), "\n";
 "#);
     assert_eq!(out, "200 200\n");
 }
+
+/// `match (true)` arms see their `instanceof` condition's narrowing, so an untyped function returning `$v->value` / `$v->name` over a joined enum union keeps a string return (tren 9, Laravel `enum_value()`).
+#[test]
+fn test_checker_converge_match_true_instanceof_narrows_joined_union_arms() {
+    let out = compile_and_run(r#"<?php
+enum Suit: string { case Hearts = 'H'; }
+enum Pure { case One; }
+class A { public $n = 'a'; } class B { public $m = 'b'; }
+function ev($value, $default = null) {
+    return match (true) {
+        $value instanceof BackedEnum => $value->value,
+        $value instanceof UnitEnum => $value->name,
+        default => $value ?? $default,
+    };
+}
+function an(A|B $v) { return match (true) { $v instanceof A => $v->n, default => 'z' }; }
+echo ev(Suit::Hearts), ' ', ev(Pure::One), ' ', ev(null, 'd'), "\n";
+var_dump(an(new A), an(new B));
+"#);
+    assert_eq!(out, "H One d\nstring(1) \"a\"\nstring(1) \"z\"\n");
+}

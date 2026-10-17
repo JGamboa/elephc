@@ -187,12 +187,30 @@ impl Checker {
                 default,
             } => {
                 self.infer_type(subject, env)?;
+                let subject_is_true = matches!(subject.kind, ExprKind::BoolLiteral(true));
                 let mut result_ty: Option<PhpType> = None;
                 for (conditions, result) in arms {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
-                    let ty = self.match_arm_result_type(result, env)?;
+                    // `match (true) { $x instanceof X => <arm>, ... }`: the arm only runs when its
+                    // single condition is `=== true`, so it gets the same then-branch narrowing a
+                    // ternary gives (`$x->prop` on a joined `A|B` union is read from `A`). The
+                    // else narrowing is not chained into later arms: a non-bool condition that is
+                    // not `=== true` need not be falsy. An arm that writes the variable keeps the
+                    // un-narrowed type, as before.
+                    let narrowed = match conditions.as_slice() {
+                        [condition] if subject_is_true => self
+                            .guard_narrowing(condition, env)?
+                            .filter(|guard| !crate::ir_lower::expr_writes_local(result, &guard.var))
+                            .map(|guard| {
+                                let mut arm_env = env.clone();
+                                arm_env.insert(guard.var, guard.then_ty);
+                                arm_env
+                            }),
+                        _ => None,
+                    };
+                    let ty = self.match_arm_result_type(result, narrowed.as_ref().unwrap_or(env))?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
