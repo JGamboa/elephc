@@ -286,19 +286,23 @@ pub(super) fn param_escapes_by_reference(name: &str, index: usize) -> bool {
 }
 
 thread_local! {
-    /// The checker's `boxed_array_static_locals` for the current lowering run.
-    static BOXED_ARRAY_STATIC_LOCALS: std::cell::RefCell<std::collections::HashSet<(String, String)>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    /// The checker's `static_local_declared_types` for the current lowering run.
+    static STATIC_LOCAL_DECLARED_TYPES: std::cell::RefCell<
+        std::collections::HashMap<(String, String), PhpType>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Installs the `static` locals with a literal array initializer that get boxed storage.
-pub(crate) fn install_boxed_array_static_locals(locals: &std::collections::HashSet<(String, String)>) {
-    BOXED_ARRAY_STATIC_LOCALS.with(|cell| *cell.borrow_mut() = locals.clone());
+/// Installs the declared types the checker settled on for written array `static` locals.
+pub(crate) fn install_static_local_declared_types(
+    types: &std::collections::HashMap<(String, String), PhpType>,
+) {
+    STATIC_LOCAL_DECLARED_TYPES.with(|cell| *cell.borrow_mut() = types.clone());
 }
 
-/// Whether the checker gave `static $name = [<literal>];` in `scope` boxed `array` storage.
-pub(crate) fn boxed_array_static_local(scope: &str, name: &str) -> bool {
-    BOXED_ARRAY_STATIC_LOCALS.with(|cell| cell.borrow().contains(&(scope.to_string(), name.to_string())))
+/// The checker's declared type for the written array `static $name` in `scope`, if any.
+pub(crate) fn static_local_declared_type_for(scope: &str, name: &str) -> Option<PhpType> {
+    STATIC_LOCAL_DECLARED_TYPES
+        .with(|cell| cell.borrow().get(&(scope.to_string(), name.to_string())).cloned())
 }
 
 /// Whether `name` is one of PHP's superglobals, which elephc keeps in program-global storage.

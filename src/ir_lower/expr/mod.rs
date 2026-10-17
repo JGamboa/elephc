@@ -207,7 +207,7 @@ pub(crate) use instanceof_coercions::{
 };
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use reference_places::{
-    boxed_array_static_local, install_boxed_array_static_locals, install_escaping_ref_params,
+    install_escaping_ref_params, install_static_local_declared_types, static_local_declared_type_for,
     lower_ref_assign_place,
 };
 pub(crate) use dynamic_reference_places::lower_ref_assign_dynamic_property;

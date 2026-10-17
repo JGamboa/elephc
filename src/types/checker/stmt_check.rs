@@ -59,6 +59,7 @@ impl Checker {
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        self.record_static_local_types(env);
         // Binders that do not go through an assignment merge define their names too.
         match &stmt.kind {
             StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {

@@ -1379,13 +1379,16 @@ pub(super) fn check_static_var(
         }
     };
     checker.active_statics.insert(name.to_string());
-    let written = checker.written_static_locals.contains(name);
-    if written {
-        checker
-            .boxed_array_static_locals
-            .insert((checker.current_loop_storage_scope.clone(), name.to_string()));
-    }
-    env.insert(name.to_string(), super::static_local_declared_type(ty, written));
+    let declared = if let Some(&value_writes_only) = checker.written_static_locals.get(name) {
+        if value_writes_only {
+            checker.decide_written_static_type(name, ty)
+        } else {
+            checker.box_written_static_type(name, ty)
+        }
+    } else {
+        super::static_local_declared_type(ty, false)
+    };
+    env.insert(name.to_string(), declared);
     Ok(())
 }
 
@@ -1427,4 +1430,81 @@ fn reject_static_local_reference(
              yet: its storage has no reference cell the alias could share"
         ),
     ))
+}
+
+impl Checker {
+    /// Decides the declared type of a `static $x = <init>;` local the body writes.
+    ///
+    /// The value at the declaration is whatever the previous call left, so the declared type has
+    /// to cover every type a write can leave behind. The checker records, across all walks of
+    /// the body, the type the static holds after each statement (`record_static_local_types`);
+    /// the outer fixpoint re-walks the body while this decision changes.
+    ///
+    /// - An associative array literal keeps its own precise type while every recorded type
+    ///   equals it (`static $c = ['a' => [1]]; $c['a'][] = 2;`), exactly as before boxing existed.
+    /// - A written empty `[]` is boxed PHP `array` (see below).
+    /// - Anything else (a key or element type that changes, an associative shape built from
+    ///   `[]`, a `mixed` element) is boxed PHP `array`, read at run time.
+    pub(crate) fn decide_written_static_type(&mut self, name: &str, init_ty: PhpType) -> PhpType {
+        let fallback = super::static_local_declared_type(init_ty.clone(), true);
+        if !matches!(init_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return fallback;
+        }
+        let key = (self.current_loop_storage_scope.clone(), name.to_string());
+        let empty = |ty: &PhpType| {
+            matches!(ty.codegen_repr(), PhpType::Array(element)
+                if matches!(element.codegen_repr(), PhpType::Never | PhpType::Void))
+        };
+        let seen: Vec<PhpType> = self
+            .static_local_seen_types
+            .get(&key)
+            .map(|types| types.iter().filter(|ty| !empty(ty)).cloned().collect())
+            .unwrap_or_default();
+        // A written `[]` stays boxed: its precise indexed layout is filled by later calls, and a
+        // concretely typed static indexed array returned by value loses later pushes (measured
+        // on principal: `static $c = []; $c[] = 5; return $c;` prints garbage on the second
+        // call), so boxing is the only representation that is not a silent miscompile.
+        // Same for a written INDEXED literal (`static $c = [1, 2]; $c[0] = 5; return $c;` loses
+        // the write on principal too); an associative literal whose writes keep its type is safe.
+        let decided = if empty(&init_ty) || !matches!(init_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+            fallback
+        } else if seen.iter().all(|ty| *ty == init_ty) {
+            init_ty
+        } else {
+            fallback
+        };
+        self.static_local_declared_types.insert(key, decided.clone());
+        decided
+    }
+
+    /// A static whose writes are not all plain value stores (an increment through an element, a
+    /// reference, a by-reference call...) gets boxed storage outright: those paths widen the
+    /// slot in lowering in ways the recorded statement types do not show.
+    pub(crate) fn box_written_static_type(&mut self, name: &str, init_ty: PhpType) -> PhpType {
+        let decided = super::static_local_declared_type(init_ty, true);
+        let key = (self.current_loop_storage_scope.clone(), name.to_string());
+        self.static_local_declared_types.insert(key, decided.clone());
+        decided
+    }
+
+    /// Records the type every active written `static` local holds after a statement.
+    pub(crate) fn record_static_local_types(&mut self, env: &TypeEnv) {
+        if self.active_statics.is_empty() {
+            return;
+        }
+        let scope = self.current_loop_storage_scope.clone();
+        for name in self.active_statics.iter() {
+            if self.written_static_locals.get(name) != Some(&true) {
+                continue;
+            }
+            let Some(ty) = env.get(name) else { continue };
+            let entry = self
+                .static_local_seen_types
+                .entry((scope.clone(), name.clone()))
+                .or_default();
+            if !entry.contains(ty) {
+                entry.push(ty.clone());
+            }
+        }
+    }
 }
