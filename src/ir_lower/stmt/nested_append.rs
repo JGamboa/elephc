@@ -401,9 +401,16 @@ fn lower_local_append_through_parent_cell(
         },
         span,
     );
-    if !matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-        || !super::nested_parent_is_write_through(ctx, &parent_expr)
-    {
+    // Only containers whose elements are ALREADY boxed: those are the ones a nested write can
+    // promote to hash storage at run time, and the ones the parent fetch reaches without
+    // retyping the local (a concretely typed `array<int, array<int>>` keeps the dense path,
+    // which is correct for it and agrees with the checker's element type).
+    let boxed_elements = match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(elem) => matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Never | PhpType::Void),
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !boxed_elements || ctx.is_ref_bound_local(name) {
         return false;
     }
     let cell = super::lower_nested_assign_parent(ctx, &parent_expr, span);
