@@ -119,6 +119,35 @@ fn lower_unset_static_property_element(
     index: &Expr,
     expr: &Expr,
 ) {
+    // `unset(C::$p[$a][$b])` with `$a` absent (or null) is a silent no-op in PHP and creates no
+    // key. The addressable path below would bind `C::$p[$a]` as a cell first, which inserts it,
+    // so a nested target only runs when its container is set: `if (isset(C::$p[$a])) unset(...)`.
+    // Every non-trivial index is evaluated once, into a hidden local, before the guard.
+    if matches!(array.kind, ExprKind::ArrayAccess { .. }) && !GUARDED_STATIC_UNSET.with(|flag| flag.get()) {
+        let array = stabilize_unset_place(ctx, array);
+        let index = stabilize_unset_index(ctx, index);
+        let span = expr.span;
+        let target = Expr::new(
+            ExprKind::ArrayAccess { array: Box::new(array.clone()), index: Box::new(index) },
+            span,
+        );
+        let call = |name: &str, arg: Expr| {
+            Expr::new(ExprKind::FunctionCall { name: name.into(), args: vec![arg] }, span)
+        };
+        let guarded = Stmt::new(
+            StmtKind::If {
+                condition: call("isset", array),
+                then_body: vec![Stmt::new(StmtKind::ExprStmt(call("unset", target)), span)],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        );
+        GUARDED_STATIC_UNSET.with(|flag| flag.set(true));
+        crate::ir_lower::stmt::lower_stmt(ctx, &guarded);
+        GUARDED_STATIC_UNSET.with(|flag| flag.set(false));
+        return;
+    }
     let (prepared, aliases) = prepare_transient_addressable_ref_array_receiver(ctx, array);
     match prepared.as_ref().map(|receiver| &receiver.kind) {
         Some(ExprKind::Variable(name)) => {
@@ -131,6 +160,38 @@ fn lower_unset_static_property_element(
         ),
     }
     release_transient_ref_receiver_aliases(ctx, &aliases, expr.span);
+}
+
+thread_local! {
+    /// Set while the guarded inner `unset` of a nested static-property element is lowered.
+    static GUARDED_STATIC_UNSET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Rebuilds a static-property element chain with every index evaluated once into a hidden local.
+fn stabilize_unset_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
+    match &place.kind {
+        ExprKind::ArrayAccess { array, index } => {
+            let array = stabilize_unset_place(ctx, array);
+            let index = stabilize_unset_index(ctx, index);
+            Expr::new(ExprKind::ArrayAccess { array: Box::new(array), index: Box::new(index) }, place.span)
+        }
+        _ => place.clone(),
+    }
+}
+
+/// Evaluates an index into a hidden local unless it is a literal or a plain variable.
+fn stabilize_unset_index(ctx: &mut LoweringContext<'_, '_>, index: &Expr) -> Expr {
+    if matches!(
+        index.kind,
+        ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_)
+    ) {
+        return index.clone();
+    }
+    let value = lower_expr(ctx, index);
+    let php_type = normalize_value_php_type(ctx.builder.value_php_type(value.value));
+    let temp = ctx.declare_synthetic_php_local(php_type.clone());
+    ctx.store_local(&temp, value, php_type, Some(index.span));
+    Expr::new(ExprKind::Variable(temp), index.span)
 }
 
 /// Returns true when an array-access unset receiver is a plain array/hash local whose element the
