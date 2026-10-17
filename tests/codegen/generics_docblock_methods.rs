@@ -637,8 +637,17 @@ echo $b["x"], " ", rd($b), " ", $b->offsetGet("y"), " ", json_encode($b), " ", c
 #[test]
 fn test_one_line_block_reads_its_opening_tag() {
     let bound = "/** @template T of int @param T $v @return T */\n";
-    let cases = [
-        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
+    let function_case =
+        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n");
+    let error = compile_cli_file_with_flags_expect_failure(&function_case, &[]);
+    assert!(
+        error.contains("does not determine type parameter <T>"),
+        "{function_case}: {error}"
+    );
+    // laravel/main (fix/generics-2, `docblock/members.rs`): a METHOD template that no parameter
+    // or return position adopts binds nothing at a call, so it is dropped and the method compiles
+    // untyped, as php-src runs it, instead of failing as an undetermined call.
+    let method_cases = [
         format!(
             "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
              echo R::id(\"seven\");\n"
@@ -652,12 +661,8 @@ fn test_one_line_block_reads_its_opening_tag() {
              echo Id::A->id(\"seven\");\n"
         ),
     ];
-    for source in &cases {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(
-            error.contains("does not determine type parameter <T>"),
-            "{source}: {error}"
-        );
+    for source in &method_cases {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "seven", "{source}");
     }
     let multiline = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
                      function id($v) { return $v; }\necho id(\"seven\");\n";
