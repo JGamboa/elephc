@@ -503,3 +503,35 @@ try { unset(C::$a["a"]["c"]["deep"]); } catch (\Error $e) { echo get_class($e), 
 "#);
     assert_eq!(out, "{\"a\":{\"c\":2}}\nError: Cannot unset offset in a non-array variable\n");
 }
+
+/// Verifies an associative static literal whose writes keep its type stays precisely typed
+/// (review P52 r1 `h03`/`h04`): a nested element is still an `array` for an `array` parameter
+/// and `sort` on a copy.
+#[test]
+fn test_type_preserving_writes_keep_assoc_static_precise() {
+    let out = compile_and_run(r#"<?php
+function g(array $a) { return count($a); }
+function f() { static $c = ["a" => [1]]; $c["a"][] = 2; return g($c["a"]); }
+function h() { static $c = ["a" => [3, 1]]; $c["b"] = [5, 4]; $x = $c["b"]; sort($x); return implode(",", $x) . count($c); }
+echo f(), f(), h(), h(), "\n";
+"#);
+    assert_eq!(out, "234,524,52\n");
+}
+
+/// Verifies an increment through a nested element of a static array works (review P52 `r14`),
+/// and that written indexed statics returned by value keep every call's writes (principal lost
+/// them silently).
+#[test]
+fn test_written_static_arrays_nested_incdec_and_returned_by_value() {
+    let out = compile_and_run(r#"<?php
+function inc() { static $c = ["a" => ["b" => 1]]; $c["a"]["b"]++; return $c["a"]["b"]; }
+function p() { static $c = []; $c[] = 5; return $c; }
+function w() { static $c = [1, 2]; $c[0] = $c[0] + 1; return $c; }
+function q() { static $c = []; $c[] = [1, 2]; return $c; }
+echo inc(), inc(), "\n";
+p(); echo json_encode(p()), "\n";
+w(); echo json_encode(w()), "\n";
+q(); echo json_encode(q()), "\n";
+"#);
+    assert_eq!(out, "23\n[5,5]\n[3,2]\n[[1,2],[1,2]]\n");
+}
