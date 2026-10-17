@@ -204,6 +204,12 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         super::lower_stmt(ctx, stmt);
     }
 
+    if let BaseKind::Local(name) = &group.base {
+        if lower_local_append_through_parent_cell(ctx, group, name, span) {
+            return;
+        }
+    }
+
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
     // an ordinary property read, which is pure and can be replayed.
     let container = load_container(ctx, group, span);
@@ -367,4 +373,60 @@ fn vivify_stmt(group: &NestedAppendGroup<'_>, span: Span) -> Stmt {
         },
     };
     Stmt::new(kind, span)
+}
+
+/// Lowers `$local[$k][] = $v` by fetching `$local[$k]` for write and appending through its cell.
+///
+/// A statically indexed `Array(Mixed)` local may hold HASH storage at run time: a nested write
+/// with a gap key (`$a[5]['k'] = 1`) or a string-valued boxed key promotes it in place
+/// (`__rt_array_ensure_elem_for_write`, P48). The probe / vivify / `SlotDetach` sequence below
+/// assumes dense storage for an integer key, so after such a write it read slots out of a hash
+/// table — silently wrong groups (`$g[$id]['n'] = …; $g[9][] = 1`) or a SIGSEGV. The fetch-for-
+/// write parent dispatches on the runtime container kind, autovivifies a missing or null bucket,
+/// and `Op::MixedArrayAppend` appends in place through the stored cell (no copy, so no O(n^2)).
+/// Returns `false` (nothing emitted) for locals whose parent fetch is not write-through.
+fn lower_local_append_through_parent_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    group: &NestedAppendGroup<'_>,
+    name: &str,
+    span: Span,
+) -> bool {
+    let StmtKind::ArrayPush { value, .. } = &group.push.kind else {
+        return false;
+    };
+    let parent_expr = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::Variable(name.to_string()), span)),
+            index: Box::new(group.index.clone()),
+        },
+        span,
+    );
+    if !matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        || !super::nested_parent_is_write_through(ctx, &parent_expr)
+    {
+        return false;
+    }
+    let cell = super::lower_nested_assign_parent(ctx, &parent_expr, span);
+    if cell.ir_type != IrType::Heap(IrHeapKind::Mixed) {
+        crate::ir_lower::diagnostics::refuse(
+            span,
+            "Nested array append through this container is not supported",
+        );
+        return true;
+    }
+    let value = lower_expr(ctx, value);
+    ctx.emit_void(
+        Op::MixedArrayAppend,
+        vec![cell.value, value.value],
+        None,
+        Op::MixedArrayAppend.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    if ctx.value_is_owning_temporary(cell) {
+        crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(span));
+    }
+    true
 }

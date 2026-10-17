@@ -248,3 +248,111 @@ echo json_encode($m);
         "unexpected diagnostic: {err}"
     );
 }
+
+/// Review round 1 (B1): after a nested write promoted a statically indexed local to hash storage
+/// at run time (gap key or boxed string key), `$a[$k][] = $v` read dense slots out of the hash
+/// table — silently wrong groups or a SIGSEGV. The append now goes through the fetch-for-write
+/// parent cell, which dispatches on the runtime container kind.
+
+#[test]
+fn test_nested_append_after_runtime_hash_promotion_gap_then_variable_int_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+$a[3]["k"] = 1;
+$x = 0;
+$a[$x][] = 2;
+$a[4][] = 5;
+var_dump($a);
+"#,
+    );
+    assert_eq!(out.stdout, "array(3) {\n  [3]=>\n  array(1) {\n    [\"k\"]=>\n    int(1)\n  }\n  [0]=>\n  array(1) {\n    [0]=>\n    int(2)\n  }\n  [4]=>\n  array(1) {\n    [0]=>\n    int(5)\n  }\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+#[test]
+fn test_nested_append_after_runtime_hash_promotion_grouping_by_id_then_literal() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function grp(array $ids) { $g = []; foreach ($ids as $id) { $g[$id]["n"] = $id; } $g[9][] = 1; return $g; }
+var_dump(grp([5, 2]));
+"#,
+    );
+    assert_eq!(out.stdout, "array(3) {\n  [5]=>\n  array(1) {\n    [\"n\"]=>\n    int(5)\n  }\n  [2]=>\n  array(1) {\n    [\"n\"]=>\n    int(2)\n  }\n  [9]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+#[test]
+fn test_nested_append_after_runtime_hash_promotion_mixed_string_key_then_int() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+$m = json_decode("\"ev\"");
+$a[$m]["k"] = 1;
+$a[0][] = 2;
+var_dump($a);
+"#,
+    );
+    assert_eq!(out.stdout, "array(2) {\n  [\"ev\"]=>\n  array(1) {\n    [\"k\"]=>\n    int(1)\n  }\n  [0]=>\n  array(1) {\n    [0]=>\n    int(2)\n  }\n}\n");
+    // `json_decode` of a scalar string leaks one block on its own (preexisting, also on main),
+    // so this test checks stdout only.
+}
+
+#[test]
+fn test_nested_append_after_runtime_hash_promotion_gap_then_lower_int_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+$a[5]["k"] = 1;
+$a[2][] = "x";
+var_dump($a);
+"#,
+    );
+    assert_eq!(out.stdout, "array(2) {\n  [5]=>\n  array(1) {\n    [\"k\"]=>\n    int(1)\n  }\n  [2]=>\n  array(1) {\n    [0]=>\n    string(1) \"x\"\n  }\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+#[test]
+fn test_nested_append_after_runtime_hash_promotion_gap_then_variable_key_past_end() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = [];
+$j = 6;
+$g[5]["k"] = 1;
+$g[$j][] = 3;
+var_dump($g);
+"#,
+    );
+    assert_eq!(out.stdout, "array(2) {\n  [5]=>\n  array(1) {\n    [\"k\"]=>\n    int(1)\n  }\n  [6]=>\n  array(1) {\n    [0]=>\n    int(3)\n  }\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+#[test]
+fn test_nested_append_after_runtime_hash_promotion_list_with_gap_append() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1]];
+$a[5][] = "x";
+var_dump($a);
+"#,
+    );
+    assert_eq!(out.stdout, "array(2) {\n  [0]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n  [5]=>\n  array(1) {\n    [0]=>\n    string(1) \"x\"\n  }\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// LIMIT (preexisting, also on the main branch): a nested write whose key has a side effect on
+/// the right-hand side variable stores the OLD value — elephc reads `$i` before `$i++` runs,
+/// where php evaluates the keys first and stores `1`. Kept ignored as a record of the limit.
+#[test]
+#[ignore = "known limit: nested-write RHS is evaluated before effectful keys"]
+fn test_nested_write_effectful_key_runs_before_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+$m = json_decode("{\"a\":{}}", true);
+$i = 0;
+$m[$i++]["k"] = $i;
+echo json_encode($m), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"a\":[],\"0\":{\"k\":1}}\n");
+}

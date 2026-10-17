@@ -34,10 +34,12 @@ pub(super) fn lower_nested_array_assign(
         // so the shape is checked and anything else keeps the original order. Constant
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
-        // A bare-variable right-hand side has no effects of its own, so reading it first is
-        // unobservable for the keys and is what lets it own its reference (below).
+        // A bare-variable right-hand side is also read first when no key has an effect
+        // (literals and plain variables only): then reading it early cannot be observed, and it
+        // lets the value own its reference (below). With an effectful key (`$a[$i++]['k'] = $i`)
+        // PHP evaluates the keys first, so the original order is kept.
         let deferred = nested_target_is_all_bare_variables(target)
-            || matches!(value.kind, ExprKind::Variable(_));
+            || (matches!(value.kind, ExprKind::Variable(_)) && nested_target_keys_are_pure(target));
         // A borrowed container value (`$b[0][0] = $b`) must hold its own reference BEFORE the
         // parent chain is fetched for write: otherwise the fetch sees a unique container,
         // mutates it in place and stores the container inside itself (an endless cycle, a
@@ -530,6 +532,26 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     );
     release_nested_parent_key(ctx, key, span);
     cell
+}
+
+/// Returns true when no key of a nested write target can have a side effect.
+fn nested_target_keys_are_pure(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, index } => {
+            matches!(
+                index.kind,
+                ExprKind::Variable(_)
+                    | ExprKind::IntLiteral(_)
+                    | ExprKind::StringLiteral(_)
+                    | ExprKind::BoolLiteral(_)
+                    | ExprKind::FloatLiteral(_)
+                    | ExprKind::Null
+                    | ExprKind::ConstRef(_)
+            ) && nested_target_keys_are_pure(array)
+        }
+        _ => false,
+    }
 }
 
 /// Returns true when every part of a nested write target is a bare variable.
