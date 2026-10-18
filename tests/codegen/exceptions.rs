@@ -1362,3 +1362,37 @@ unset($x);
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A closure or arrow fn returning `$c ? new E : null` is lowered with an Object return type, so
+/// its null result reaches `throw` as an Object-typed null; codegen must raise PHP's
+/// `Error("Can only throw objects")` instead of publishing the null pointer. (The closure's
+/// null-return unboxing has its own pre-existing leak, so this test asserts output only.)
+#[test]
+fn test_throw_object_typed_null_from_closure_raises_error() {
+    let out = compile_and_run(r#"<?php
+class E extends Exception {}
+$arrow = fn($c) => $c ? new E("arrow") : null;
+try { $z = $arrow(false); throw $z; } catch (Error $x) { echo "arrow:", $x->getMessage(), "\n"; }
+$arrow_obj = fn($c) => $c ? new E("arrow") : null;
+try { throw $arrow_obj(true); } catch (E $x) { echo "arrow-obj:", $x->getMessage(), "\n"; }
+function arrow_in_function() {
+    $fn = fn(bool $c) => $c ? new E("a") : null;
+    try { throw $fn(false); } catch (Error $x) { echo "infn:", $x->getMessage(), "\n"; }
+}
+function closure_in_function() {
+    $fn = function (bool $c) { return $c ? new E("a") : null; };
+    try { throw $fn(false); } catch (Error $x) { echo "closure:", $x->getMessage(), "\n"; }
+}
+arrow_in_function();
+closure_in_function();
+echo "end\n";
+"#);
+    assert_eq!(
+        out,
+        "arrow:Can only throw objects\n\
+         arrow-obj:arrow\n\
+         infn:Can only throw objects\n\
+         closure:Can only throw objects\n\
+         end\n"
+    );
+}
