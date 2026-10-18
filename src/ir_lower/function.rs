@@ -31,6 +31,8 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+mod object_comparisons;
+pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
@@ -1849,8 +1851,11 @@ fn lower_body_into_function(
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) {
+            // Flags first: a native Core method body still lowers its leading statement.
             super::maybe_undefined::init_frame_flags(ctx);
-            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
+            if !super::core_methods::lower(ctx, body) {
+                crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
+            }
         }
     });
     terminate_open_block(&mut ctx);

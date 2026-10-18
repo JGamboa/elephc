@@ -18,6 +18,12 @@ pub(super) fn lower_numeric_unary(
     expr: &Expr,
 ) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if int_op == Op::INeg && crate::types::object_operators::operator_class(&ctx.builder.value_php_type(value.value)).is_some() {
+        let zero = lower_int_literal(ctx, 0, expr);
+        if let Some(result) = object_operators::lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr) {
+            return result;
+        }
+    }
     match value.ir_type {
         IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
         IrType::I64 => {
@@ -37,6 +43,15 @@ pub(super) fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
+            if let Some(result) = object_operators::lower_dynamic_object_binary(
+                ctx, zero, &BinOp::Sub, value, expr, true, |ctx| {
+                    let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+                    release_binary_operand_temporary(ctx, value, expr.span);
+                    result
+                },
+            ) {
+                return result;
+            }
             let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
             // Mirror the binary mixed-op path: an owning boxed operand (e.g.
             // `-($i * 7 + 1)`, issue #500) must be released once consumed.

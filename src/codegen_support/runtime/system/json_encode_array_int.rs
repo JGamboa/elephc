@@ -49,6 +49,10 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_json_arr_int_packed");                       // packed storage encodes inline below
     emitter.instruction("b __rt_json_encode_assoc");                            // hash storage is the object-form encoder's job
     emitter.label("__rt_json_arr_int_packed");
+    super::json_integer_tree::emit_json_integer_tree_entry(
+        emitter,
+        "__rt_json_arr_int_integer_tree",
+    );
 
     // -- redirect to the dynamic encoder when JSON_FORCE_OBJECT is set --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
@@ -191,6 +195,10 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_json_arr_int_packed");                        // packed storage encodes inline below
     emitter.instruction("jmp __rt_json_encode_assoc");                          // hash storage is the object-form encoder's job
     emitter.label("__rt_json_arr_int_packed");
+    super::json_integer_tree::emit_json_integer_tree_entry(
+        emitter,
+        "__rt_json_arr_int_integer_tree_x86",
+    );
 
     // -- redirect to the dynamic encoder when JSON_FORCE_OBJECT is set --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active flag bitmask

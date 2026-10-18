@@ -79,6 +79,9 @@ pub(super) fn check_property_array_push(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            if matches!(&prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap")) {
+                return Ok(());
+            }
             let updated_prop_ty = updated_array_property_push_type(
                 checker,
                 &prop_ty,

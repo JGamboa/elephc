@@ -76,7 +76,9 @@ pub(super) fn check_static_property_array_push(
 ) -> Result<(), CompileError> {
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
-    if target.dynamic_eval_target || target.prop_ty.is_php_array() {
+    if target.dynamic_eval_target || target.prop_ty.is_php_array()
+        || matches!(&target.prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap"))
+    {
         return Ok(());
     }
     let updated_prop_ty = match target.prop_ty {

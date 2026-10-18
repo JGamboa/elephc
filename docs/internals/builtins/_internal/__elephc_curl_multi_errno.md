@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_errno() - internals"
 description: "Compiler internals for __elephc_curl_multi_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1101
+  order: 1111
 ---
 
 ## `__elephc_curl_multi_errno()` - internals

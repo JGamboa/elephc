@@ -151,13 +151,34 @@ When interpreter fallback is required, generated code performs these steps:
    register bridge-compatible AOT functions, methods, constructors, class
    metadata, parameter names, defaults, and visibility information, then publish
    the complete catalog before executing PHP.
-4. Flush visible locals, by-reference cells, closure captures, and eligible
-   globals into boxed scope cells.
+4. Compute the fragment's conservative caller-scope access mask, then flush
+   selected locals and globals or the complete eligible scope into boxed cells.
 5. Set call-site file, directory, namespace, class, trait, function, and method
    metadata used by magic constants.
 6. Call `__elephc_eval_execute` through the target-aware ABI.
 7. Reload dirty, created, or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
+
+### Selective dynamic scope synchronization
+
+Before crossing into Magician, generated code asks the parser or parse cache for
+a conservative 64-bit mask of caller-scope names used by the fragment. The
+parser and native code use the same FNV-1a name hash. Each set bit gates both the
+pre-eval flush and post-eval reload for that name. Hash collisions can only
+cause an additional name to be synchronized.
+
+Selective synchronization is restricted to direct numeric scalar arithmetic
+and assignment expressions. Calls, strings, references, variable variables,
+arrays, objects, `$GLOBALS`, includes, handlers, introspection, and every other
+syntax class select the complete scope. Parse failures and fragments larger
+than 64 KiB also select the complete scope. Once a context encounters one of
+those cases, the full-scope requirement remains active for that function
+activation. A later activation creates a fresh context.
+
+A selected `Mixed` or union binding keeps the narrow mask only when its current
+runtime value is an integer, float, or boolean. Other tags promote that call to
+full synchronization. Throwable writeback reloads the selected or complete
+scope before native propagation, using the same mask as normal completion.
 
 Generated modules own a private, aligned, zero-initialized catalog token. The
 bridge assigns it a process-unique generation and retains up to eight catalogs
@@ -349,11 +370,12 @@ cell for contract validation; that cell is released on success and failure, whil
 the original key so native normalization and diagnostics keep their existing operands. No new
 value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
 mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
-format 16 includes the retained templates, tokens, imports, structural types, and typed locals,
+format 17 includes the retained templates, tokens, imports, structural types, typed locals, and
+the conservative caller-scope access mask,
 alongside preserved source spelling for direct and first-class function calls. It invalidates
 older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
 member annotations discarded after uppercase or mixed-case native class-like keywords.
-Version 16 also invalidates stored parse errors for valid comparisons after class references.
+The preceding version also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
 
 ## Parsing and cache

@@ -41,6 +41,14 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
+        if php_symbol_key(interface_name) == "unitenum"
+            || checker.interface_extends_interface(interface_name, "UnitEnum")
+        {
+            return Err(CompileError::new(
+                class.span,
+                &format!("Non-enum class {} cannot implement interface UnitEnum", class.name),
+            ));
+        }
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -613,6 +621,9 @@ fn validate_interface_method(
             &child_scope,
         )
     };
+    // `Serializable`'s methods carry only tentative return types in PHP.
+    let required_owner = contract_scope;
+    let tentative_return = php_symbol_key(required_owner) == "serializable";
     validate_signature_compatibility_with_defaults(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
@@ -645,7 +656,9 @@ fn validate_interface_method(
         && attribute_names_include_return_type_will_change(
             state.method_attribute_names.get(method_name),
         );
-    if required_sig.declared_return && !actual_sig.declared_return && !return_type_will_change {
+    if required_sig.declared_return && !actual_sig.declared_return && !return_type_will_change
+        && !tentative_return
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -694,8 +707,6 @@ fn validate_interface_method(
         .unwrap_or(&class.name);
     // Only Throwable's original contract has PDO's internal SQLSTATE exception.
     // A user interface can inherit that contract, but its own getCode declaration cannot.
-    let required_owner = interface_info.method_declaring_interfaces
-        .get(method_name).map(String::as_str).unwrap_or(interface_name);
     let pdo_throwable_exemption = php_symbol_key(required_owner) == "throwable"
         && [contract_owner, implementing_class, class.name.as_str()]
         .into_iter()
@@ -723,7 +734,7 @@ fn validate_interface_method(
                 .return_type
                 .reference_payload_compatible(&required_sig.return_type));
     if required_sig.declared_return && !return_compatible && return_type_will_change
-        && !relaxed_return_bridgeable
+        && !relaxed_return_bridgeable && !tentative_return
     {
         return Err(CompileError::new(
             actual_method
@@ -735,7 +746,9 @@ fn validate_interface_method(
             ),
         ));
     }
-    if required_sig.declared_return && !return_compatible && !relaxed_return_bridgeable {
+    if required_sig.declared_return && !return_compatible && !relaxed_return_bridgeable
+        && !tentative_return
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

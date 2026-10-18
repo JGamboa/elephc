@@ -276,6 +276,8 @@ fn collect_instance_dispatch_metadata_into(
                 methods,
                 ..
             } => {
+                metadata.has_internal_object_operators |= elephc_builtin_contract::lookup_class(name)
+                    .is_some_and(|class| class.operators.is_some());
                 let private_methods = methods
                     .iter()
                     .filter(|method| {

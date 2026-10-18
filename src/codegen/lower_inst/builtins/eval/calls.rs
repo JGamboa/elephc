@@ -42,9 +42,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     ensure_eval_global_scope(ctx)?;
     let sync_locals = eval_sync_locals(ctx);
     let sync_globals = eval_sync_globals(ctx);
+    prepare_dynamic_eval_scope_access_mask(ctx, &sync_locals, &sync_globals)?;
     let global_aliases = eval_global_aliases(ctx);
-    flush_eval_scope_locals(ctx, &sync_locals)?;
-    flush_eval_global_scope(ctx, &sync_globals)?;
+    flush_dynamic_eval_scope_locals(ctx, &sync_locals)?;
+    flush_dynamic_eval_global_scope(ctx, &sync_globals)?;
     mark_eval_scope_global_aliases(ctx, &global_aliases);
     set_eval_context_global_scope(ctx);
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
@@ -62,8 +63,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     protect_eval_reload_owners(ctx);
     ctx.emitter.comment("reload eval scope before propagating its pending exception");
-    reload_eval_scope_locals(ctx, &sync_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
-    reload_eval_global_scope(ctx, &sync_globals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    reload_dynamic_eval_scope_locals(ctx, &sync_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    reload_dynamic_eval_global_scope(ctx, &sync_globals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
     finish_eval_scope_reload(ctx);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);

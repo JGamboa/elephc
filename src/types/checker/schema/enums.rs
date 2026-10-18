@@ -169,6 +169,17 @@ pub(crate) fn build_enum_info(
     validate_enum_marker_interfaces(name, implements, resolved_backing.is_some(), span, checker)?;
 
     let mut seen_case_names = HashSet::new();
+    for interface in implements {
+        let key = php_symbol_key(interface.as_str());
+        if matches!(key.as_str(), "unitenum" | "backedenum") {
+            return Err(CompileError::new(span, "Enum cannot explicitly implement UnitEnum or BackedEnum"));
+        }
+        if resolved_backing.is_none()
+            && checker.interface_extends_interface(interface.as_str(), "BackedEnum")
+        {
+            return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
+        }
+    }
     let mut seen_int_values = HashSet::new();
     let mut seen_string_values = HashSet::new();
     let mut enum_cases = Vec::new();

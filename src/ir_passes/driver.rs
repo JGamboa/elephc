@@ -21,7 +21,8 @@
 //!   panic are gated on `debug_assertions`, so they are active in `cargo build`/
 //!   `cargo test` and compile out of `--release`. In release, hitting either
 //!   iteration cap simply stops and proceeds with the current IR.
-//! - Ownership finalizers run only after that fixed point. Their rewrites must
+//! - Tail recursion lowering follows that fixed point and reruns scalar passes on its loops.
+//!   Ownership finalizers run only after these phases. Their rewrites must
 //!   not expose new integer sinks to the earlier representation-changing passes.
 
 use crate::ir::{DataPool, Function, Module};
@@ -164,6 +165,15 @@ pub fn optimize_module(module: &mut Module) {
     let (finalizers, passes): (Vec<_>, Vec<_>) = default_passes().into_iter()
         .partition(|pass| pass.run_after_fixed_point());
     optimize_module_to_fixed_point(module, &passes);
+    // Tail recursion changes the CFG and parameter mutability after the ordinary
+    // fixed point, so rerun scalar passes before finalizing ownership.
+    if super::tail_call::eliminate_tail_recursion(module) {
+        #[cfg(debug_assertions)]
+        if let Err(error) = crate::ir::validate_module(module) {
+            panic!("tail recursion produced invalid module: {:?}", error);
+        }
+        run_module_function_passes(module, &passes);
+    }
     run_module_function_passes(module, &finalizers);
 }
 

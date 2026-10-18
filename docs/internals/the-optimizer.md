@@ -526,6 +526,43 @@ on macOS. Enabling user-object atom splitting requires explicit relocation and
 metadata roots plus callable regression coverage; applying the runtime-object
 strategy directly can produce dangling callable descriptors.
 
+## EIR tail recursion
+
+`src/ir_passes/tail_call.rs` runs once after the inliner/per-function fixed point
+and before ownership finalizers. It discovers direct `Call` instructions whose
+result reaches `Return` without further work, including scalar local-slot or
+block-parameter forwarding through shared return joins. Numeric owner retirement
+and scratch resets must occur in the call block so a new edge cannot bypass them.
+Iterative strongly connected component analysis identifies self and mutual tail
+cycles without consuming the compiler's recursive call stack.
+
+Each original function keeps its name, signature and ABI prologue. Mutual
+components clone the other bodies once into that function, remapping block,
+instruction, value and local IDs. `tail_initial` loads the incoming ABI slots;
+`tail_rebind_<name>` accepts typed block parameters, resets fresh local storage,
+stores the new parameters and branches to that body's entry. Tail calls become
+`Br` to the appropriate rebinding block. Argument evaluation and parallel block
+moves precede parameter stores, preserving swaps and named argument order.
+The backend emits the declared `function.entry` first, including when this pass
+appended it after the original blocks.
+
+The frame proof requires scalar boundaries and local storage, no references,
+variadics, handlers, persistent locals or implicit frame readers. Checked
+arithmetic's boxed numeric argument roots are a bounded exception: each root
+must have one store/push/pop/clear sequence and a proven numeric producer, with
+slot and unwind-record balance verified on every normal CFG path. Integer ABI coercions are emitted while those owners
+are live; the existing cleanup then executes before the branch. Arbitrary
+`Mixed` owners cannot pass this proof because their cleanup can invoke PHP.
+Eval or backtrace snapshots disable the transform module-wide. Mutual cloning
+is capped at 16 bodies and 4096 instructions per entry.
+
+All local load effects are restored because parameter immutability proofs from
+the old call graph no longer hold. The ordinary scalar passes then optimize the
+new CFG before ownership finalization. The transform and its resulting branches
+are target-independent. See the
+[compilation guide](../compiling/optimization.md#tail-recursion) for eligibility
+and a PHP example.
+
 ## Effect summaries: purity and `may_throw`
 
 The optimizer now maintains a small local effect-analysis layer that sits underneath the pruning and dead-code-elimination passes.

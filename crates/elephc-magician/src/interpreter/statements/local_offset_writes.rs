@@ -53,6 +53,7 @@ fn eval_local_offset_write(
                 let index = match index {
                     Some(index) => index,
                     None => {
+                        reject_weak_map_append(current, context, values)?;
                         let index = values.null()?;
                         operands.push(index);
                         index
@@ -105,6 +106,21 @@ fn eval_local_offset_write(
         if result.is_ok() { result = released; }
     }
     result
+}
+
+/// Preserves the native WeakMap distinction between an absent offset and an explicit null key.
+pub(super) fn reject_weak_map_append(
+    object: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let class_name = match context.dynamic_object_class_name(identity) {
+        Some(name) => name,
+        None => runtime_object_class_name(object, values)?,
+    };
+    if class_name.eq_ignore_ascii_case("WeakMap") {
+        return eval_throw_error("Cannot append to WeakMap", context, values);
+    }
+    Ok(())
 }
 
 /// Allocates a normalized integer key only after the live receiver has selected array semantics.

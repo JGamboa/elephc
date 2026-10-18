@@ -6,19 +6,33 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "closure",
+          "name": "num1",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 2,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
-    "area": "Misc",
-    "canonical_name": "__elephc_callable_is_anonymous",
-    "description": "Reports ReflectionFunction::isAnonymous() for a Closure's runtime descriptor.",
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_add",
+    "description": "Internal immutable BCMath Number decimal operation.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -36,43 +50,53 @@
       "codegen_function": "lower_registry_call",
       "codegen_line": 700,
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_add` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/callables/__elephc_callable_is_anonymous.rs",
+      "sig_file": "src/builtins/math/__elephc_bcnumber_add.rs",
       "sig_line": null
     },
-    "module": "elephc",
-    "name": "__elephc_callable_is_anonymous",
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_add",
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
         "kind": "static_only",
-        "reason": "internal compiler primitive"
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
         "kind": "static",
         "names": [
-          "reads_heap",
+          "reads_process",
+          "alloc_heap",
           "may_throw"
         ]
       },
       "lowering": {
-        "kind": "eir"
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_add"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "non_heap"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
-        "values": []
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
       },
       "result_type": "declared",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "runtime_functions": [
+        "__elephc_bcnumber_add"
+      ],
+      "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -90,17 +114,1780 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "closure",
+          "name": "num1",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
         }
       ],
-      "return_type": "bool",
+      "return_type": "string",
       "variadic": null
     },
     "since": null,
-    "slug": "__elephc_callable_is_anonymous",
-    "sub_area": "Callables"
+    "slug": "__elephc_bcnumber_add",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_ceil",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_ceil` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_ceil.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_ceil",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_ceil"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_ceil"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_ceil",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_comp",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_comp` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_comp.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_comp",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_comp"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_comp"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_comp",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_create",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_create` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_create.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_create",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_create"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_create"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_create",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_div",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_div` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_div.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_div",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_div"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_div"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_div",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_divmod",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_divmod` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_divmod.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_divmod",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_divmod"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "__elephc_bcnumber_divmod"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_divmod",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_floor",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_floor` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_floor.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_floor",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_floor"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_floor"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_floor",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_mod",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_mod` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_mod.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_mod",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_mod"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_mod"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_mod",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_mul",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_mul` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_mul.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_mul",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_mul"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_mul"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_mul",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_pow",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_pow` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_pow.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_pow",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_pow"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_pow"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_pow",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "modulus",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_powmod",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_powmod` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_powmod.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_powmod",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_powmod"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_powmod"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "modulus",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_powmod",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "precision",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 1,
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_round",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_round` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_round.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_round",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_round"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_round"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "precision",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_round",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_sqrt",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_sqrt` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_sqrt.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_sqrt",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_sqrt"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_sqrt"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_sqrt",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "__elephc_bcnumber_sub",
+    "description": "Internal immutable BCMath Number decimal operation.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 700,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_bcnumber_sub` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/__elephc_bcnumber_sub.rs",
+      "sig_line": null
+    },
+    "module": "bcmath",
+    "name": "__elephc_bcnumber_sub",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_bcnumber_sub"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_bcnumber_sub"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "?int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_bcnumber_sub",
+    "sub_area": "Math"
   },
   {
     "aot": {
@@ -202,109 +1989,6 @@
     "since": null,
     "slug": "__elephc_callable_ptr",
     "sub_area": "Pointer"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "closure",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "required_param_count": 1,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_callable_scope_class",
-    "description": "Returns the ReflectionFunction::getClosureScopeClass() name recorded in a Closure's runtime descriptor, or an empty string.",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/callables/__elephc_callable_scope_class.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_callable_scope_class",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "independent"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "declared",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "signature"
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "closure",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "return_type": "string",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_callable_scope_class",
-    "sub_area": "Callables"
   },
   {
     "aot": {
@@ -539,218 +2223,6 @@
     },
     "since": null,
     "slug": "__elephc_clone_override_reference_guard",
-    "sub_area": "Callables"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "value",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "required_param_count": 1,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_closure_from_callable",
-    "description": "Builds a Closure from a runtime callable value for `$callable(...)`, throwing Error when it names nothing.",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/callables/__elephc_closure_from_callable.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_closure_from_callable",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "alloc_heap",
-          "refcount_op",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "checked",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "checker_hook",
-        "lazy": false
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "value",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "return_type": "callable",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_closure_from_callable",
-    "sub_area": "Callables"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "value",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "required_param_count": 1,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_closure_from_callable_type_error",
-    "description": "Builds a Closure from a runtime callable value for `Closure::fromCallable()`, throwing TypeError when it names nothing.",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/callables/__elephc_closure_from_callable_type_error.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_closure_from_callable_type_error",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "alloc_heap",
-          "refcount_op",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "checked",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "checker_hook",
-        "lazy": false
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "value",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "return_type": "callable",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_closure_from_callable_type_error",
     "sub_area": "Callables"
   },
   {
@@ -6446,502 +7918,6 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "class",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "name",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 2,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_dynamic_class_constant",
-    "description": "Reads a class constant through a runtime class name or object (`$class::NAME`).",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/system/__elephc_dynamic_class_constant.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_dynamic_class_constant",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "reads_global",
-          "alloc_heap",
-          "refcount_op",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "declared",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "signature"
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "name",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "return_type": "mixed",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_dynamic_class_constant",
-    "sub_area": "System"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "object",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "property",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "value",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "required_param_count": 3,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_dynamic_property_push",
-    "description": "Appends to a property named at run time (`$obj->{$name}[] = $value`).",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/system/__elephc_dynamic_property_push.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_dynamic_property_push",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "alloc_heap",
-          "refcount_op",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "checked",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "checker_hook",
-        "lazy": false
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "object",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "property",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "value",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "return_type": "mixed",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_dynamic_property_push",
-    "sub_area": "System"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "method",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 2,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": "args"
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_dynamic_static_call",
-    "description": "Calls a method through a runtime class name or object (`$class::method()`).",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/system/__elephc_dynamic_static_call.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_dynamic_static_call",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "reads_global",
-          "alloc_heap",
-          "refcount_op",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "declared",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "signature"
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "method",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "return_type": "mixed",
-      "variadic": "args"
-    },
-    "since": null,
-    "slug": "__elephc_dynamic_static_call",
-    "sub_area": "System"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "property",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 2,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_dynamic_static_property",
-    "description": "Reads a static property through a runtime class name or object (`$class::$prop`).",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/system/__elephc_dynamic_static_property.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_dynamic_static_property",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "reads_global",
-          "alloc_heap",
-          "refcount_op",
-          "may_throw"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "declared",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "signature"
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class",
-          "optional": false,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "property",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "return_type": "mixed",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_dynamic_static_property",
-    "sub_area": "System"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
           "name": "hour",
           "optional": false,
           "type": "int"
@@ -7659,127 +8635,6 @@
     "since": null,
     "slug": "__elephc_hash_ctx_update",
     "sub_area": "String"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "message",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 1,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_include_warning",
-    "description": "Raises PHP's E_WARNING for a failed dynamic include, for elephc.includes.toml dispatch.",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.__elephc_include_warning` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/system/__elephc_include_warning.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_include_warning",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
-      },
-      "lowering": {
-        "kind": "runtime_call",
-        "target": "__elephc_include_warning"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "non_heap"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "declared",
-      "runtime_functions": [
-        "__elephc_include_warning"
-      ],
-      "target_strategy": "runtime_call",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "signature"
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "message",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "return_type": "void",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_include_warning",
-    "sub_area": "System"
   },
   {
     "aot": {
@@ -12954,110 +13809,6 @@
     "since": null,
     "slug": "__elephc_ptr_write_string",
     "sub_area": "Pointer"
-  },
-  {
-    "aot": {
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class_name",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 1,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
-    },
-    "area": "Misc",
-    "canonical_name": "__elephc_reflection_class_named",
-    "description": "Builds the name-only ReflectionClass returned by ReflectionFunction::getClosureScopeClass().",
-    "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "internal-compiler-surface"
-    },
-    "eval_only": false,
-    "examples": [],
-    "in_catalog": false,
-    "is_extension": false,
-    "is_internal": true,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 700,
-      "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
-      ],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": "src/builtins/callables/__elephc_reflection_class_named.rs",
-      "sig_line": null
-    },
-    "module": "elephc",
-    "name": "__elephc_reflection_class_named",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "internal compiler primitive"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "alloc_heap"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": []
-      },
-      "result_type": "checked",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "checker_hook",
-        "lazy": false
-      }
-    },
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "class_name",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "return_type": "object",
-      "variadic": null
-    },
-    "since": null,
-    "slug": "__elephc_reflection_class_named",
-    "sub_area": "Callables"
   },
   {
     "aot": {
@@ -29989,7 +30740,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 808,
+      "codegen_line": 744,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -30074,7 +30825,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 807,
+      "codegen_line": 743,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -30145,7 +30896,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 811,
+      "codegen_line": 747,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -30230,7 +30981,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 806,
+      "codegen_line": 742,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38786,7 +39537,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 959,
+      "codegen_line": 895,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38864,7 +39615,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 786,
+      "codegen_line": 722,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38949,7 +39700,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 788,
+      "codegen_line": 724,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39034,7 +39785,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 787,
+      "codegen_line": 723,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39119,7 +39870,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 791,
+      "codegen_line": 727,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39218,7 +39969,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 967,
+      "codegen_line": 903,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39560,7 +40311,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 956,
+      "codegen_line": 892,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39645,7 +40396,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 958,
+      "codegen_line": 894,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39708,7 +40459,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 903,
+      "codegen_line": 839,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39764,7 +40515,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 953,
+      "codegen_line": 889,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39835,7 +40586,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 973,
+      "codegen_line": 909,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -39927,7 +40678,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 968,
+      "codegen_line": 904,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40019,7 +40770,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 961,
+      "codegen_line": 897,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40090,7 +40841,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 966,
+      "codegen_line": 902,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40154,7 +40905,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 797,
+      "codegen_line": 733,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40225,7 +40976,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 794,
+      "codegen_line": 730,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40303,7 +41054,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 960,
+      "codegen_line": 896,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40388,7 +41139,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 798,
+      "codegen_line": 734,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40503,7 +41254,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 889,
+      "codegen_line": 825,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40639,7 +41390,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 889,
+      "codegen_line": 825,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40766,7 +41517,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 970,
+      "codegen_line": 906,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40858,7 +41609,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 962,
+      "codegen_line": 898,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40929,7 +41680,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 963,
+      "codegen_line": 899,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -41000,7 +41751,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 964,
+      "codegen_line": 900,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -41071,7 +41822,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 965,
+      "codegen_line": 901,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -42719,7 +43470,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 852,
+      "codegen_line": 788,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -42799,7 +43550,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 852,
+      "codegen_line": 788,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46286,7 +47037,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "shared"
@@ -46333,7 +47084,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "int",
       "variadic": null
     },
     "since": null,
@@ -49013,7 +49764,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "static",
@@ -49068,7 +49819,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "int",
       "variadic": null
     },
     "since": null,
@@ -49287,7 +50038,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 820,
+      "codegen_line": 756,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -55928,7 +56679,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 900,
+      "codegen_line": 836,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -56673,7 +57424,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 909,
+      "codegen_line": 845,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -56883,7 +57634,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 812,
+      "codegen_line": 748,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -61937,7 +62688,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 729,
+      "codegen_line": 665,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76318,7 +77069,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 826,
+      "codegen_line": 762,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76396,7 +77147,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 829,
+      "codegen_line": 765,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76467,7 +77218,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 821,
+      "codegen_line": 757,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76531,7 +77282,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 815,
+      "codegen_line": 751,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76609,7 +77360,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 823,
+      "codegen_line": 759,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76687,7 +77438,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 819,
+      "codegen_line": 755,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76751,7 +77502,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 830,
+      "codegen_line": 766,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -76829,7 +77580,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 822,
+      "codegen_line": 758,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -77815,7 +78566,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 818,
+      "codegen_line": 754,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -117169,7 +117920,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -131208,7 +131959,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 909,
+      "codegen_line": 845,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -132199,7 +132950,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 801,
+      "codegen_line": 737,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -135076,7 +135827,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 939,
+      "codegen_line": 875,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -135225,7 +135976,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 802,
+      "codegen_line": 738,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -135303,7 +136054,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 974,
+      "codegen_line": 910,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -135374,7 +136125,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 975,
+      "codegen_line": 911,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -135445,7 +136196,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 933,
+      "codegen_line": 869,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -135595,7 +136346,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 948,
+      "codegen_line": 884,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -137158,7 +137909,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 833,
+      "codegen_line": 769,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -137416,7 +138167,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",

@@ -35,3 +35,5 @@ mod peephole_test;
 mod regalloc_edges_test;
 mod regalloc_test;
 mod rematerialize_test;
+
+mod tail_call_test;

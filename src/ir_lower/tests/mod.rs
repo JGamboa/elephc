@@ -38,6 +38,8 @@ mod eval_ownership;
 mod eval_default_helpers;
 mod exhaustive;
 mod ownership;
+mod weak_map_places;
+mod backtrace_labels;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
 mod boxed_array_write_owners;
@@ -153,6 +155,8 @@ fn try_lower_source_at_for_target(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(

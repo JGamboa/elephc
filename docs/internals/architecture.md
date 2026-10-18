@@ -490,7 +490,7 @@ src/
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (103 top-level files + 68 nested helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (205 top-level files + 7 nested target/debug helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (206 top-level files + 7 nested target/debug helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)

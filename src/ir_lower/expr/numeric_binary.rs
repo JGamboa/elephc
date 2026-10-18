@@ -125,7 +125,24 @@ pub(super) fn lower_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
     let rhs = lower_expr(ctx, right);
+    unpin_in_flight_owners(ctx, left_pins, left.span);
+    if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
+        return result;
+    }
+    if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
+        |ctx| lower_numeric_binary_values(ctx, lhs, op, rhs, left, right, expr)) {
+        return result;
+    }
+    lower_numeric_binary_values(ctx, lhs, op, rhs, left, right, expr)
+}
+
+/// Lowers the scalar/array path after an internal object handler has been excluded.
+fn lower_numeric_binary_values(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
+    left: &Expr, right: &Expr, expr: &Expr,
+) -> LoweredValue {
     if matches!(op, BinOp::Add) {
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
             // Union helpers borrow both inputs and return fresh storage. Retire expression

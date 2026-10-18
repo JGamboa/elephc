@@ -375,6 +375,28 @@ echo count($g), "\n";
     );
 }
 
+/// Verifies one unique packed array can reach 400,000 integer slots inside the default
+/// eight-megabyte heap while heap-debug accounting remains balanced.
+///
+/// Allocate-copy-free growth leaves every retired bump allocation below the live tail. Before
+/// tail extension, the final 262,144-to-524,288 capacity step exhausted the default heap even
+/// though the final live array occupies only about four megabytes.
+#[test]
+fn test_unique_packed_array_tail_growth_fits_default_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [];
+for ($i = 0; $i < 400000; $i++) { array_push($values, $i); }
+echo count($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "400000\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "tail-grown packed array leaked: {}",
+        out.stderr
+    );
+}
 
 /// Verifies the growth republish through a BY-REFERENCE parameter, where the new pointer has to
 /// travel back out to the caller's storage rather than into a local slot.
@@ -529,11 +551,11 @@ echo count($o->items), ",", $o->items[32], "|", count($rows[0]), ",", $rows[0][3
 /// future pre-size or bulk-append lowering would disturb: it could satisfy every assertion
 /// with ZERO reallocations and the growth pin would silently stop pinning growth.
 ///
-/// The side channel is the allocation count. `__rt_array_grow` is the only thing in these
-/// programs that allocates after the array literal — the values are integers — so each
-/// program is compared against a control that builds the SAME arrays and calls a by-reference
-/// function that appends nothing. A reallocation shows up as an extra `allocs` and nothing
-/// else can produce one.
+/// The side channel is the allocation count. A second live array is allocated after the array
+/// under test, deliberately preventing its first growth from extending the bump tail in place.
+/// Each program is compared against a control that builds the same arrays and calls a
+/// by-reference function that appends nothing. The forced fallback reallocation therefore
+/// shows up as an extra `allocs` and nothing else can produce one.
 ///
 /// The two halves are measured separately on purpose. A bulk-append lowering could pre-size
 /// the variadic call and leave the one-per-call loop growing, which a combined total would
@@ -559,19 +581,21 @@ fn test_array_push_growth_through_a_by_ref_parameter_really_reallocates() {
         r#"<?php
 function pushMany(array &$a): int { return array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); }
 $x = [1];
+$blocker = [99];
 $n = pushMany($x);
-echo $n, ",", count($x), ",", $x[32], "\n";
+echo $n, ",", count($x), ",", $x[32], ",", $blocker[0], "\n";
 "#,
-        "33,33,33\n",
+        "33,33,33,99\n",
     );
     let variadic_control = allocs(
         r#"<?php
 function lengthOf(array &$a): int { return count($a); }
 $x = [1];
+$blocker = [99];
 $n = lengthOf($x);
-echo $n, ",", count($x), ",", $x[0], "\n";
+echo $n, ",", count($x), ",", $x[0], ",", $blocker[0], "\n";
 "#,
-        "1,1,1\n",
+        "1,1,1,99\n",
     );
     assert!(
         variadic > variadic_control,
@@ -583,19 +607,21 @@ echo $n, ",", count($x), ",", $x[0], "\n";
         r#"<?php
 function pushOne(array &$a, int $v): int { return array_push($a, $v); }
 $y = [1];
+$blocker = [99];
 for ($i = 2; $i < 34; $i++) { pushOne($y, $i); }
-echo count($y), ",", $y[32], "\n";
+echo count($y), ",", $y[32], ",", $blocker[0], "\n";
 "#,
-        "33,33\n",
+        "33,33,99\n",
     );
     let one_per_call_control = allocs(
         r#"<?php
 function lengthOf(array &$a): int { return count($a); }
 $y = [1];
+$blocker = [99];
 for ($i = 2; $i < 34; $i++) { lengthOf($y); }
-echo count($y), ",", $y[0], "\n";
+echo count($y), ",", $y[0], ",", $blocker[0], "\n";
 "#,
-        "1,1\n",
+        "1,1,99\n",
     );
     assert!(
         one_per_call > one_per_call_control,

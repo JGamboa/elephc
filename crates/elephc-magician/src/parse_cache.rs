@@ -39,7 +39,7 @@ pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
 }
 
 /// Returns true when a fragment is small enough to retain in the parse cache.
-fn is_cacheable_fragment(code: &[u8]) -> bool {
+pub(crate) fn is_cacheable_fragment(code: &[u8]) -> bool {
     code.len() <= MAX_CACHEABLE_FRAGMENT_BYTES
 }
 

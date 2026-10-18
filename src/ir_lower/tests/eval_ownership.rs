@@ -93,7 +93,7 @@ catchReloadedEval($source);
     assert!(reload.contains("publish eval global replacement"), "{target}: {reload}");
     assert!(reload.contains("__rt_cleanup_invoke"), "{target}: {reload}");
     let throw = finish.find("__rt_throw_current").expect("delayed native throw");
-    let restored = if target == "linux-x86_64" { "add rsp, 192" } else { "add sp, sp, #192" };
+    let restored = if target == "linux-x86_64" { "add rsp, 208" } else { "add sp, sp, #208" };
     assert!(finish[..throw].contains(restored), "{target}: {finish}");
     assert_eq!(finish[..throw].matches("detach temporary call operand owner").count(), 2, "{target}");
 }

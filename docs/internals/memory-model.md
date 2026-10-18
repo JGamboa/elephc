@@ -357,6 +357,18 @@ before propagating. The typed-property unset bridge has a versioned Throwable
 output argument so this propagation returns to Magician as an eval exception
 instead of jumping across Rust frames.
 
+`__rt_cleanup_invoke` can release a validated scalar Mixed cell without creating
+a new jump buffer. It first authenticates the exact `__rt_decref_any` callback,
+managed heap storage, a live owner count, the Mixed heap kind, and an int, float,
+bool, or null runtime tag. It invokes that same callback pointer, so ordinary
+refcounting and collector sweep suppression remain authoritative. This path
+reports no new exception and preserves the enclosing pending exception state.
+A separate proof authenticates the exact `__rt_decref_array` callback and a
+live indexed array with logical length zero. Reserved capacity owns no child
+slots, so the original dispatcher can release that array without a new handler.
+Hash-promoted storage, nonempty arrays, strings, objects, resources, reference
+cells, unknown tags, and other callbacks use the protected cleanup boundary.
+
 Interpreter value releases and native-call argument cleanup use a versioned
 release boundary with an owned Throwable accumulator. Releasing a group finishes
 every element and preserves earlier destructor exceptions in the resulting chain.
@@ -669,7 +681,7 @@ In full-reset `--web` mode, the next request reclaims the previous PHP heap aren
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: `__rt_gc_collect_cycles` counts heap-only incoming edges and marks externally reachable blocks. Before sweeping an unreachable graph containing objects, it snapshots and pins its candidate nodes, runs their destructors while their data remains intact, then repeats root analysis to observe mutations and resurrection. Pin owners are discounted from root counts. Surviving nodes lose only their temporary pins; unreachable nodes are deep-freed, and the separately allocated snapshot chunks are discarded without reading reclaimed PHP storage
 - **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free
-- **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 17 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
+- **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 14 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
 
 Collector-triggered destructors run under individual native exception handlers.
@@ -850,12 +862,26 @@ The wider slot is why a runtime helper that walks an indexed array cannot assume
 
 When `array_push` finds that `length >= capacity`, the array grows automatically:
 
-1. `__rt_array_grow` first runs `__rt_array_ensure_unique`, so shared arrays split before reallocation
-2. Allocates a new array with **2× capacity** (minimum 8)
-3. Copies the 24-byte header and all elements to the new array
-4. Frees the previous unique storage and returns the new array pointer
+1. `__rt_array_grow` first runs `__rt_array_ensure_unique`, so shared arrays split before any storage mutation.
+2. It computes **2× capacity** (minimum 8) and the corresponding payload size.
+3. If the unique allocation ends at the current bump tail and the extension fits in the configured heap, `__rt_heap_grow_tail` advances the bump offset, updates the block size and live-byte accounting, and keeps the same array pointer. This path does not copy elements or increment allocation/free counters.
+4. Otherwise the existing fallback allocates a new array, copies the live elements, frees the previous unique storage, and returns the replacement pointer.
 
-The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size). Direct indexed writes into empty arrays now also grow the backing storage and extend `length` to cover the highest written index.
+The caller always republishes the returned pointer, even though successful tail extension preserves it. A later live allocation, including a separate array, prevents tail ownership and therefore forces the allocate-copy-free fallback. Arrays remain dynamic within the configured heap limit. Direct indexed writes into empty arrays also grow the backing storage and extend `length` to cover the highest written index.
+
+### Scalar indexed-array overwrites
+
+`__rt_array_set_int` stores the eight-byte payload used by typed integer, float,
+and boolean indexed arrays. After rejecting a negative index, it writes directly
+and returns the same owner when the unsigned refcount is at most one and the
+index is below the logical length. This leaf path needs no frame, allocation,
+or copy-on-write helper call.
+
+Shared arrays and writes at or beyond the logical length use the existing slow
+path: establish a unique owner, normalize an empty array's scalar shape, grow
+capacity when necessary, initialize gaps, and publish the new length. Callers
+must still store the returned owner because separation or growth can relocate
+the array. The same conditions apply on AArch64 and x86_64.
 
 ### Copy-on-write containers
 
@@ -1175,8 +1201,8 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
-| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column` = 104 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations |
-| Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_unser_count` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context |
+| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_source_len`, `_json_error_candidate_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column`, `_json_error_scan_count`, `_json_error_scan_bytes` = 136 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations. The candidate pointer is recorded in constant time; line and column are scanned from the original source only when an error is recorded. |
+| Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_ser_legacy_active`, `_unser_count`, `_unser_legacy_active` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context while legacy Serializable callbacks share references |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
@@ -1271,7 +1297,16 @@ The runtime now includes a targeted collector for heap-backed `array`, associati
 - owned property references form `object -> cell -> value` graph edges; a local cell alias therefore roots the referenced graph independently of the original object
 - mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher
 
-`__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from the persistent destructor-completion bit 17 and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.
+`__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from snapshot membership bit 17, destructor completion bit 14, and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.
+
+On x86_64, one outgoing-edge traversal caches incoming counts in transient
+kind-word bits 19 through 31. The high 32-bit ELPH marker and actual refcounts
+remain intact. Counts saturate at 8191; a saturated candidate uses the original
+full-precision heap rescan before any root decision. Already reachable nodes
+need no additional root classification. Each root scan clears cached fields
+before destructor callbacks, and destructor mutations trigger fresh counting.
+The ARM64 collector continues using its existing 32-bit incoming-count field.
+Both ABIs enumerate retained eval-object children through the same callback.
 
 ### Performance characteristics
 

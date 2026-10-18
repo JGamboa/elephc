@@ -19,7 +19,7 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
-    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
     CLOSURE_CALLEE_DISPLAY_NAME, SCALAR_AS_ARRAY_MSG, STRING_APPEND_MSG, CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
@@ -119,6 +119,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
+    out.push_str(&format!(".globl _serializable_result_suffix\n_serializable_result_suffix:\n    .ascii {SERIALIZABLE_RESULT_SUFFIX:?}\n"));
     out.push_str(&format!(
         ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
     ));
@@ -318,6 +319,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
     // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
+    out.push_str(&comm_directive("_ser_legacy_active", 8, target));
+    out.push_str(&comm_directive("_unser_legacy_active", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
@@ -535,6 +538,11 @@ pub(crate) fn emit_runtime_data_fixed(
         target,
     ));
     out.push_str(&comm_directive(
+        "_obj_weak_reference_index",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
+        target,
+    ));
+    out.push_str(&comm_directive(
         "_obj_handle_free",
         crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
         target,
@@ -617,9 +625,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_json_validate_len", 8, target));
     out.push_str(&comm_directive("_json_decode_assoc", 8, target));
     out.push_str(&comm_directive("_json_error_source_ptr", 8, target));
+    out.push_str(&comm_directive("_json_error_source_len", 8, target));
+    out.push_str(&comm_directive("_json_error_candidate_ptr", 8, target));
     out.push_str(&comm_directive("_json_error_location_active", 8, target));
     out.push_str(&comm_directive("_json_error_line", 8, target));
     out.push_str(&comm_directive("_json_error_column", 8, target));
+    // Diagnostic counters for the deferred location scan. Valid decodes leave
+    // both at zero; a recorded decode error increments them once.
+    out.push_str(&comm_directive("_json_error_scan_count", 8, target));
+    out.push_str(&comm_directive("_json_error_scan_bytes", 8, target));
     // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
@@ -1078,6 +1092,20 @@ pub(crate) fn emit_runtime_data_fixed(
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
     for slot in [
+        "_elephc_bcmath_number_add_fn",
+        "_elephc_bcmath_number_ceil_fn",
+        "_elephc_bcmath_number_comp_fn",
+        "_elephc_bcmath_number_create_fn",
+        "_elephc_bcmath_number_div_fn",
+        "_elephc_bcmath_number_divmod_fn",
+        "_elephc_bcmath_number_floor_fn",
+        "_elephc_bcmath_number_mod_fn",
+        "_elephc_bcmath_number_mul_fn",
+        "_elephc_bcmath_number_pow_fn",
+        "_elephc_bcmath_number_powmod_fn",
+        "_elephc_bcmath_number_round_fn",
+        "_elephc_bcmath_number_sqrt_fn",
+        "_elephc_bcmath_number_sub_fn",
         "_elephc_bcmath_add_fn",
         "_elephc_bcmath_sub_fn",
         "_elephc_bcmath_mul_fn",

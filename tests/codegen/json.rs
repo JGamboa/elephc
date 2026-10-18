@@ -42,6 +42,8 @@ mod encode_invalid_utf8;
 mod encode_control_chars;
 #[path = "json/encode_list_shape.rs"]
 mod encode_list_shape;
+#[path = "json/encode_integer_tree.rs"]
+mod encode_integer_tree;
 #[path = "json/decode_mixed.rs"]
 mod decode_mixed;
 #[path = "json/decode_stdclass.rs"]
@@ -56,3 +58,10 @@ mod decode_bigint;
 mod case_insensitive;
 #[path = "json/evaluation_order.rs"]
 mod evaluation_order;
+#[path = "json/error_location.rs"]
+mod error_location;
+#[path = "json/diagnostic_regressions.rs"]
+mod diagnostic_regressions;
+
+#[path = "json/coordinate_regressions.rs"]
+mod coordinate_regressions;

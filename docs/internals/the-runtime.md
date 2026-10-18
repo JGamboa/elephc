@@ -780,13 +780,14 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (205 top-level files plus 7 nested target/debug helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (206 top-level files plus 7 nested target/debug helpers)
 
 ### Core allocation
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_heap_alloc` | Free-list + bump allocator with a 16-byte `[size:4][refcount:4][kind:8]` header | `x0` = size | `x0` = pointer |
+| `__rt_heap_grow_tail` | Extend a live bump-tail allocation in place, updating its payload size and live/peak byte counters without counting a new allocation | `x0` = pointer, `x1` = requested payload bytes | unchanged pointer on success, null when the caller must fall back |
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
@@ -798,7 +799,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_clone_shallow` | Clone indexed array storage for copy-on-write splitting, retaining nested heap children as needed | `x0` = array | `x0` = new array |
 | `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array | `x0` = same array |
 | `__rt_array_ensure_unique` | Split a shared indexed array before mutation | `x0` = array | `x0` = unique array |
-| `__rt_array_grow` | Ensure uniqueness, double array capacity, copy elements, free old unique storage | `x0` = array | `x0` = new array |
+| `__rt_array_grow` | Ensure uniqueness and double array capacity, extending a unique bump-tail allocation in place when possible or falling back to allocate-copy-free growth | `x0` = array | `x0` = grown array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
 | `__rt_array_union` | Build PHP indexed-array union: left numeric keys win, only missing right suffix keys are appended | `x0` = left array, `x1` = right array | `x0` = result array |
 | `__rt_array_hash_union` | Build PHP indexed+associative union by converting left indexes to integer hash keys before appending missing right entries | `x0` = left array, `x1` = right hash | `x0` = result hash |
@@ -945,7 +946,15 @@ fallback boxes both operands and calls the first one.
 | `__rt_mixed_array_loose_eq` | Equal counts plus, for every key of the left array, the same key on the right with a loosely equal value (order-independent) | `x0`/`x1` = boxed arrays, `x2` = depth | `x0` = 0/1 |
 | `__rt_obj_loose_eq` | Same instance, or same runtime class id with every descriptor property loosely equal | `x0`/`x1` = object pointers, `x2` = depth | `x0` = 0/1 |
 
-Rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
+An object operand first enters the program-specific
+`__elephc_internal_object_compare` function generated from the internal class
+operator contracts. Its ordinary EIR static calls preserve hidden argument-count
+and collector parameters. Result `3` requests the ordinary comparison table;
+handled comparisons are equal only at `0`, so unordered result `2` is false.
+This also gives `switch`, loose `in_array()`, and recursive array/property
+comparisons the decimal equality defined by `BcMath\Number`.
+
+For unhandled values, rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
 both sides first, then `null` (converted to `""` against a string and to `bool`
 otherwise), then containers (an array equals only another array), then objects,
 then strings, then a numeric comparison. Same-tag int/resource/callable payloads
@@ -1057,7 +1066,30 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`,
+which reads the published `_exc_value` and writes
+`Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stdout before exiting
+with status 255. The class name comes from `_class_name_entries` and the message
+from payload offsets 8/16. The report and public getters share
+`__rt_throwable_location_borrowed`, which resolves creation metadata and independent
+`ErrorException` filename/line overrides without allocating. Getter strings are
+persisted by their public adapter; the report borrows bytes from the published
+receiver and saves pointer, length, and line across syscalls. An explicit zero
+line or empty filename remains visible. A separate known-origin flag omits the
+suffix for synthesized errors with no source location. An empty message drops
+the `": "` separator.
+
+Ordinary Throwable objects, including `ErrorException` and subclasses with extra
+properties, reserve a creation-line word after declared properties and the optional
+dynamic-property hash. Scalar property writes cannot overwrite this metadata.
+`_class_throwable_line_offsets` locates the word; `_class_object_allocation_sizes`
+includes it, while `_class_object_payload_sizes` keeps the property and GC layout
+unchanged. Fixed and dynamic EIR allocation stamp the allocating expression's line
+before the constructor runs. Location readers and uncaught reporting distinguish
+ordinary metadata from the existing compact Throwable prefix. `ErrorException`
+location getters use an explicit constructor override when present, including line zero. Explicit eval calls to
+`__construct` reuse the constructor signature registration when ordinary method
+metadata is absent, so named arguments and defaults use the same binding as `new`.
 
 Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
 
@@ -1081,7 +1113,7 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 ### JSON routines
 
-**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
+**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_integer_tree/`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -1105,17 +1137,29 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_skip_ws` | Shared RFC 8259 whitespace skipper used by `json_decode_mixed` and its recursive array/object parsers; advances a caller-owned cursor to the next token or caller-supplied limit | JSON slice pointer, exclusive limit, cursor | updated cursor |
 | `__rt_json_validate` | Standalone RFC 8259 validator used by `json_validate()`; scalar validator helpers are also reused by `json_decode_mixed` for strings and numbers | `x1`/`x2` = JSON string | `x0` = 1 valid / 0 invalid |
 | `__rt_json_depth_enter` / `__rt_json_depth_exit` | Maintain `_json_active_depth` and compare against `_json_depth_limit` for recursive encode/decode/validate walks | global JSON state | status / updated state |
-| `__rt_json_set_error_location` | Convert a decoder target pointer into one-based line/column data relative to `_json_error_source_ptr` | target pointer | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column` |
-| `__rt_json_error_message` | Build the current JSON error message, appending the PHP 8.6 `" near location line:column"` suffix when decode location state is active | global JSON state | `x1`/`x2` = message |
+| `__rt_json_note_error_candidate` | Store an absolute candidate pointer, or one byte past the offending token, without reading the source | candidate pointer | updates `_json_error_candidate_ptr` |
+| `__rt_json_set_error_location` | If a nonempty decode or validate source is active, scan `[source, min(candidate, source+len))` into one-based line/column data, then clear the source and candidate pointers. Called only from `__rt_json_throw_error` | global candidate and source slots | updates `_json_error_location_active`, `_json_error_line`, `_json_error_column`, then zeroes the source slots |
+| `__rt_json_error_message` | Build the current JSON error message, appending Elephc's `" near location line:column"` suffix when decode or validate location state is active; PHP 8.2-8.5 base messages remain the comparison oracle | global JSON state | `x1`/`x2` = message |
 | `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active, using the shared formatted JSON error message | `x0` = JSON_ERROR_* code | may not return |
-| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode location suffixes when active | global JSON state | `x1`/`x2` = message |
+| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode/validate location suffixes when active | global JSON state | `x1`/`x2` = message |
 | `__rt_json_pretty_push` / `__rt_json_pretty_pop` / `__rt_json_pretty_line` / `__rt_json_pretty_colon_space` | Maintain `_json_indent_depth` and append PHP-style pretty-print whitespace while each container encoder emits bytes. These helpers are no-ops unless `JSON_PRETTY_PRINT` is active, avoiding a second buffer walk. | current JSON state, `x11` write pointer for line/space helpers | updated formatting state / `x11` write pointer |
+
+Top-level indexed-array trees containing only integers, nested indexed arrays, and
+boxed `Mixed` values holding either of those shapes can use the bounded integer-tree
+encoder when no JSON flags are active. It first proves the complete tree and computes
+its exact byte length without allocating, then allocates one result buffer and writes
+the accepted tree without callbacks. The allocation carries `CONCAT_TEMP_HEAP_KIND`,
+so the ordinary string persistence boundary adopts that owner once instead of copying
+the bytes. Direct integer arrays with at most 3,120 slots keep the existing one-pass
+scratch encoder. Flags, recursive encoder calls, references, hashes, strings, floats,
+booleans, nulls, objects, unsupported layouts, and rejected depth or size proofs fall
+back to the general encoder before observable JSON state or ownership changes.
 
 ### Serialization routines
 
-**Files:** `system/serialize.rs`, `system/unserialize/` (15 Rust modules including `mod.rs`)
+**Files:** `system/serialize.rs`, `system/serialize/`, `system/serialization_hooks.rs`, and `system/unserialize/`
 
-These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the builtins php-src flags `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers, listed in `NOT_SERIALIZABLE_BUILTIN_CLASSES`: the Reflection family, `Generator`, `Fiber`, the `SplFileInfo` family, `Phar`, `PharData`, and the PDO, curl, gd and XML handles, plus anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`. Only elephc's own declaration of a listed class counts (`ClassInfo::is_internal`, set for builtins registered without source and for classes from compiler-generated statements such as an injected prelude), so a user class that shares its name with a PHP internal elephc does not register (`WeakMap`, `ReflectionType`), or with a prelude class the program does not load (`CurlHandle` or `Pdo\Sqlite` without the curl or PDO prelude), serializes normally. A Closure (runtime tag 10, including a `Closure`-typed property slot) throws the same Exception naming `Closure` through `__rt_throw_serialization_denied_name`. The default property walk leaves out a typed property that was never initialized (its slot's high word holds the uninitialized sentinel) and counts only the properties it writes, as PHP does, so an unset `Closure`-typed property is simply omitted. The `__sleep()` path does the same through `__rt_serialize_named_prop`, which reports whether it wrote the named property; because that count is only known once every name was looked up, `__rt_serialize_sleep_body` writes the body first and `__rt_concat_hoist_tail` then moves the `<count>:{` header in front of it inside the concat buffer. On the way back, `__rt_obj_store_prop` checks each parsed value's boxed tag against the property's `_class_serpdiag_*` row: a tag the declared type does not accept raises PHP's catchable `TypeError` (`Cannot assign <value> to property C::$p of type <T>`) through `__rt_unser_throw_property_type_error`, and an accepted `int` is rewritten to a `float` in place only when the declared type includes `float` but not `int` (`int|float` keeps the integer). It then writes each restored slot's high word (the string length, or zero), which clears the uninitialized marker of a typed property declared without a default.
+These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the builtins php-src flags `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers, listed in `NOT_SERIALIZABLE_BUILTIN_CLASSES`: the Reflection family, `Generator`, `Fiber`, the `SplFileInfo` family, `Phar`, `PharData`, and the PDO, curl, gd and XML handles, plus anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`. Only elephc's own declaration of a listed class counts (`ClassInfo::is_internal`, set for builtins registered without source and for classes from compiler-generated statements such as an injected prelude), so a namespaced user class such as `Demo\WeakMap`, a class named `ReflectionType` that elephc does not register, or a user class named like a prelude class the program does not load (`CurlHandle` or `Pdo\Sqlite` without the curl or PDO prelude), serializes normally. A Closure (runtime tag 10, including a `Closure`-typed property slot) throws the same Exception naming `Closure` through `__rt_throw_serialization_denied_name`. The default property walk leaves out a typed property that was never initialized (its slot's high word holds the uninitialized sentinel) and counts only the properties it writes, as PHP does, so an unset `Closure`-typed property is simply omitted. The `__sleep()` path does the same through `__rt_serialize_named_prop`, which reports whether it wrote the named property; because that count is only known once every name was looked up, `__rt_serialize_sleep_body` writes the body first and `__rt_concat_hoist_tail` then moves the `<count>:{` header in front of it inside the concat buffer. On the way back, `__rt_obj_store_prop` checks each parsed value's boxed tag against the property's `_class_serpdiag_*` row: a tag the declared type does not accept raises PHP's catchable `TypeError` (`Cannot assign <value> to property C::$p of type <T>`) through `__rt_unser_throw_property_type_error`, and an accepted `int` is rewritten to a `float` in place only when the declared type includes `float` but not `int` (`int|float` keeps the integer). It then writes each restored slot's high word (the string length, or zero), which clears the uninitialized marker of a typed property declared without a default.
 
 Property metadata follows physical layout slots. A private parent property and a
 child property with the same name keep distinct mangled keys, byte offsets, storage
@@ -1131,10 +1175,23 @@ body under dead stripping instead of crossing into another helper's local label.
 
 `unserialize()` refuses the same classes from its allocation-free preflight. As soon as `__rt_unser_validate_at` has bounded an object's class name, `__rt_unser_refuse_class` asks the `allowed_classes` policy (a blocked class still becomes `__PHP_Incomplete_Class`) and then matches the name case-insensitively against the per-program `_unser_refused_classes` table. That table lists the refused classes the program declares (subclasses included) and the refused builtins it does not declare at all (a Reflection class that declaration pruning removed, or `Closure`), but not a program's own class that merely carries a builtin's name. A match throws `Unserialization of '<Class>' is not allowed`, with the class spelled as declared, through `__rt_throw_unserialization_denied_name`. Because the preflight runs before the decoder, the refusal comes before any object, box or container is allocated and before any `__wakeup()`/`__unserialize()` hook of the payload runs (PHP defers those hooks until the whole payload decoded), so a caught refusal leaves nothing behind; it unwinds through the public entry boundary that closes the unserialize context.
 
+The public `__rt_serialize_call_value` entry protects the reference counter and populated
+object pointer/index pairs with a stack snapshot and guarded dispatch. Ordinary nested
+operations restore that snapshot on success and on exceptions. The scoped adapters in
+`serialization_hooks.rs` select shared registries for legacy `Serializable` callbacks
+and isolated registries for modern hooks. Shared nested decodes promote their temporary
+reference owners to the enclosing context before cleanup; calls without options inherit
+its allowed-class policy. Native hook return metadata distinguishes strings, boxed values,
+null, scalars, and other heap owners, so invalid serialize results throw after cleanup and
+ignored unserialize results are released. EIR declares serialize results independent and
+unserialize results fresh, allowing throwing builtin operand guards to retain and release
+temporary inputs correctly.
+
 The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`. Shared diagnostics and per-call context lifecycle are separated from target-specific allowed-class policy parsing, allocation-free validation, recursive decoding, and object-storage/key helpers. The two decoder files are cohesive architecture leaves; every surrounding orchestration or support module remains below the repository's 500-line warning threshold.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
+| `__rt_serialize_call_value` | Guard a public call and preserve shared or isolated reference state across hooks | value tag + payload | string slice |
 | `__rt_serialize_value` | Tag-dispatching serializer for a raw runtime value, appending its wire form to the concat buffer | value tag + payload | `x1`/`x2` = string slice |
 | `__rt_serialize_mixed` | Unbox a boxed Mixed cell (null pointer → `N;`), then serialize it | `x0` = mixed cell | `x1`/`x2` = string slice |
 | `__rt_serialize_indexed_array` / `__rt_serialize_hash` | Serialize indexed arrays and hashes as `a:<n>:{...}` | array/hash pointer | `x1`/`x2` = string slice |
@@ -1627,10 +1684,14 @@ _buffer_registry_next:
 .comm _json_validate_ptr, 8  ; validator input pointer
 .comm _json_validate_len, 8  ; validator input length
 .comm _json_decode_assoc, 8  ; json_decode object-shape selector
-.comm _json_error_source_ptr, 8 ; json_decode input pointer for error locations
+.comm _json_error_source_ptr, 8 ; original decode/validate input pointer
+.comm _json_error_source_len, 8 ; original decode/validate input length in bytes
+.comm _json_error_candidate_ptr, 8 ; absolute candidate byte, noted in O(1)
 .comm _json_error_location_active, 8 ; whether line/column should be appended
-.comm _json_error_line, 8    ; one-based line for the last json_decode error
-.comm _json_error_column, 8  ; one-based column for the last json_decode error
+.comm _json_error_line, 8    ; one-based line for the last JSON error (zero for empty input)
+.comm _json_error_column, 8  ; one-based column for the last JSON error (zero for empty input)
+.comm _json_error_scan_count, 8 ; completed diagnostic location scans
+.comm _json_error_scan_bytes, 8 ; source bytes loaded by those scans
 _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter

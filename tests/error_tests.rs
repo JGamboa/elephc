@@ -66,6 +66,8 @@ fn check_source_with_defines_and_options(
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
@@ -104,6 +106,8 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
@@ -251,6 +255,7 @@ fn expect_no_warning(src: &str, unexpected_substr: &str) {
 
 macro_rules! expect_builtin_arity_error {
     ($test_name:ident, $src:expr, $expected:expr) => {
+        /// Verifies the builtin arity diagnostic supplied by this fixture.
         #[test]
         fn $test_name() {
             expect_error($src, $expected);
@@ -298,6 +303,8 @@ mod inline_html;
 mod recovery;
 #[path = "error_tests/warnings.rs"]
 mod warnings;
+#[path = "error_tests/core_symbols.rs"]
+mod core_symbols;
 #[path = "error_tests/type_system.rs"]
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
@@ -318,6 +325,8 @@ mod extensions;
 mod strict_php;
 #[path = "error_tests/math_builtins.rs"]
 mod math_builtins;
+#[path = "error_tests/bcmath_number.rs"]
+mod bcmath_number;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]

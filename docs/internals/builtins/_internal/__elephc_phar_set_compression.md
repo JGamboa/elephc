@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_compression() - internals"
 description: "Compiler internals for __elephc_phar_set_compression(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1161
+  order: 1166
 ---
 
 ## `__elephc_phar_set_compression()` - internals

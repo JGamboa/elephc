@@ -25,6 +25,10 @@ mod object_vars;
 mod print_r_object;
 mod property_hash_reference;
 mod stdclass;
+mod weak_reference;
+mod weak_map;
+pub(crate) use weak_map::emit_weak_map;
+pub(crate) use weak_reference::emit_weak_reference;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
 pub(crate) use dump_dynamic_props::{

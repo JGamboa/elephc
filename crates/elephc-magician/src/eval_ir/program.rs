@@ -17,12 +17,26 @@ use super::*;
 pub const EVAL_CLI_POPULATED_SUPERGLOBALS: [&str; 7] =
     ["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST"];
 
+/// Selects every caller-scope name when a fragment can inspect or mutate names dynamically.
+pub const EVAL_SCOPE_ACCESS_ALL: u64 = u64::MAX;
+
+/// Maps one case-sensitive PHP variable name onto its conservative access-mask bit.
+pub fn eval_scope_name_mask(name: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    1_u64 << (hash & 63)
+}
+
 /// Parsed eval fragment lowered into dynamic by-name statements.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     native_generic_syntax: bool,
     source_len: usize,
     statements: Vec<EvalStmt>,
+    scope_access_mask: u64,
     #[serde(with = "cli_superglobal_names")]
     cli_superglobals: Vec<&'static str>,
 }
@@ -66,8 +80,20 @@ impl EvalProgram {
             native_generic_syntax: false,
             source_len,
             statements,
+            scope_access_mask: EVAL_SCOPE_ACCESS_ALL,
             cli_superglobals: Vec::new(),
         }
+    }
+
+    /// Records the conservative caller-scope names used by this parsed fragment.
+    pub(crate) fn with_scope_access_mask(mut self, mask: u64) -> Self {
+        self.scope_access_mask = mask;
+        self
+    }
+
+    /// Returns the conservative caller-scope access mask for dynamic eval synchronization.
+    pub const fn scope_access_mask(&self) -> u64 {
+        self.scope_access_mask
     }
 
     /// Records whether source used native generic syntax forbidden in strict PHP mode.

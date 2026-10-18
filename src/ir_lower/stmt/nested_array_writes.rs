@@ -16,6 +16,12 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| read == target);
+    if matches!(&update, Some(ElementUpdate::Compound))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    {
+        return;
+    }
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
     // whenever the slot storage is not already a boxed Mixed cell; the
@@ -40,26 +46,41 @@ pub(super) fn lower_nested_array_assign(
         // PHP evaluates the keys first, so the original order is kept.
         let deferred = nested_target_is_all_bare_variables(target)
             || (matches!(value.kind, ExprKind::Variable(_)) && nested_target_keys_are_pure(target));
+        let mut roots = Vec::new();
+        let mut root_operand = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
+            let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
+            if let Some(owner) = owner { roots.push(owner); }
+            operand
+        };
         // A borrowed container value (`$b[0][0] = $b`) must hold its own reference BEFORE the
         // parent chain is fetched for write: otherwise the fetch sees a unique container,
         // mutates it in place and stores the container inside itself (an endless cycle, a
-        // crash in `var_dump`), where PHP copies the right-hand side first.
+        // crash in `var_dump`), where PHP copies the right-hand side first. That extra
+        // reference is released explicitly after the write; every other operand is rooted.
         let value_is_variable = matches!(value.kind, ExprKind::Variable(_));
         let value_first = deferred.then(|| {
             let lowered = lower_expr(ctx, value);
             if value_is_variable {
-                own_variable_container_value(ctx, lowered, span)
-            } else {
-                (lowered, false)
+                let (lowered, acquired) = own_variable_container_value(ctx, lowered, span);
+                if acquired {
+                    return (lowered, true);
+                }
+                return (root_operand(ctx, lowered), false);
             }
+            (root_operand(ctx, lowered), false)
         });
         let acquired_value = value_first.and_then(|(v, acquired)| acquired.then_some(v.value));
         let value_first = value_first.map(|(v, _)| v);
         let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent = root_operand(ctx, parent);
         let key = lower_expr(ctx, index);
+        let key = root_operand(ctx, key);
         let value = match value_first {
             Some(value) => value,
-            None => lower_expr(ctx, value),
+            None => {
+                let value = lower_expr(ctx, value);
+                root_operand(ctx, value)
+            }
         };
         ctx.emit_void(
             Op::RuntimeCall,
@@ -68,33 +89,16 @@ pub(super) fn lower_nested_array_assign(
             effects_lookup::runtime_effects(),
             Some(span),
         );
-        // The set helper normalizes the key without keeping it, so a call/concat key (string or
-        // boxed) is dead now.
-        release_nested_parent_key(ctx, key, span);
-        // `__rt_mixed_array_set` takes its OWN reference to the value: a boxed value is
-        // incref'd and a concrete one is boxed by `__rt_mixed_from_value`, which retains
-        // refcounted payloads (strings are copied). An owning temporary that is not a string
-        // (`$c['a']['k'] = f()` returning an array, an object, a Mixed) therefore still held
-        // its producer reference afterwards and leaked one block per write.
-        let parent_is_boxed = ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed;
-        if parent_is_boxed
-            && ctx.value_is_owning_temporary(value)
-            && ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Str
-        {
-            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-        } else if acquired_value == Some(value.value) {
-            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-        } else {
-            release_persisted_string_operand(ctx, value, span);
+        // The boxed writer borrows all three operands and retains or copies the stored value.
+        // Roots also retire computed Mixed values and keep earlier operands safe if a later
+        // operand or the write throws into a same-frame catch.
+        for root in roots.into_iter().rev() {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
         }
-        // Parent subscript reads of Mixed/refcounted elements are owning
-        // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
-        // reference — fresh, retained, or installed by autovivification). The
-        // set helper mutates through the cell/object without consuming that
-        // reference, so release it here. Non-owning parents (plain locals,
-        // `$this`) are left to normal scope cleanup.
-        if ctx.value_is_owning_temporary(parent) {
-            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        // The reference `own_variable_container_value` took for the write is dropped now that
+        // the set helper holds its own.
+        if acquired_value == Some(value.value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }
         return;
     }

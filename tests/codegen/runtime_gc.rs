@@ -14,6 +14,8 @@
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
 mod string_append;
+#[path = "runtime_gc/bcmath_number.rs"]
+mod bcmath_number;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
 #[path = "runtime_gc/large_unary_string_results.rs"]
@@ -42,6 +44,9 @@ mod destructor_resurrection;
 mod argument_guards;
 #[path = "runtime_gc/deep_cleanup.rs"]
 mod deep_cleanup;
+#[path = "runtime_gc/scalar_mixed_cleanup.rs"]
+mod scalar_mixed_cleanup;
+mod scalar_set_fast_path;
 #[path = "runtime_gc/eval_constructor.rs"]
 mod eval_constructor;
 #[path = "runtime_gc/eval_native_calls.rs"]
@@ -180,3 +185,5 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+#[path = "runtime_gc/gc_incoming_cache.rs"]
+mod gc_incoming_cache;

@@ -35,6 +35,8 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
+    let receiver = Expr::new(ExprKind::Variable(array.into()), span);
+    if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let array_value = load_array_local_for_write(ctx, array, span);
     let value = lower_expr(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {

@@ -34,6 +34,7 @@ mod property_initializers;
 mod reflection;
 mod stmt;
 mod throwable_constructors;
+mod core_methods;
 
 #[cfg(test)]
 pub(crate) mod tests;

@@ -47,6 +47,10 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_json_arr_dyn_packed");                       // packed storage encodes inline below
     emitter.instruction("b __rt_json_encode_assoc");                            // hash storage is the object-form encoder's job
     emitter.label("__rt_json_arr_dyn_packed");
+    super::json_integer_tree::emit_json_integer_tree_entry(
+        emitter,
+        "__rt_json_arr_dyn_integer_tree",
+    );
 
     emitter.instruction("sub sp, sp, #112");                                    // allocate stack space for array metadata and element scratch values
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
@@ -313,6 +317,10 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_json_arr_dyn_packed");                        // packed storage encodes inline below
     emitter.instruction("jmp __rt_json_encode_assoc");                          // hash storage is the object-form encoder's job
     emitter.label("__rt_json_arr_dyn_packed");
+    super::json_integer_tree::emit_json_integer_tree_entry(
+        emitter,
+        "__rt_json_arr_dyn_integer_tree_x86",
+    );
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array metadata and concat-buffer cursors

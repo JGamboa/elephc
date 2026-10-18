@@ -16,6 +16,7 @@ use super::util::write_outcome;
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION};
 use crate::errors::EvalStatus;
 use crate::eval_ir;
+use crate::eval_ir::EVAL_SCOPE_ACCESS_ALL;
 #[cfg(not(test))]
 use crate::interpreter;
 #[cfg(not(test))]
@@ -24,6 +25,65 @@ use crate::parse_cache;
 #[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
 use std::slice;
+
+/// Returns the conservative caller-scope name mask for one cacheable eval fragment.
+///
+/// Parse failures select the full scope for the current call. Oversized or complex fragments
+/// also make full synchronization sticky because they can retain closures, references, handlers,
+/// or other indirect access in the persistent activation context.
+///
+/// # Safety
+/// `ctx` must be a valid current-ABI context and `code_ptr` must be readable for `code_len` bytes
+/// when `code_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_access_mask(
+    ctx: *mut ElephcEvalContext,
+    code_ptr: *const u8,
+    code_len: u64,
+) -> u64 {
+    std::panic::catch_unwind(|| unsafe { eval_scope_access_mask_inner(ctx, code_ptr, code_len) })
+        .unwrap_or(EVAL_SCOPE_ACCESS_ALL)
+}
+
+/// Computes the scope-access mask after validating the raw source slice.
+///
+/// # Safety
+/// Mirrors [`__elephc_eval_scope_access_mask`].
+unsafe fn eval_scope_access_mask_inner(
+    ctx: *mut ElephcEvalContext,
+    code_ptr: *const u8,
+    code_len: u64,
+) -> u64 {
+    let Some(context) = ctx.as_mut() else {
+        return EVAL_SCOPE_ACCESS_ALL;
+    };
+    if context.abi_version() != ABI_VERSION || context.eval_scope_sync_requires_full() {
+        return EVAL_SCOPE_ACCESS_ALL;
+    }
+    let Ok(code_len) = usize::try_from(code_len) else {
+        context.require_full_eval_scope_sync();
+        return EVAL_SCOPE_ACCESS_ALL;
+    };
+    if code_len > 0 && code_ptr.is_null() {
+        return EVAL_SCOPE_ACCESS_ALL;
+    }
+    let code = if code_len == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(code_ptr, code_len)
+    };
+    if !parse_cache::is_cacheable_fragment(code) {
+        context.require_full_eval_scope_sync();
+        return EVAL_SCOPE_ACCESS_ALL;
+    }
+    let mask = parse_cache::parse_fragment_cached(code)
+        .map(|program| program.scope_access_mask())
+        .unwrap_or(EVAL_SCOPE_ACCESS_ALL);
+    if mask == EVAL_SCOPE_ACCESS_ALL {
+        context.require_full_eval_scope_sync();
+    }
+    mask
+}
 
 /// Executes an eval fragment against a materialized caller scope.
 ///

@@ -619,6 +619,8 @@ struct PropertyReadMetadata {
 #[derive(Clone, Debug, Default)]
 struct InstanceDispatchMetadata {
     classes: HashMap<String, InstanceClassMetadata>,
+    /// Internal value classes can allocate or throw when arithmetic receives object operands.
+    has_internal_object_operators: bool,
     /// True when AST-level `eval()` can add subclasses beyond the declared hierarchy.
     has_dynamic_class_barrier: bool,
 }

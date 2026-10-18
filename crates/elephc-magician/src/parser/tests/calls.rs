@@ -240,3 +240,32 @@ fn parse_fragment_accepts_empty_source() {
         }))]
     );
 }
+
+/// Verifies ordinary variable tokens produce the same conservative mask used by native code.
+#[test]
+fn parse_fragment_records_named_scope_accesses() {
+    assert_eq!(eval_scope_name_mask("sum"), 1_u64 << 40);
+    let program = parse_fragment(br#"$sum = $sum + $step;"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.scope_access_mask(),
+        eval_scope_name_mask("sum") | eval_scope_name_mask("step")
+    );
+}
+
+/// Verifies scope introspection and dynamic global access select every caller-scope name.
+#[test]
+fn parse_fragment_marks_unbounded_scope_accesses() {
+    for source in [
+        br#"return get_defined_vars();"#.as_slice(),
+        br#"return CoMpAcT('value');"#.as_slice(),
+        br#"extract($items);"#.as_slice(),
+        br#"return call_user_func('get_defined_vars');"#.as_slice(),
+        br#"return call_user_func_array('GET_DEFINED_VARS', []);"#.as_slice(),
+        br#"$callback();"#.as_slice(),
+        br#"return $GLOBALS['value'];"#.as_slice(),
+    ] {
+        let program = parse_fragment(source).expect("fragment should parse");
+        assert_eq!(program.scope_access_mask(), EVAL_SCOPE_ACCESS_ALL);
+    }
+}

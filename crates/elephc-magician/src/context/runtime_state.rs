@@ -14,6 +14,16 @@ use crate::errors::EvalStatus;
 use crate::interpreter::RuntimeValueOps;
 
 impl ElephcEvalContext {
+    /// Returns whether an earlier complex fragment requires full scope synchronization.
+    pub(crate) const fn eval_scope_sync_requires_full(&self) -> bool {
+        self.scope_sync_requires_full
+    }
+
+    /// Permanently selects full scope synchronization for this activation context.
+    pub(crate) fn require_full_eval_scope_sync(&mut self) {
+        self.scope_sync_requires_full = true;
+    }
+
     /// Requires full escape validation once foreign callable metadata is possible.
     /// Draining cell pins or replacing a handler never clears this capability.
     pub(crate) fn needs_pcntl_escape_scan(&self) -> bool {

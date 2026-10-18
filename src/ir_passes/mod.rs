@@ -45,6 +45,7 @@ mod peephole;
 mod regalloc;
 pub(crate) mod rematerialize;
 mod rewrite;
+mod tail_call;
 
 #[cfg(test)]
 mod tests;

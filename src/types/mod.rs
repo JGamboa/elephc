@@ -36,6 +36,7 @@ pub(crate) mod param_binding;
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
 /// Type checker result types and the `check` entry point.

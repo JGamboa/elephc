@@ -402,6 +402,42 @@ parameters (which alias caller storage) are therefore excluded, because a value-
 splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
 inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
 
+### Tail recursion
+
+With `--ir-opt` enabled, direct tail calls in recursive free functions can reuse
+one native stack frame. Self recursion branches back to a body entry with new
+parameter values. Mutually recursive functions share cloned EIR bodies within
+each original ABI entry, and their tail transitions become ordinary branches.
+
+```php
+function gcd(int $a, int $b): int {
+    if ($b === 0) { return $a; }
+    return gcd($b, $a % $b);
+}
+```
+
+Arguments keep their source evaluation order. Rebinding uses simultaneous block
+argument moves, so swapping parameters is safe. Named and default arguments use
+the normal call planner before the tail pass. `void` calls immediately followed
+by a return can also qualify. Arithmetic or output after a recursive call keeps
+an ordinary call and its stack frame.
+
+Eligibility is conservative: parameters, return types and local storage must be
+`int`, `bool` or `float` (`void` is also allowed for returns). Temporary boxed
+numeric arguments qualify only when their roots have a balanced cleanup on every
+normal return path; their ordinary ABI integer conversion runs before those roots retire.
+Owning strings, arrays, objects and arbitrary `mixed` frame storage, reference
+or variadic parameters, methods, closures, generators, static/global aliases,
+exception handlers and unresolved dispatch retain ordinary calls. Eval or
+backtrace argument snapshots anywhere in the module disable this optimization.
+Mutual components are limited to 16 functions and 4096 total EIR instructions
+per entry to bound code duplication; self recursion has no cloning limit.
+
+The pass runs after the normal module fixed point and before ownership
+finalization. The scalar passes run again on the new loops. It uses the same EIR
+branch lowering on every supported target and is disabled by `--no-ir-opt`.
+See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
+
 ### Fresh Mixed assignment transfer
 
 `FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is registered with

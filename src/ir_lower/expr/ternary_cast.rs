@@ -80,6 +80,12 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
+    if matches!(target, CastType::Bool) {
+        if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {
+            release_binary_operand_temporary(ctx, value, expr.span);
+            return result;
+        }
+    }
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
     // retaining store/call cleanup and leak the detached string allocation.

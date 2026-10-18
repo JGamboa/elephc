@@ -120,28 +120,25 @@ echo $db->query("SELECT 7")->fetchColumn(), "\n";
     );
 }
 
-/// A user class named after a PHP internal elephc does not register (`WeakReference`,
-/// `ReflectionReference`) is an ordinary user class, so it serializes and round-trips instead of
-/// being refused like the internal it shares a name with. (elephc registers `WeakMap` and
-/// `ReflectionType`, so redeclaring them is the PHP error "Cannot declare
-/// class WeakMap, because the name is already in use".)
+/// Namespaced user classes sharing an internal short name remain ordinary serializable classes.
 #[test]
 fn test_serialize_keeps_user_classes_named_like_unmodelled_internals() {
     let out = compile_and_run(
         r#"<?php
-class WeakReference { public $a = 1; }
-class ReflectionReference { public $b = 'x'; }
-echo serialize(new WeakReference()), "\n";
-echo serialize(new ReflectionReference()), "\n";
-$copy = unserialize(serialize(new WeakReference()));
+namespace Demo;
+class WeakMap { public $a = 1; }
+class ReflectionType { public $b = 'x'; }
+echo serialize(new WeakMap()), "\n";
+echo serialize(new ReflectionType()), "\n";
+$copy = unserialize(serialize(new WeakMap()));
 echo get_class($copy), " ", $copy->a, "\n";
 "#,
     );
     assert_eq!(
         out,
-        "O:13:\"WeakReference\":1:{s:1:\"a\";i:1;}\n\
-         O:19:\"ReflectionReference\":1:{s:1:\"b\";s:1:\"x\";}\n\
-         WeakReference 1\n"
+        "O:12:\"Demo\\WeakMap\":1:{s:1:\"a\";i:1;}\n\
+         O:19:\"Demo\\ReflectionType\":1:{s:1:\"b\";s:1:\"x\";}\n\
+         Demo\\WeakMap 1\n"
     );
 }
 

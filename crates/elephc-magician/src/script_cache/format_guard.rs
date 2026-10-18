@@ -90,7 +90,9 @@ mod tests {
     /// now retain member PHPDoc types that earlier parsers silently omitted.
     /// BUMPED TO 16 with the same fingerprint: complete-list lookahead preserves class
     /// comparisons, invalidating stored parse failures without changing the serialized shape.
-    const RECORDED_FINGERPRINT: u64 = 2604479976000790958;
+    /// BUMPED TO 17 because `EvalProgram` stores a conservative caller-scope access mask,
+    /// with selective masks restricted to direct scalar fragments.
+    const RECORDED_FINGERPRINT: u64 = 13559774593261235924;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

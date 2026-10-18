@@ -13,7 +13,10 @@
 
 use super::cursor::split_first_name_segment;
 use crate::errors::EvalParseError;
-use crate::eval_ir::{EvalProgram, EVAL_CLI_POPULATED_SUPERGLOBALS};
+use crate::eval_ir::{
+    eval_scope_name_mask, EvalProgram, EVAL_CLI_POPULATED_SUPERGLOBALS,
+    EVAL_SCOPE_ACCESS_ALL,
+};
 use crate::lexer::{Token, TokenKind};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -141,7 +144,72 @@ impl Parser {
             statements.extend(self.parse_stmt()?);
         }
         let cli_superglobals = self.named_cli_superglobals();
-        Ok(EvalProgram::new(self.source_len, statements).with_cli_superglobals(cli_superglobals).with_native_generic_syntax(self.native_generic_syntax))
+        let scope_access_mask = self.scope_access_mask();
+        Ok(EvalProgram::new(self.source_len, statements)
+            .with_cli_superglobals(cli_superglobals)
+            .with_native_generic_syntax(self.native_generic_syntax)
+            .with_scope_access_mask(scope_access_mask))
+    }
+
+    /// Builds a conservative mask of caller-scope variable names named by this fragment.
+    fn scope_access_mask(&self) -> u64 {
+        if !self.has_direct_scalar_scope_access_only() {
+            return EVAL_SCOPE_ACCESS_ALL;
+        }
+        let mut mask = 0_u64;
+        for token in &self.tokens {
+            match token {
+                TokenKind::DollarIdent(name) if name == "GLOBALS" => {
+                    return EVAL_SCOPE_ACCESS_ALL;
+                }
+                TokenKind::DollarIdent(name) => mask |= eval_scope_name_mask(name),
+                _ => {}
+            }
+        }
+        mask
+    }
+
+    /// Accepts only direct numeric expressions that cannot retain indirect scope access.
+    fn has_direct_scalar_scope_access_only(&self) -> bool {
+        for (index, token) in self.tokens.iter().enumerate() {
+            if !matches!(
+                token,
+                TokenKind::DollarIdent(_)
+                    | TokenKind::Int(_)
+                    | TokenKind::Float(_)
+                    | TokenKind::Plus
+                    | TokenKind::PlusPlus
+                    | TokenKind::PlusEqual
+                    | TokenKind::Minus
+                    | TokenKind::MinusMinus
+                    | TokenKind::MinusEqual
+                    | TokenKind::Star
+                    | TokenKind::StarStar
+                    | TokenKind::StarStarEqual
+                    | TokenKind::StarEqual
+                    | TokenKind::Slash
+                    | TokenKind::SlashEqual
+                    | TokenKind::Percent
+                    | TokenKind::PercentEqual
+                    | TokenKind::Equal
+                    | TokenKind::Semicolon
+                    | TokenKind::LParen
+                    | TokenKind::RParen
+                    | TokenKind::Eof
+            ) {
+                return false;
+            }
+            if matches!(token, TokenKind::LParen)
+                && index > 0
+                && matches!(
+                    self.tokens[index - 1],
+                    TokenKind::DollarIdent(_) | TokenKind::RParen
+                )
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Returns the CLI-populated superglobals any `$name` token of the fragment spells.

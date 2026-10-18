@@ -127,9 +127,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_mixed_syntax_error");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the trimmed raw slice pointer for location reporting
     emitter.instruction("add rax, QWORD PTR [rbp - 88]");                       // report syntax errors at the end of the offending slice
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
-    emitter.instruction("mov rax, 4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("call __rt_json_throw_error");                          // record syntax error and throw when requested
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
+    emitter.instruction("call __rt_json_decode_syntax_error");                  // record syntax error and throw when requested
     emitter.instruction("xor rax, rax");                                        // return null-signal to the json_decode wrapper
     emitter.instruction("jmp __rt_json_decode_mixed_done");                     // continue in the JSON decoder control path
 
@@ -159,7 +158,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- array dispatch: depth-check, then decode empty or recursive array --
     emitter.label("__rt_json_decode_mixed_array");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // use this array's opening bracket as a possible depth-error location
-    emitter.instruction("call __rt_json_set_error_location");                   // preseed line/column metadata before depth validation
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the opening token without scanning the source
     emitter.instruction("call __rt_json_depth_enter");                          // enforce json_decode depth before parsing the container
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0);        // load any depth error recorded by depth_enter
     emitter.instruction("test r10, r10");                                       // non-zero means the container exceeded depth
@@ -205,7 +204,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- object dispatch: depth-check, then decode empty or recursive object --
     emitter.label("__rt_json_decode_mixed_object");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // use this object's opening brace as a possible depth-error location
-    emitter.instruction("call __rt_json_set_error_location");                   // preseed line/column metadata before depth validation
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the opening token without scanning the source
     emitter.instruction("call __rt_json_depth_enter");                          // enforce json_decode depth before parsing the container
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0);        // load any depth error recorded by depth_enter
     emitter.instruction("test r10, r10");                                       // non-zero means the container exceeded depth

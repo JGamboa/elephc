@@ -388,6 +388,7 @@ pub(super) fn eval_property_array_write_result(
             if !eval_array_access_object_matches(current, context, values)? {
                 return Err(EvalStatus::RuntimeFatal);
             }
+            let append = index.is_none();
             let index = match index {
                 Some(index) => eval_owned_expr(index, context, scope, values)?,
                 None => values.null()?,
@@ -396,6 +397,7 @@ pub(super) fn eval_property_array_write_result(
             let value = eval_property_array_set_value(current, index, op, value, context, scope, values)?;
             let value = if value.is_borrowed() { values.retain(value)? } else { value };
             operands.push(value);
+            if append { reject_weak_map_append(current, context, values)?; }
             let returned = eval_method_call_result(current, "offsetSet", vec![index, value], context, values)?;
             operands.push(returned);
             return Ok(());
@@ -471,12 +473,23 @@ pub(super) fn eval_static_property_array_append_result(
         if !eval_array_access_object_matches(array, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let offset = values.null()?;
-        let value = eval_expr(value, context, scope, values)?;
-        let result =
-            eval_method_call_result(array, "offsetSet", vec![offset, value], context, values)?;
-        values.release(result)?;
-        return Ok(());
+        let array = if array.is_borrowed() { values.retain(array)? } else { array };
+        let mut operands = vec![array];
+        let mut result = (|| {
+            let value = eval_owned_expr(value, context, scope, values)?;
+            operands.push(value);
+            reject_weak_map_append(array, context, values)?;
+            let offset = values.null()?;
+            operands.push(offset);
+            let returned = eval_method_call_result(array, "offsetSet", vec![offset, value], context, values)?;
+            operands.push(returned);
+            Ok(())
+        })();
+        for operand in operands.into_iter().rev() {
+            let released = eval_release_value(context, values, operand);
+            if result.is_ok() { result = released; }
+        }
+        return result;
     }
     let array = if values.is_array_like(array)? {
         let tag = values.type_tag(array)?;

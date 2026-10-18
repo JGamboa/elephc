@@ -388,8 +388,15 @@ impl Scanner<'_> {
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
             | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::Include { path: e, .. }
-            | StmtKind::StaticPropertyArrayPush { value: e, .. } => self.scan_expr(e),
+            | StmtKind::Include { path: e, .. } => self.scan_expr(e),
+            StmtKind::StaticPropertyArrayPush { receiver, property, value } => {
+                let source = Expr::new(ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["offsetSet", "__elephc_append"]);
+                self.scan_receiver(receiver);
+                self.scan_expr(value);
+            }
             StmtKind::Assign { name, value } => {
                 self.scan_expr(value);
                 self.remember_assignment(name, value);
@@ -405,6 +412,9 @@ impl Scanner<'_> {
             }
             StmtKind::RefAssign { target, source } => {
                 self.scan_expr(source);
+                if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+                    self.record_protocol_methods(array, &["__elephc_reference"]);
+                }
                 self.forget_variable(target);
                 if let ExprKind::Variable(source) = &source.kind {
                     self.forget_variable(source);
@@ -432,7 +442,7 @@ impl Scanner<'_> {
                 if array == "GLOBALS" {
                     self.record_globals_index(index);
                 } else {
-                    self.record_variable_protocol_methods(array, &["offsetSet"]);
+                    self.record_variable_protocol_methods(array, &["offsetSet", "__elephc_reference"]);
                 }
                 self.scan_expr(index);
                 self.scan_expr(value);
@@ -441,11 +451,15 @@ impl Scanner<'_> {
                 if array == "GLOBALS" {
                     self.usage.dynamic_global_alias = true;
                 } else {
-                    self.record_variable_protocol_methods(array, &["offsetSet"]);
+                    self.record_variable_protocol_methods(array, &["offsetSet", "__elephc_append"]);
                 }
                 self.scan_expr(value);
             }
-            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            StmtKind::StaticPropertyArrayAssign { receiver, property, index, value } => {
+                let source = Expr::new(ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["__elephc_reference"]);
                 self.scan_expr(index);
                 self.scan_expr(value);
             }
@@ -468,6 +482,10 @@ impl Scanner<'_> {
                 property,
                 value,
             } => {
+                let source = Expr::new(ExprKind::PropertyAccess {
+                    object: object.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["offsetSet", "__elephc_append"]);
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
@@ -479,6 +497,10 @@ impl Scanner<'_> {
                 index,
                 value,
             } => {
+                let source = Expr::new(ExprKind::PropertyAccess {
+                    object: object.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["__elephc_reference"]);
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
