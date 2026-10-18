@@ -143,6 +143,78 @@ impl Checker {
             && !self.interfaces.contains_key(type_name)
     }
 
+    /// Validates the static type of a `throw` operand (statement and expression forms).
+    ///
+    /// Besides a single Throwable object, this accepts boxed operands, which codegen throws
+    /// through the runtime check that raises PHP's `Error("Can only throw objects")` /
+    /// `Error("Cannot throw objects that do not implement Throwable")`:
+    /// - a union whose members are all Throwable objects or null: a join of sibling exception
+    ///   classes (`$a ? new A : new B`) or a `?Throwable` parameter;
+    /// - `mixed`, such as a local joined from `null` and an exception across a loop
+    ///   (`$e = null; foreach (...) { $e ??= new E; } throw $e ?? new F;`).
+    ///
+    /// A read of a local a join point may have left undefined is typed `mixed` by
+    /// `condition_edges`, so its own type is checked instead: a maybe-undefined scalar is still
+    /// rejected statically.
+    pub(crate) fn check_thrown_type(
+        &self,
+        operand: &Expr,
+        thrown_ty: PhpType,
+        env: &TypeEnv,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let thrown_ty = match (&thrown_ty, &operand.kind) {
+            (PhpType::Mixed, crate::parser::ast::ExprKind::Variable(name))
+                if self
+                    .maybe_undefined_result
+                    .reads
+                    .contains_key(&(operand.span, name.clone())) =>
+            {
+                env.get(name).cloned().unwrap_or(PhpType::Mixed)
+            }
+            _ => thrown_ty,
+        };
+        let is_throwable_object = |type_name: &str| {
+            self.object_type_implements_throwable(type_name)
+                || self.object_type_may_be_eval_declared(type_name)
+        };
+        let accepted = match &thrown_ty {
+            PhpType::Object(type_name) => is_throwable_object(type_name),
+            PhpType::Mixed => true,
+            PhpType::Union(members) => {
+                let mut objects = members.iter().filter_map(|member| match member {
+                    PhpType::Object(type_name) => Some(type_name),
+                    _ => None,
+                });
+                let only_objects_or_null = members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void));
+                if !only_objects_or_null || members.iter().all(|m| *m == PhpType::Void) {
+                    false
+                } else if objects.all(|type_name| is_throwable_object(type_name)) {
+                    true
+                } else {
+                    return Err(CompileError::new(
+                        span,
+                        "Type error: throw requires an object implementing Throwable",
+                    ));
+                }
+            }
+            _ => false,
+        };
+        if accepted {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            if matches!(thrown_ty, PhpType::Object(_)) {
+                "Type error: throw requires an object implementing Throwable"
+            } else {
+                "Type error: throw requires an object value"
+            },
+        ))
+    }
+
     /// Returns true if `type_name` (a class or interface) implements `Throwable`,
     /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {

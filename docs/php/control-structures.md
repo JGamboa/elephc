@@ -509,6 +509,7 @@ Divergences in the `Error` hierarchy:
 - The file reported for an uncaught throwable is the COMPILED SCRIPT's path. EIR spans carry a line and column but no filename, so code merged in from an `include` reports the including script's path rather than its own.
 - Engine-only `Error` subclasses are NOT declared: `ParseError`, `CompileError`, `DateError`/`DateObjectError`/`DateRangeError`, `Random\RandomError`/`Random\BrokenRandomEngineError`, `Uri\UriError`, and `FFI\Exception`. They exist in PHP only to report failures elephc either resolves at compile time (a parse error) or does not implement, so declaring them would add a name that nothing can ever raise.
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
+- a `throw` operand whose static type is a union of `Throwable` objects and `null` (a `?Throwable` parameter, `$a ? new A : new B`), `mixed`, or a local that may be undefined at that point is checked at runtime: `null` and other non-objects raise `Error("Can only throw objects")`, and an object that does not implement `Throwable` raises `Error("Cannot throw objects that do not implement Throwable")`, as in PHP. A statically known scalar, or a union with a scalar or a non-`Throwable` class member, is still rejected at compile time
 - `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `catch (ClassName $e)` and `catch (TypeA | TypeB $e)` for multi-catch
 - `catch (Exception)`, `catch (Error)`, or another throwable type without binding the exception variable

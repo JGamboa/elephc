@@ -1285,3 +1285,80 @@ echo "n=$n\n";
          n=3\n"
     );
 }
+
+/// A local a join point may leave undefined is read as `mixed` (see `condition_edges`); throwing
+/// it must type-check against the local's own Throwable type and raise `Error` when it was never
+/// assigned (php-src `Zend/tests/exception_set_previous_leak.phpt`).
+#[test]
+fn test_throw_maybe_undefined_throwable_local() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function rethrow_in_finally() {
+    try {
+        throw new Exception("Test");
+    } catch (Exception $e) {
+        throw $e;
+    } finally {
+        throw $e;
+    }
+}
+function maybe_defined(bool $define) {
+    if ($define) { $e = new LogicException("defined"); }
+    throw $e;
+}
+try { rethrow_in_finally(); } catch (Exception $x) { echo $x->getMessage(), "|"; }
+try { maybe_defined(true); } catch (LogicException $x) { echo $x->getMessage(), "|"; }
+try { maybe_defined(false); } catch (Error $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+unset($x);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stdout.starts_with("Test|defined|"), "{}", out.stdout);
+    assert!(out.stdout.ends_with("Error:Can only throw objects|"), "{}", out.stdout);
+    let all = format!("{}{}", out.stdout, out.stderr);
+    assert!(all.contains("Undefined variable $e"), "{all}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throw operand joined from sibling Throwable classes, or a `?Throwable` parameter, is boxed;
+/// it is thrown through the runtime check (Symfony `RoundRobinTransport::send()` shape).
+#[test]
+fn test_throw_union_of_throwables_and_nullable_throwable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Failed extends RuntimeException {}
+function pick(int $which) {
+    $err = $which === 1 ? new LogicException("logic") : new RuntimeException("runtime");
+    throw $err;
+}
+function collect(array $items) {
+    $exception = null;
+    foreach ($items as $item) {
+        $exception ??= new Failed("all failed");
+    }
+    throw $exception ?? new LogicException("none");
+}
+function nullable(?Failed $e) {
+    throw $e;
+}
+function as_expression(int $which) {
+    $err = $which === 1 ? new LogicException("expr-logic") : new Failed("expr-failed");
+    return $which > 0 ? $which : throw $err;
+}
+try { pick(1); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { pick(2); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { collect([1]); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { collect([]); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { nullable(new Failed("set")); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { nullable(null); } catch (Error $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { as_expression(0); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+echo as_expression(5);
+unset($x);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "LogicException:logic|RuntimeException:runtime|Failed:all failed|LogicException:none|\
+         Failed:set|Error:Can only throw objects|Failed:expr-failed|5",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
