@@ -35,7 +35,7 @@ use super::super::Checker;
 /// An array initializer keeps the array contract as PHP's general (boxed) `array`, so array
 /// builtins still accept it while its keys and elements are read at run time: a later call can
 /// store any key or value into it (`static $u = ['x' => 0]; $u[3] = 1;` rewrote a string-keyed
-/// hash slot as another layout and corrupted it, review P42a `s2`).
+/// hash slot as another layout and corrupted it).
 ///
 /// A non-empty literal array keeps its precise element types when the body never writes the
 /// static after its declaration (`static $map = ['x' => [1]]; return $map[$k];`): nothing can
@@ -378,7 +378,7 @@ fn assignment_target_may_write_property(target: &Expr) -> bool {
 ///
 /// Called for nested writes (`$o->p[$k1][$k2] = v`) and for element `unset()`s whose receiver is
 /// a property (`unset($o->p[$k])`, `unset($o->p[$k1][$k2])`): both mutate the slot through its
-/// stored cell, which only the boxed PHP-array representation provides (P48).
+/// stored cell, which only the boxed PHP-array representation provides.
 pub(crate) fn widen_property_root_for_element_write(
     checker: &mut Checker,
     target: &Expr,
@@ -404,7 +404,7 @@ pub(crate) fn widen_property_root_for_element_write(
 
 /// Models write-context autovivification on the local root of a nested `unset()` target
 /// (`unset($c[$k1][$k2])`): the removal goes through the same boxed parent cells as a nested write,
-/// so the root's element type is widened the same way (P48).
+/// so the root's element type is widened the same way.
 pub(crate) fn widen_local_root_for_nested_unset(
     checker: &mut Checker,
     target: &Expr,

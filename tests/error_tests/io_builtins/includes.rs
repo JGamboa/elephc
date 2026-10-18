@@ -166,7 +166,7 @@ fn test_error_include_expression_dynamic_path_is_rejected() {
 }
 
 /// Verifies a variable or property passed to a call before an include of the same call is a
-/// compile error (review round 1): PHP binds it before the file runs, so a file that writes it
+/// compile error: PHP binds it before the file runs, so a file that writes it
 /// must not change it, but the parameter may be by reference, so it cannot be copied either.
 #[test]
 fn test_error_place_argument_before_include_is_rejected() {

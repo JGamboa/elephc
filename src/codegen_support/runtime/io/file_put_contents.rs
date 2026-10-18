@@ -420,7 +420,7 @@ mod tests {
     }
     /// A failed open() must never reach write(): on Darwin the svc leaves the errno in x0 with
     /// the carry set, and ENOENT (2) is stderr's descriptor, so the payload went to stderr
-    /// (P41, php-src bug75679.phpt). Every target tests the open result before anything else.
+    /// (php-src bug75679.phpt). Every target tests the open result before anything else.
     #[test]
     fn test_every_target_tests_the_open_result_before_writing() {
         for (target, open_call, guard) in [

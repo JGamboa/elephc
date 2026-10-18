@@ -1,5 +1,5 @@
 //! Purpose:
-//! Diagnostic coverage for front P52: the `static` local shapes elephc refuses at compile time
+//! Diagnostic coverage for the `static` local shapes elephc refuses at compile time
 //! instead of miscompiling them (references to the local itself, by-reference arguments,
 //! by-reference `foreach` and `unset`).
 //!

@@ -109,16 +109,16 @@ fn test_error_interface_static_nullable_static_vs_false() {
     );
 }
 
-/// Review p40: `Foo` -> `?Foo = null` would read the parent's object word as a boxed value.
+/// `Foo` -> `?Foo = null` would read the parent's object word as a boxed value.
 #[test]
 fn test_error_override_widens_object_param_to_nullable_default() {
     expect_error(
         r#"<?php class Foo { public $v = "foo"; } class Base { public function f(Foo $x): string { return "B"; } } class Child extends Base { public function f(?Foo $x = null): string { return "C"; } }"#,
-        r#"Cannot make parameter $x optional when overriding method: Child::f (not yet supported until P10"#,
+        r#"Cannot make parameter $x optional when overriding method: Child::f (not yet supported"#,
     );
 }
 
-/// Review p24: an untyped RTWC override of a `mixed` builtin crashed (SIGSEGV).
+/// An untyped RTWC override of a `mixed` builtin crashed (SIGSEGV).
 #[test]
 fn test_error_return_type_will_change_untyped_over_mixed_builtin() {
     expect_error(
@@ -136,12 +136,12 @@ fn test_error_return_type_will_change_typed_over_mixed_builtin() {
     );
 }
 
-/// Review p04 (pre-existing miscompile): calls through the parent passed the parent's default.
+/// Calls through the parent passed the parent's default.
 #[test]
 fn test_error_override_changes_inherited_default() {
     expect_error(
         r#"<?php class A { public function f(int $n, string $u = "a"): string { return "A$n$u"; } } class B extends A { public function f(int $n, string $u = "b"): string { return "B$n$u"; } }"#,
-        r#"Cannot change the default value of parameter $u when overriding method: B::f (not yet supported until P10"#,
+        r#"Cannot change the default value of parameter $u when overriding method: B::f (not yet supported"#,
     );
 }
 
@@ -154,7 +154,7 @@ fn test_error_interface_impl_changes_inherited_default() {
     );
 }
 
-/// Review n7c: a renamed variadic still has to keep the parent's element type (crashed with exit 139).
+/// A renamed variadic still has to keep the parent's element type (crashed with exit 139).
 #[test]
 fn test_error_override_variadic_renamed_with_incompatible_type() {
     expect_error(
@@ -172,7 +172,7 @@ fn test_error_override_variadic_narrows_object_type() {
     );
 }
 
-/// Review p33: string conversion calls `__toString()` statically, so the implicit `: string` is not applied when a subclass overrides it.
+/// String conversion calls `__toString()` statically, so the implicit `: string` is not applied when a subclass overrides it.
 #[test]
 fn test_error_untyped_tostring_overridden_by_subclass_keeps_contract_error() {
     expect_error(
@@ -181,16 +181,16 @@ fn test_error_untyped_tostring_overridden_by_subclass_keeps_contract_error() {
     );
 }
 
-/// Review ronda 2 (q12): a `mixed` receiver omitting the argument found no candidate and threw a catchable Error (printed `caught`); refused until P10.
+/// A `mixed` receiver omitting the argument found no candidate and threw a catchable Error (printed `caught`); refused for now.
 #[test]
 fn test_error_override_makes_required_parameter_optional() {
     expect_error(
         r#"<?php class Base { public function f(int $n, string $u): string { return "B$n$u"; } } class Child extends Base { public function f(int $n, string $u = "kg"): string { return "C$n$u"; } } function u($o) { return $o->f(5); } try { echo u(new Child()); } catch (Throwable $e) { echo "caught"; }"#,
-        r#"Cannot make parameter $u optional when overriding method: Child::f (not yet supported until P10"#,
+        r#"Cannot make parameter $u optional when overriding method: Child::f (not yet supported"#,
     );
 }
 
-/// Review ronda 2 (q07): same refusal for interface implementations.
+/// The same refusal for interface implementations.
 #[test]
 fn test_error_interface_impl_makes_required_parameter_optional() {
     expect_error(
@@ -199,7 +199,7 @@ fn test_error_interface_impl_makes_required_parameter_optional() {
     );
 }
 
-/// Review ronda 2 (q06): and for static overrides.
+/// The same refusal for static overrides.
 #[test]
 fn test_error_static_override_makes_required_parameter_optional() {
     expect_error(
@@ -208,7 +208,7 @@ fn test_error_static_override_makes_required_parameter_optional() {
     );
 }
 
-/// Review ronda 2 (r03): a by-reference parameter keeps the parent's payload representation too (crashed with SIGSEGV).
+/// A by-reference parameter keeps the parent's payload representation too (crashed with SIGSEGV).
 #[test]
 fn test_error_override_widens_by_reference_parameter() {
     expect_error(
@@ -217,7 +217,7 @@ fn test_error_override_widens_by_reference_parameter() {
     );
 }
 
-/// Review ronda 2 (q01): `self::X` spelled the same resolves against different classes, so it is a changed default (printed `Ca` instead of `Cb`).
+/// `self::X` spelled the same resolves against different classes, so it is a changed default (printed `Ca` instead of `Cb`).
 #[test]
 fn test_error_override_class_relative_default_counts_as_changed() {
     expect_error(
@@ -226,7 +226,7 @@ fn test_error_override_class_relative_default_counts_as_changed() {
     );
 }
 
-/// Review ronda 3 (d2): the override redefines `X`, so `self::X` is a changed default.
+/// The override redefines `X`, so `self::X` is a changed default.
 #[test]
 fn test_error_override_redefined_self_constant_default() {
     expect_error(
@@ -235,7 +235,7 @@ fn test_error_override_redefined_self_constant_default() {
     );
 }
 
-/// Inside an override family the representation is boxed, but PHP's contravariance still applies (review n12 compiled once the family exemption skipped the representation rule).
+/// Inside an override family the representation is boxed, but PHP's contravariance still applies (it compiled once the family exemption skipped the representation rule).
 #[test]
 fn test_error_family_override_parameter_still_contravariant() {
     expect_error(
@@ -244,7 +244,7 @@ fn test_error_family_override_parameter_still_contravariant() {
     );
 }
 
-/// Review r45 H1 (b06): the family boxes `string` -> `string|array`, but only re-applies PHP's
+/// The family boxes `string` -> `string|array`, but only re-applies PHP's
 /// coercion for plain scalars; the union override would see `12345` as an int.
 #[test]
 fn test_error_family_param_widened_string_to_union() {
@@ -254,7 +254,7 @@ fn test_error_family_param_widened_string_to_union() {
     );
 }
 
-/// Review r45 H1 (b07): `bool` -> `bool|int` (PHP coerces `"a"` to `true`).
+/// `bool` -> `bool|int` (PHP coerces `"a"` to `true`).
 #[test]
 fn test_error_family_param_widened_bool_to_union() {
     expect_error(
@@ -263,7 +263,7 @@ fn test_error_family_param_widened_bool_to_union() {
     );
 }
 
-/// Review r45 H1 (b10): `int` -> `int|float` (PHP coerces `"3"` to `3`).
+/// `int` -> `int|float` (PHP coerces `"3"` to `3`).
 #[test]
 fn test_error_family_param_widened_int_to_int_float() {
     expect_error(
@@ -272,7 +272,7 @@ fn test_error_family_param_widened_int_to_int_float() {
     );
 }
 
-/// Review r45 H1 (b13): `float` -> `float|string` (PHP coerces `5` to `5.0`).
+/// `float` -> `float|string` (PHP coerces `5` to `5.0`).
 #[test]
 fn test_error_family_param_widened_float_to_union() {
     expect_error(
@@ -281,7 +281,7 @@ fn test_error_family_param_widened_float_to_union() {
     );
 }
 
-/// Ronda 6: `int` -> `int|string` read a float argument uncoerced (PHP turns `2.0` into `2`).
+/// `int` -> `int|string` read a float argument uncoerced (PHP turns `2.0` into `2`).
 #[test]
 fn test_error_family_param_widened_int_to_int_string() {
     expect_error(
@@ -290,7 +290,7 @@ fn test_error_family_param_widened_int_to_int_string() {
     );
 }
 
-/// Ronda 6: a nullable scalar is a union too (`?string` keeps an int argument uncoerced).
+/// A nullable scalar is a union too (`?string` keeps an int argument uncoerced).
 #[test]
 fn test_error_family_param_widened_string_to_nullable() {
     expect_error(

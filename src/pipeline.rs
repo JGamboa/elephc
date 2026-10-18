@@ -647,8 +647,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     timings.record_since("stdlib-prelude", phase_started);
 
     // Inject the elephc-PHP core classes (`WeakMap`, `ErrorException`) the program can reach.
-    // Post-autoload for the same reason as the object-cast prelude: Laravel names them only in
-    // autoloaded vendor files.
+    // Post-autoload for the same reason as the object-cast prelude: a program may name them only
+    // in autoloaded vendor files.
     crate::progress::phase("natives-prelude");
     let phase_started = Instant::now();
     let ast = match crate::natives_prelude::inject_if_used(ast, &mut prelude_inventory) {

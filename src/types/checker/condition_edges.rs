@@ -158,7 +158,7 @@ impl super::Checker {
     }
 }
 
-/// Maybe-undefined locals (review P2c r2, R2-2).
+/// Maybe-undefined locals.
 ///
 /// A local a join point may leave undefined — assigned in one `if` arm, on one lazy edge, or only
 /// inside a loop body — is tracked in `Checker::maybe_undefined_locals` while the body is walked.
@@ -215,8 +215,8 @@ impl super::Checker {
                 .contains_key(&(span, name.to_string()))
     }
 
-    /// Records the captures of the closure created at `span` that may be undefined there
-    /// (review P2c r3, R3-1/R3-2), each as a read at the closure's span that EIR lowering answers
+    /// Records the captures of the closure created at `span` that may be undefined there,
+    /// each as a read at the closure's span that EIR lowering answers
     /// from the defined-flag:
     /// - `use (&$x)` creates `$x` as null when it is undefined, so it is defined from here on;
     /// - `use ($x)` warns `Undefined variable` and captures null;
@@ -309,8 +309,8 @@ pub(crate) fn loop_head_definite_assignments(stmt: &crate::parser::ast::Stmt) ->
     out
 }
 
-/// Locals named by an `unset($x)` statement anywhere inside `stmts`, nested bodies included
-/// (review P2c r3, R3-3). A loop body may run again after such an `unset`, and a `break` may leave
+/// Locals named by an `unset($x)` statement anywhere inside `stmts`, nested bodies included.
+/// A loop body may run again after such an `unset`, and a `break` may leave
 /// a loop or `switch` right after one, so these names may be undefined at the body's start and
 /// after the construct even where the walk's own join cannot see the `unset` path.
 pub(crate) fn unset_locals_in(stmts: &[crate::parser::ast::Stmt]) -> BTreeSet<String> {
@@ -396,7 +396,7 @@ fn join_exits(
     }
 }
 
-/// Maybe-undefined join of a `switch` (review P2c r3, R3-3). A case body is entered by a match
+/// Maybe-undefined join of a `switch`. A case body is entered by a match
 /// or by falling through from the previous body, so it starts with the switch's entry marks, the
 /// previous body's end marks and every local an earlier body introduced. The switch is left by
 /// a trailing `break`, by falling off the last body, by a `break` nested deeper (recorded
@@ -483,7 +483,7 @@ impl SwitchMaybeUndefined {
     }
 }
 
-/// Maybe-undefined join of a `try` (review P2c r3, R3-3). A handler can start anywhere in the
+/// Maybe-undefined join of a `try`. A handler can start anywhere in the
 /// `try` body, so it sees the entry marks, every mark the body set and every local it (or an
 /// earlier handler) introduced; the construct is left by the `try` body or a handler falling
 /// through, and a `finally` body runs on every path (normal completion keeps what it defines).

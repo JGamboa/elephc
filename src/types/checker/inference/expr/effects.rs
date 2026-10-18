@@ -265,7 +265,7 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
-                // Only the selected arm runs (review P2c r3, R3-3): each arm starts from the
+                // Only the selected arm runs: each arm starts from the
                 // entry marks, and a local only some arms introduce may be undefined after it.
                 let marks_entry = self.maybe_undefined_locals.clone();
                 let mut marks_joined = marks_entry.clone();
@@ -566,7 +566,7 @@ impl Checker {
                                 }
                             } else {
                                 // The binding survives the `unset` (a branch, a loop body), so
-                                // the name may be undefined from here (review P2c r3, R3-3):
+                                // the name may be undefined from here:
                                 // its later reads answer from the defined-flag `unset` clears.
                                 if env.contains_key(var) {
                                     self.mark_maybe_undefined(var);
@@ -892,8 +892,8 @@ impl Checker {
         Ok(ty)
     }
 
-    /// Lets a local first bound on one lazy edge be retyped later like any other local
-    /// (review P2c r2, R2-1): `if ($a && ($r = f(5))) { $r .= "x"; }` compiled before the
+    /// Lets a local first bound on one lazy edge be retyped later like any other local:
+    /// `if ($a && ($r = f(5))) { $r .= "x"; }` compiled before the
     /// condition's definitions were modelled, because the body did not know `$r` at all; now that
     /// it does, a failed merge falls back to `mixed` (`guarded_union_types`) instead of the
     /// "cannot reassign" a binding created inside a branch otherwise gets.

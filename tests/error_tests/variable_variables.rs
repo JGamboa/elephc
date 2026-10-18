@@ -86,7 +86,7 @@ fn test_error_extract_skip_after_locals() {
 }
 
 /// `extract(..., EXTR_SKIP)` after an `unset()` of a parameter, or after a closure mentions a
-/// local other than its captures, is refused (P43).
+/// local other than its captures, is refused.
 #[test]
 fn test_error_extract_skip_after_unset_or_closure_local() {
     expect_error(
@@ -100,7 +100,7 @@ fn test_error_extract_skip_after_unset_or_closure_local() {
 }
 
 /// extract() into a local the function also unset()s is refused: the conditional store is
-/// lost once another statement follows (P43 ronda 1).
+/// lost once another statement follows.
 #[test]
 fn test_error_extract_into_unset_local() {
     expect_error(
@@ -115,7 +115,7 @@ fn test_error_extract_into_unset_local() {
 }
 
 /// Every mode other than EXTR_OVERWRITE / EXTR_SKIP (and EXTR_REFS combinations), and an
-/// extract() in an arrow function, are refused (P43).
+/// extract() in an arrow function, are refused.
 #[test]
 fn test_error_extract_other_modes_and_arrow() {
     for mode in [
@@ -162,7 +162,7 @@ fn test_error_extract_expression_and_mode() {
 }
 
 /// Destructuring into a variable variable at top level is refused without leaking the internal
-/// frame pseudo-variable's name (review r1, H1).
+/// frame pseudo-variable's name.
 #[test]
 fn test_error_variable_variable_destructuring_top_level() {
     match check_source("<?php $a = 0; $x = 'a'; [$$x] = [5]; var_dump($a);") {
@@ -175,7 +175,7 @@ fn test_error_variable_variable_destructuring_top_level() {
 }
 
 /// compact() of a local that is only conditionally assigned is refused: PHP omits it when it
-/// is undefined, which elephc cannot test yet (review r1, M1).
+/// is undefined, which elephc cannot test yet.
 #[test]
 fn test_error_compact_possibly_undefined_local() {
     expect_error(
@@ -188,7 +188,7 @@ fn test_error_compact_possibly_undefined_local() {
     );
 }
 
-/// compact() of a name extract() may have defined is refused too (review r1, M2).
+/// compact() of a name extract() may have defined is refused too.
 #[test]
 fn test_error_compact_after_extract() {
     expect_error(

@@ -259,7 +259,7 @@ fn test_reference_place_static_source_is_refused() {
     assert!(err.contains("Binding a static property into an object property"), "{err}");
 }
 
-/// A reference to a readonly property throws php's Error (`$r = &$o->v`). (review probe `t3a`)
+/// A reference to a readonly property throws php's Error (`$r = &$o->v`).
 #[test]
 fn test_reference_readonly_alias_throws() {
     let out = compile_and_run(
@@ -273,7 +273,7 @@ echo $o->v, "\n";
     assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$v\n1\n");
 }
 
-/// Binding a readonly property throws instead of rebinding it. (review probe `t3b`)
+/// Binding a readonly property throws instead of rebinding it.
 #[test]
 fn test_reference_readonly_property_place_throws() {
     let out = compile_and_run(
@@ -289,7 +289,7 @@ $x = 4; echo $o->v, "\n";
     assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$v\n1\n1\n");
 }
 
-/// Binding an element of a readonly array property throws. (review probe `t3c`)
+/// Binding an element of a readonly array property throws.
 #[test]
 fn test_reference_readonly_element_place_throws() {
     let out = compile_and_run(
@@ -303,7 +303,7 @@ print_r($o->a);
     assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$a\nArray\n(\n    [k] => 1\n)\n");
 }
 
-/// php refuses the binding inside the declaring constructor too. (review probe `t3d`)
+/// PHP refuses the binding inside the declaring constructor too.
 #[test]
 fn test_reference_readonly_place_in_constructor_throws() {
     let out = compile_and_run(
@@ -316,7 +316,7 @@ try { $o = new R($x); echo $o->v, "\n"; $x = 9; echo $o->v, "\n"; } catch (Error
     assert_eq!(out, "Error: Cannot indirectly modify readonly property R::$v\n");
 }
 
-/// A later duplicate key replaces a reference element instead of writing through it. (review probe `d1`)
+/// A later duplicate key replaces a reference element instead of writing through it.
 #[test]
 fn test_reference_literal_duplicate_keys() {
     let out = compile_and_run(
@@ -337,7 +337,7 @@ var_dump($e);
     assert_eq!(out, "array(1) {\n  [\"k\"]=>\n  int(2)\n}\narray(1) {\n  [\"k\"]=>\n  &int(98)\n}\narray(2) {\n  [0]=>\n  string(5) \"plain\"\n  [1]=>\n  string(1) \"z\"\n}\narray(2) {\n  [0]=>\n  &int(97)\n  [1]=>\n  &int(97)\n}\narray(1) {\n  [1]=>\n  string(3) \"int\"\n}\n");
 }
 
-/// Nested literals with reference elements. (review probe `d2`)
+/// Nested literals with reference elements.
 #[test]
 fn test_reference_literal_nested() {
     let out = compile_and_run(
@@ -353,7 +353,7 @@ $f = ['7' => 'v', &$x]; var_dump($f);
     assert_eq!(out, "array(2) {\n  [5]=>\n  string(4) \"five\"\n  [6]=>\n  &int(6)\n}\narray(2) {\n  [-3]=>\n  string(3) \"neg\"\n  [-2]=>\n  &int(6)\n}\narray(2) {\n  [7]=>\n  string(1) \"v\"\n  [8]=>\n  &int(6)\n}\n");
 }
 
-/// A key is evaluated at its own position, before later elements change it. (review probe `d3`)
+/// A key is evaluated at its own position, before later elements change it.
 #[test]
 fn test_reference_literal_key_evaluated_in_order() {
     let out = compile_and_run(
@@ -370,7 +370,7 @@ var_dump($arr2);
     assert_eq!(out, "array(2) {\n  [\"a\"]=>\n  &int(2)\n  [\"z\"]=>\n  string(1) \"b\"\n}\narray(2) {\n  [0]=>\n  &int(2)\n  [5]=>\n  int(0)\n}\n");
 }
 
-/// A reference source is bound at its own position, before later elements change its operands. (review probe `d4`)
+/// A reference source is bound at its own position, before later elements change its operands.
 #[test]
 fn test_reference_literal_source_evaluated_in_order() {
     let out = compile_and_run(
@@ -390,7 +390,7 @@ var_dump($n);
     assert_eq!(out, "array(2) {\n  [0]=>\n  &string(1) \"W\"\n  [1]=>\n  string(1) \"q\"\n}\nM b\narray(2) {\n  [0]=>\n  &string(2) \"x2\"\n  [1]=>\n  string(2) \"x2\"\n}\n");
 }
 
-/// The literal's hidden table is released once built: destructors run when php runs them. (review probe `r3`)
+/// The literal's hidden table is released once built: destructors run when php runs them.
 #[test]
 fn test_reference_literal_releases_its_table() {
     let out = compile_and_run(
@@ -431,7 +431,7 @@ echo "done\n";
     assert_eq!(out, "unset l\ndtor second\nunset o\ndtor lit\nend t\nw\narray(2) {\n  [0]=>\n  &string(1) \"w\"\n  [\"k\"]=>\n  int(2)\n}\narray(2) {\n  [0]=>\n  &string(1) \"w\"\n  [\"k\"]=>\n  int(3)\n}\narray(2) {\n  [0]=>\n  &string(1) \"w\"\n  [\"k\"]=>\n  int(3)\n}\ndtor elem\nreassigned\ndtor third\nzeroed\ndtor q\ndone\n");
 }
 
-/// After the last alias is gone the element prints without `&`. (review probe `p3b`)
+/// After the last alias is gone the element prints without `&`.
 #[test]
 fn test_reference_literal_sole_holder_prints_plain() {
     let out = compile_and_run(
@@ -451,7 +451,7 @@ var_dump($a);
     assert_eq!(out, "Array\n(\n    [0] => 10\n    [k] => 20\n    [1] => 3\n)\n100 200\narray(3) {\n  [0]=>\n  &int(100)\n  [\"k\"]=>\n  &int(200)\n  [1]=>\n  int(3)\n}\narray(3) {\n  [0]=>\n  int(5)\n  [\"k\"]=>\n  &int(200)\n  [1]=>\n  int(3)\n}\n");
 }
 
-/// A literal with reference elements returned from a function. (review probe `p3c`)
+/// A literal with reference elements returned from a function.
 #[test]
 fn test_reference_literal_returned_from_function() {
     let out = compile_and_run(
@@ -464,7 +464,7 @@ $r = f(); $r[0] = 9; var_dump($r);
 }
 
 /// A literal with by-reference elements and string or computed keys evaluated in a loop frees
-/// every key it creates (review round 2, probes `ln1`/`ln2`): the keys are written directly or
+/// every key it creates: the keys are written directly or
 /// through a hidden key local that is never re-typed, and a place binding releases its key.
 #[test]
 fn test_reference_literal_string_keys_do_not_leak() {

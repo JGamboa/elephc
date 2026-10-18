@@ -583,7 +583,7 @@ impl Checker {
             // then-branch. The storage is still the boxed value, and a Closure is exactly what
             // the runtime callable dispatch invokes, so the narrowed call is a runtime call like
             // the mixed one. Rejecting it made Laravel's `value()` fail to re-resolve once its
-            // parameter widened, which silently kept the stale `int` return (P47).
+            // parameter widened, which silently kept the stale `int` return.
             if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed)
                 || is_closure_object_type(&var_ty)
             {

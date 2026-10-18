@@ -302,7 +302,7 @@ fn run_unhandled(body: &str) -> String {
     compile_and_run(&format!("{UNHANDLED_MESSAGES}{body}"))
 }
 
-/// H1: an enum case subject renders as `Class::Case`, as PHP does, not `of type Class`.
+/// An enum case subject renders as `Class::Case`, as PHP does, not `of type Class`.
 #[test]
 fn test_unhandled_match_message_renders_enum_case() {
     let out = run_unhandled(
@@ -316,7 +316,7 @@ echo m(Suit::Hearts), "\n", m(BS::A), "\n", te(Suit::Hearts), "\n";
     );
 }
 
-/// H2: a float subject renders like PHP's precision-14 form with `.0` on integral values.
+/// A float subject renders like PHP's precision-14 form with `.0` on integral values.
 #[test]
 fn test_unhandled_match_message_renders_floats_like_php() {
     let out = run_unhandled(
@@ -333,7 +333,7 @@ echo tf(-2.0), "|", tf(0.1), "\n";
     );
 }
 
-/// H3: a string subject is quoted, truncated to 15 bytes plus `...`, with `\\` and control
+/// A string subject is quoted, truncated to 15 bytes plus `...`, with `\\` and control
 /// escapes applied.
 #[test]
 fn test_unhandled_match_message_truncates_long_strings() {

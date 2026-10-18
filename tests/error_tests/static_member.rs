@@ -1,5 +1,5 @@
 //! Purpose:
-//! Diagnostic coverage for runtime-named static properties (`self::${$p}`, front P42a): the forms
+//! Diagnostic coverage for runtime-named static properties (`self::${$p}`): the forms
 //! elephc refuses at compile time instead of guessing, and malformed syntax.
 //!
 //! Called from:

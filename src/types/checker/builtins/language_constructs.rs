@@ -140,8 +140,8 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
         crate::types::checker::stmt_check::assignments::widen_static_property_element_root(checker, array, false)?;
     }
     // Untyped property / static property roots of an element unset (`unset($o->p[$k])`,
-    // `unset($o->p[$a][$b])`) take the boxed PHP-array representation their stored cell needs
-    // (P48). For a static root P52 already widened it above (including `static::` subclasses);
+    // `unset($o->p[$a][$b])`) take the boxed PHP-array representation their stored cell needs.
+    // For a static root the static-property widening above already covers it (including `static::` subclasses);
     // this then only covers instance properties and a null-defaulted static (to `mixed`).
     if matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
         crate::types::checker::stmt_check::assignments::widen_property_root_for_element_write(

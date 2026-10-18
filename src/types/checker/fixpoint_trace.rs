@@ -118,7 +118,7 @@ fn report_detail(name: &str, before: Option<&FunctionSig>, after: &FunctionSig) 
 /// untyped parameters that each widen in a different pass changes sixty times and is still
 /// monotone. An oscillation is exactly a revisit — some writer replaces instead of joining, and
 /// the entity alternates `A -> B -> A` — so the detector keys on revisits, not on the number of
-/// changes. Looping on until the round budget runs out (thousands of rounds on Laravel) only
+/// changes. Looping on until the round budget runs out (thousands of rounds on a large codebase) only
 /// hides it; the detector turns it into a clear internal error that names the entity.
 const DEFAULT_REVISIT_LIMIT: usize = 2;
 

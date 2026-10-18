@@ -2,7 +2,7 @@
 //! Regression coverage for nested writes whose intermediate key is NOT a string literal
 //! (a variable, property, call or runtime-tagged key) and for the containers those writes go
 //! through: locals, untyped and declared properties, static properties, static locals and
-//! elements of other arrays (P48).
+//! elements of other arrays.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests arrays::nested_string_keys`.
@@ -176,7 +176,7 @@ $w = [[]]; $z = 'z'; $w[0][$z]['k'] = 1; $w[0][$z]['k'] += 2; echo json_encode($
     );
 }
 
-/// A static array property inside an array literal keeps its array value (P42a j1).
+/// A static array property inside an array literal keeps its array value.
 #[test]
 fn test_static_array_property_inside_array_literal() {
     let out = compile_and_run(
@@ -249,7 +249,7 @@ echo json_encode($m);
     );
 }
 
-/// Review round 1 (B1): after a nested write promoted a statically indexed local to hash storage
+/// After a nested write promoted a statically indexed local to hash storage
 /// at run time (gap key or boxed string key), `$a[$k][] = $v` read dense slots out of the hash
 /// table — silently wrong groups or a SIGSEGV. The append now goes through the fetch-for-write
 /// parent cell, which dispatches on the runtime container kind.

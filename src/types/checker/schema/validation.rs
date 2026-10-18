@@ -288,7 +288,7 @@ pub(crate) fn apply_implicit_tostring_return_types(
             })
     }
     // `(string)`, `echo` and interpolation call `__toString()` statically on the declared class
-    // (no virtual dispatch yet, frente P10/toString-dispatch). A class whose `__toString()` a
+    // (no virtual dispatch yet). A class whose `__toString()` a
     // subclass overrides would convert with the wrong body, so it keeps its untyped declaration
     // and the contract error it had before instead of compiling to the wrong output.
     let overridden_by_subclass = |class_name: &str| {
@@ -670,8 +670,8 @@ pub(crate) fn validate_signature_compatibility_with_defaults(
         }
     }
 
-    // PHP lets an override make a required parameter optional, but elephc cannot dispatch it yet
-    // (until P10): a boxed `mixed` receiver that omits the argument only finds candidates whose
+    // PHP lets an override make a required parameter optional, but elephc cannot dispatch it yet:
+    // a boxed `mixed` receiver that omits the argument only finds candidates whose
     // whole family agrees on the default, so the call resolves to no method and raises a
     // catchable `Error` instead of running the child. Refuse it rather than compile that.
     if let Some(index) = parent
@@ -683,7 +683,7 @@ pub(crate) fn validate_signature_compatibility_with_defaults(
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot make parameter ${} optional when {} {}: {}::{} (not yet supported until P10: dynamic dispatch cannot supply the override's default)",
+                "Cannot make parameter ${} optional when {} {}: {}::{} (not yet supported: dynamic dispatch cannot supply the override's default)",
                 child.param_names[index], context, kind, owner_name, method_name
             ),
         ));
@@ -705,7 +705,7 @@ pub(crate) fn validate_signature_compatibility_with_defaults(
 
     // A default is filled at the call site from the caller's static signature, so a call through
     // the parent's (or interface's) type passes the parent's default even when the runtime class
-    // declares another one. Until defaults are supplied by the callee (frente P10), an override
+    // declares another one. Until defaults are supplied by the callee, an override
     // must keep the inherited default value wherever the parent has one.
     if let Some(index) = parent
         .defaults
@@ -728,7 +728,7 @@ pub(crate) fn validate_signature_compatibility_with_defaults(
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change the default value of parameter ${} when {} {}: {}::{} (not yet supported until P10: calls through the parent's type would pass the parent's default).{}",
+                "Cannot change the default value of parameter ${} when {} {}: {}::{} (not yet supported: calls through the parent's type would pass the parent's default).{}",
                 child.param_names[index], context, kind, owner_name, method_name, note
             ),
         ));
@@ -969,7 +969,7 @@ pub(crate) fn validate_override_signature(
         return Err(CompileError::new(
             method.span,
             &format!(
-                "Cannot override {} {}::{}: {} (not yet supported until P10)",
+                "Cannot override {} {}::{}: {} (not yet supported)",
                 kind, class_name, method.name, detail
             ),
         ));
@@ -990,7 +990,7 @@ pub(crate) fn validate_override_signature(
         return Err(CompileError::new(
             method.span,
             &format!(
-                "Cannot override {} {}::{} with union return type {}: it changes the physical return representation of the parent's {} (not yet supported until P10)",
+                "Cannot override {} {}::{} with union return type {}: it changes the physical return representation of the parent's {} (not yet supported)",
                 kind, class_name, method.name, child_sig.return_type, parent_sig.return_type
             ),
         ));
@@ -1101,8 +1101,8 @@ fn union_self_return_compatible(
 /// representation.
 ///
 /// A call through the parent's static type materializes every argument with the parent's
-/// signature and jumps to the child's vtable entry, and no adapter converts the words (frente
-/// P10). So every declared parameter, by-reference ones included (the reference cell's payload
+/// signature and jumps to the child's vtable entry, and no adapter converts the words yet.
+/// So every declared parameter, by-reference ones included (the reference cell's payload
 /// is read with the child's layout), must keep the parent's representation, an untyped child
 /// parameter cannot replace a declared one (its type is only inferred later from call sites),
 /// and a renamed variadic must still accept the parent's element type.
@@ -1123,7 +1123,7 @@ fn validate_override_parameter_abi(
         CompileError::new(
             span,
             &format!(
-                "Cannot widen parameter representation when overriding {}: {}::{} parameter ${} ({}; not yet supported until P10)",
+                "Cannot widen parameter representation when overriding {}: {}::{} parameter ${} ({}; not yet supported)",
                 kind, class_name, method_name, child.param_names[index], detail
             ),
         )

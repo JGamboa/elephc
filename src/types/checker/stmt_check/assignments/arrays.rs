@@ -262,7 +262,7 @@ pub(super) fn check_nested_array_assign(
 /// storage (a gap is promoted at runtime). Without this the root kept its empty `array<never>`
 /// type, the inner levels typed as `never` ("Cannot index non-array" / "requires a Mixed
 /// target"), and return/parameter types derived from the root disagreed with the hash storage
-/// the lowering builds (P48).
+/// the lowering builds.
 ///
 /// Only roots whose elements are already `Mixed` (or not yet known) are widened: those are
 /// exactly the containers the nested-write lowering autovivifies through. A declared element

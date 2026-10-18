@@ -403,7 +403,7 @@ pub(super) fn widen_referenced_untyped_static_property(
     }
     widen_one_referenced_static_property(checker, &target, property, widen_null_default);
     // `static::$p[..]` resolves to the CALLED class at run time, so every subclass that
-    // redeclares the property is a possible slot too (review P52 H2). Each must take the same
+    // redeclares the property is a possible slot too. Each must take the same
     // boxed representation, or the reference/unset reads a raw layout as a box and crashes.
     if matches!(receiver.written_class_receiver(), StaticReceiver::Static) {
         let base = target.class_name.clone();

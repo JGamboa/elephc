@@ -275,8 +275,8 @@ fn test_conditional_operand_retypes_local_on_one_edge() {
 }
 
 /// Verifies a lazy operand of a `while`/`for`/`do` condition that retypes a local keeps the value
-/// across iterations (review P2c H1: the short edge re-boxed the entry `null` over the back edge's
-/// value) and that a null-typed `!$x` in such a condition is not folded (H2).
+/// across iterations (the short edge re-boxed the entry `null` over the back edge's
+/// value) and that a null-typed `!$x` in such a condition is not folded.
 #[test]
 fn test_loop_condition_lazy_operand_retypes_local() {
     let out = compile_and_run(
@@ -297,8 +297,8 @@ fn test_loop_condition_lazy_operand_retypes_local() {
     );
 }
 
-/// Verifies `$a = null; $c && $a = [1];` leaves a real PHP null on the skipped edge (review P2c
-/// H3: the join adopted the array, so `=== null`, `is_array` and `$a[] = v` misread the null word)
+/// Verifies `$a = null; $c && $a = [1];` leaves a real PHP null on the skipped edge
+/// The join adopted the array, so `=== null`, `is_array` and `$a[] = v` misread the null word)
 /// and that a function returning such a local keeps the null.
 #[test]
 fn test_lazy_null_to_array_join_keeps_php_null() {
@@ -317,7 +317,7 @@ fn test_lazy_null_to_array_join_keeps_php_null() {
     );
 }
 
-/// Verifies a local assigned in a lazy operand of a condition is defined where that edge leads: the `if`/`while`/`for` body on the true edge of `&&`, the code after a diverging `if` on the false edge of `||` (P2c r2).
+/// Verifies a local assigned in a lazy operand of a condition is defined where that edge leads: the `if`/`while`/`for` body on the true edge of `&&`, the code after a diverging `if` on the false edge of `||`.
 #[test]
 fn test_condition_edge_definitions_reach_the_guarded_region() {
     let out = compile_and_run(
@@ -342,12 +342,12 @@ fn test_condition_edge_definitions_reach_the_guarded_region() {
     assert_eq!(out, "string(1) \"N\"\nstring(2) \"no\"\nint(6)\nstring(5) \"early\"\n0,2,4,\nstring(2) \"pq\"\nstring(4) \"elif\"\nint(14)\nint(-1)\n10,11,\n");
 }
 
-/// Verifies Container.php:819 (`is_callable($cb) && ! ($r = new R(...))->isAnonymous()`), nested `&&`/`||`, `!`, elseif false edges and ternary conditions define the assigned local on the right edge (P2c r2).
+/// Verifies Container.php:819 (`is_callable($cb) && ! ($r = new R(...))->isAnonymous()`), nested `&&`/`||`, `!`, elseif false edges and ternary conditions define the assigned local on the right edge.
 #[test]
 fn test_condition_edge_definitions_nested_and_negated() {
     let out = compile_and_run(
         r#"<?php
-        // Container.php:819 shape, nested &&/||, `!`, elseif false edges and diverging `if` (P2c r2).
+        // Container.php:819 shape, nested &&/||, `!`, elseif false edges and diverging `if`.
         class S { public $name = "Scope"; }
         class R { function __construct(public $anon) {} function isAnonymous() { return $this->anon; } function getClosureScopeClass() { return new S; } }
         class C {
@@ -376,12 +376,12 @@ fn test_condition_edge_definitions_nested_and_negated() {
     assert_eq!(out, "string(5) \"Scope\"\nstring(5) \"other\"\nstring(5) \"other\"\nstring(1) \"z\"\nstring(3) \"noz\"\nstring(1) \"f\"\nstring(1) \"w\"\nstring(1) \"-\"\nint(18)\nstring(5) \"early\"\nstring(2) \"qr\"\nstring(1) \"a\"\ng\n5\n");
 }
 
-/// Verifies both arms of `? :` retyping one local are checked from the entry environment and joined (review P2c r1 N1: a spurious "cannot reassign").
+/// Verifies both arms of `? :` retyping one local are checked from the entry environment and joined.
 #[test]
 fn test_ternary_arms_retyping_the_same_local_are_joined() {
     let out = compile_and_run(
         r#"<?php
-        // Both arms of `? :` retype the same local: checked in parallel, then joined (P2c r1 N1).
+        // Both arms of `? :` retype the same local: checked in parallel, then joined.
         function g(bool $c) { $y = null; $r = $c ? ($y = "s") : ($y = 1); var_dump($r, $y); }
         g(true); g(false);
         function h(bool $c) { $n = 0; $c ? ($n = 1.5) : ($n = 2); var_dump($n); }
@@ -391,12 +391,12 @@ fn test_ternary_arms_retyping_the_same_local_are_joined() {
     assert_eq!(out, "string(1) \"s\"\nstring(1) \"s\"\nint(1)\nint(1)\nfloat(1.5)\nint(2)\n");
 }
 
-/// Verifies a local some path leaves undefined reads as PHP null there — `isset`, `??`, `@`, `empty`, after an `if`, a lazy edge, a loop that did not run and `unset` — instead of the value a previous call left in the slot (review P2c r2, R2-2).
+/// Verifies a local some path leaves undefined reads as PHP null there — `isset`, `??`, `@`, `empty`, after an `if`, a lazy edge, a loop that did not run and `unset` — instead of the value a previous call left in the slot.
 #[test]
 fn test_maybe_undefined_local_reads_answer_php_null() {
     let out = compile_and_run(
         r#"<?php
-        // A local some path leaves undefined reads as PHP null there (review P2c r2, R2-2).
+        // A local some path leaves undefined reads as PHP null there.
         function f($v) { return $v; }
         function e01($a) { if ($a && ($r = f(5))) { echo "in\n"; } return $r ?? null; }
         var_dump(e01(true), e01(false));
@@ -421,12 +421,12 @@ fn test_maybe_undefined_local_reads_answer_php_null() {
     assert_eq!(out, "in\nint(5)\nNULL\nbool(true)\nbool(false)\nint(5)\nint(0)\n5|\n|\nint(5)\nstring(1) \"d\"\nint(5)\nNULL\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nint(2)\nstring(4) \"none\"\nstring(5) \"unset\"\nint(1)\n");
 }
 
-/// Verifies a local defined by a condition edge can be retyped inside the guarded region like any other local (review P2c r2, R2-1).
+/// Verifies a local defined by a condition edge can be retyped inside the guarded region like any other local.
 #[test]
 fn test_condition_edge_local_can_be_retyped_in_the_region() {
     let out = compile_and_run(
         r#"<?php
-        // A local defined by a condition edge can be retyped in the guarded region (review P2c r2, R2-1).
+        // A local defined by a condition edge can be retyped in the guarded region.
         function f($v) { return $v; }
         function k2($a) { if ($a && ($r = f(5))) { $r .= "x"; echo $r, "\n"; } }
         k2(true);
@@ -443,14 +443,14 @@ fn test_condition_edge_local_can_be_retyped_in_the_region() {
     assert_eq!(out, "5x\ns\n5x\n5x\ns\nno\n6x\n");
 }
 
-/// Verifies closures capture a possibly undefined local with PHP's semantics (review P2c r3,
-/// R3-1/R3-2): `use (&$r)` creates it as null, `use ($r)` captures null (after a warning), and an
+/// Verifies closures capture a possibly undefined local with PHP's semantics:
+/// `use (&$r)` creates it as null, `use ($r)` captures null (after a warning), and an
 /// arrow function keeps it undefined in its body, defined-flag included.
 #[test]
 fn test_maybe_undefined_closure_captures() {
     let out = compile_and_run(
         r#"<?php
-        // Closures capture a possibly undefined local with PHP's semantics (review P2c r3).
+        // Closures capture a possibly undefined local with PHP's semantics.
         function h04($a) { if ($a) { $r = 5; } $c = function () use (&$r) { $r = 6; }; $c(); echo $r, "\n"; }
         h04(true); h04(false);
         function nw($a) { if ($a) { $r = 5; } $c = function () use (&$r) { }; $c(); var_dump($r, isset($r)); }
@@ -474,12 +474,12 @@ fn test_maybe_undefined_closure_captures() {
 }
 
 /// Verifies the defined-flag follows `unset` in loops, `try`/`catch`/`finally`, `switch`
-/// fallthrough and `match` arms (review P2c r3, R3-3).
+/// fallthrough and `match` arms.
 #[test]
 fn test_maybe_undefined_locals_across_unset_try_switch_match() {
     let out = compile_and_run(
         r#"<?php
-        // The defined-flag follows unset in loops, try/catch/finally, switch and match (review P2c r3).
+        // The defined-flag follows unset in loops, try/catch/finally, switch and match.
         function v2() { foreach ([1, 2, 3] as $x) { if ($x == 2) { unset($z); } echo $z ?? "u", " "; $z = $x; } echo "\n"; }
         v2();
         function v3() { foreach ([1, 2, 3] as $x) { echo isset($z) ? "Y" : "N"; $z = "s$x"; if ($x == 1) { unset($z); } } echo "\n"; }
@@ -514,7 +514,7 @@ fn test_maybe_undefined_locals_across_unset_try_switch_match() {
 
 /// Verifies `empty()`/`isset()` on a possibly undefined `ArrayAccess` local keep the
 /// `offsetExists`-first route (the flagged read is boxed `mixed`) and answer like an undefined
-/// container when the local was never assigned (review P2c r3, R3-3 follow-up).
+/// container when the local was never assigned.
 #[test]
 fn test_maybe_undefined_array_access_receiver_probes() {
     let out = compile_and_run(

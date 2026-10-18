@@ -1462,10 +1462,10 @@ impl Checker {
             .unwrap_or_default();
         // A written `[]` stays boxed: its precise indexed layout is filled by later calls, and a
         // concretely typed static indexed array returned by value loses later pushes (measured
-        // on principal: `static $c = []; $c[] = 5; return $c;` prints garbage on the second
+        // before this change: `static $c = []; $c[] = 5; return $c;` prints garbage on the second
         // call), so boxing is the only representation that is not a silent miscompile.
         // Same for a written INDEXED literal (`static $c = [1, 2]; $c[0] = 5; return $c;` loses
-        // the write on principal too); an associative literal whose writes keep its type is safe.
+        // the write too); an associative literal whose writes keep its type is safe.
         let decided = if empty(&init_ty) || !matches!(init_ty.codegen_repr(), PhpType::AssocArray { .. }) {
             fallback
         } else if seen.iter().all(|ty| *ty == init_ty) {

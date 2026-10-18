@@ -86,7 +86,7 @@ impl Checker {
             // that declares it, throwing PHP's `Call to undefined method` Error for any other.
             // This is what keeps a parent|child join (`P0|P1` with `extra()` only on `P1`,
             // `crate::types::checker::lattice`) as permissive as the single class the old
-            // "first writer wins" rule happened to keep (P49 review H1-bis).
+            // "first writer wins" rule happened to keep.
             let object_classes = self.union_object_classes(&obj_ty);
             if object_classes.len() >= 2 {
                 let lenient = self.joined_object_unions.borrow().contains(&format!("{obj_ty:?}"));
@@ -936,9 +936,9 @@ impl Checker {
         // than an observation, so the first call site's element type is ADOPTED over it — once.
         // Re-adopting whenever the stored element was `mixed` turned the join into a
         // replacement: `C::days(1); C::hours(1.5); C::mins(2)` went int → mixed → int, the float
-        // was read as an int's bit pattern, and on Laravel `CarbonInterval::__callStatic`
+        // was read as an int's bit pattern, and Carbon's `CarbonInterval::__callStatic`
         // alternated `array<int>` / `array<float>` between the method pass and the top level
-        // for every outer round (E6-bis, `crate::types::checker::lattice`).
+        // for every outer round (`crate::types::checker::lattice`).
         let adopt_key = (
             format!("magic:{}::{}", impl_class_name, method_key),
             1usize,
@@ -1692,7 +1692,7 @@ fn method_variadic_tail_needs_iterable(
 /// `Illuminate\Http\Request::is(...$patterns)`: thousands of rounds). A `mixed` element holds any
 /// argument already, so it stays.
 ///
-/// Since P49 both the per-call fold and this widening are the lattice join of
+/// Both the per-call fold and this widening are the lattice join of
 /// `crate::types::checker::lattice` (scalar tags never absorb each other): `wider_type_syntactic`
 /// typed `cat('x', 1, 2.0)`'s collector `array<string>` and read the int and float through it.
 fn widen_method_variadic_element(existing: &PhpType, incoming: &PhpType) -> PhpType {

@@ -1,6 +1,6 @@
 //! Purpose:
-//! End-to-end coverage for dynamic member and call forms found by the parse oracle (P21) on the
-//! Laravel frontier: runtime method names on named class receivers, first-class callables of
+//! End-to-end coverage for dynamic member and call forms that real-world vendor
+//! code uses: runtime method names on named class receivers, first-class callables of
 //! arbitrary expressions, callable array literals, dynamic-property and mid-chain appends,
 //! foreach place targets and named arguments in dynamic method calls.
 //!
@@ -349,7 +349,7 @@ fn test_dynamic_receiver_keyword_member_and_trailing_dot_float() {
 }
 
 /// Verifies `$this->{$property}[] = v` on UNTYPED `[]`-default properties (Mailable.php:769,
-/// review r1 H3), including a slot only a subclass declares: a runtime-named write of a boxed
+/// including a slot only a subclass declares: a runtime-named write of a boxed
 /// value boxes every untyped slot the name could reach.
 #[test]
 fn test_dynamic_property_append_on_untyped_properties() {
@@ -369,7 +369,7 @@ fn test_dynamic_property_append_on_untyped_properties() {
     assert_eq!(out, "[[\"a\",\"c\"],[{\"address\":\"b\"}],\"x\"]\ny2\n[1,2]\n");
 }
 
-/// Verifies a mid-chain append into an object place (review r1 H1) throws an explicit elephc
+/// Verifies a mid-chain append into an object place throws an explicit elephc
 /// `Error` instead of calling `offsetSet(null, [...])`, which PHP never does there.
 #[test]
 fn test_mid_chain_append_into_object_throws_explicit_error() {
@@ -394,8 +394,8 @@ fn test_mid_chain_append_into_object_throws_explicit_error() {
     );
 }
 
-/// Verifies `static::{$n}()` inside an instance method reaches instance methods through `$this`
-/// (review r1 H2), and still refuses them from a static context.
+/// Verifies `static::{$n}()` inside an instance method reaches instance methods through `$this`,
+/// and still refuses them from a static context.
 #[test]
 fn test_static_computed_name_reaches_instance_methods() {
     let out = compile_and_run(
@@ -419,7 +419,7 @@ fn test_static_computed_name_reaches_instance_methods() {
 }
 
 /// Verifies PHP's `ArgumentCountError` text when a named-argument container leaves a required
-/// parameter unbound (review r1 H4): the callee name comes from the descriptor.
+/// parameter unbound: the callee name comes from the descriptor.
 #[test]
 fn test_named_argument_container_missing_argument_message() {
     let out = compile_and_run(
@@ -442,8 +442,8 @@ fn test_named_argument_container_missing_argument_message() {
     );
 }
 
-/// Verifies a callable array held in an untyped property is called and converted at run time
-/// (review r1 H5), and `$obj[] = v` reaches a user override of ArrayObject::offsetSet.
+/// Verifies a callable array held in an untyped property is called and converted at run time,
+/// and `$obj[] = v` reaches a user override of ArrayObject::offsetSet.
 #[test]
 fn test_property_callable_array_and_array_object_override_push() {
     let out = compile_and_run(
@@ -464,7 +464,7 @@ fn test_property_callable_array_and_array_object_override_push() {
 }
 
 /// Verifies a runtime-named push in a class whose other methods write its properties directly
-/// (Mailable's `tag()`, `metadata()`, `with()` next to `setAddress()`, review r2 R1): no slot is
+/// (Mailable's `tag()`, `metadata()`, `with()` next to `setAddress()`): no slot is
 /// degraded, so the direct pushes and keyed writes still compile and behave like PHP.
 #[test]
 fn test_dynamic_property_push_next_to_direct_property_writes() {
@@ -491,8 +491,8 @@ fn test_dynamic_property_push_next_to_direct_property_writes() {
     assert_eq!(out, "[[{\"address\":\"x\"}],[\"t1\"],{\"k\":\"v\"},{\"w\":1},1]\n1\n");
 }
 
-/// Verifies `$this->{$p}[] = v` on string, int, object, readonly, private and subclass-only slots
-/// (review r2 R2), and `$mixed[] = v` on scalars: PHP's Errors instead of a silent no-op.
+/// Verifies `$this->{$p}[] = v` on string, int, object, readonly, private and subclass-only slots,
+/// and `$mixed[] = v` on scalars: PHP's Errors instead of a silent no-op.
 #[test]
 fn test_dynamic_property_push_on_non_array_slots_throws_php_errors() {
     let out = compile_and_run(
@@ -514,7 +514,7 @@ fn test_dynamic_property_push_on_non_array_slots_throws_php_errors() {
     );
 }
 
-/// Verifies Mailable::setAddress's shape (review r2 R1): a runtime-named push followed by a
+/// Verifies Mailable::setAddress's shape: a runtime-named push followed by a
 /// runtime-named array write back into the same slot, next to direct writes of other slots. The
 /// array write is stored with the selected slot's static name, so the refined slots keep their
 /// representation.

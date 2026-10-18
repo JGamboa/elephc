@@ -211,7 +211,7 @@ pub(super) fn lower_closure_with_context(
                 PhpType::Mixed,
             )
         } else if !by_ref && capture_may_be_undefined(ctx, capture, expr) {
-            // A possibly undefined by-value capture (review P2c r3, R3-2): `use ($x)` warns and
+            // A possibly undefined by-value capture: `use ($x)` warns and
             // captures null, an arrow function captures silently and hands the defined-flag
             // to its body (appended below).
             let read = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
@@ -222,7 +222,7 @@ pub(super) fn lower_closure_with_context(
             }
             (captured, PhpType::Mixed)
         } else {
-            // `use (&$x)` creates an undefined `$x` as null (review P2c r3, R3-1).
+            // `use (&$x)` creates an undefined `$x` as null.
             let defines_null = by_ref && capture_may_be_undefined(ctx, capture, expr);
             if defines_null {
                 super::maybe_undefined_read::define_null_if_undefined(ctx, capture, expr.span);

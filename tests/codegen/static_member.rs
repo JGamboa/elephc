@@ -1,6 +1,6 @@
 //! Purpose:
-//! End-to-end coverage for static-member syntax and semantics found on the Laravel frontier
-//! (front P42a): increments on static elements, runtime-named static properties
+//! End-to-end coverage for static-member syntax and semantics:
+//! increments on static elements, runtime-named static properties
 //! (`self::${$p}`), `??=` with `require` on static places, magic constants in class and trait
 //! constants, and three static-property miscompiles (owner of a returned static property,
 //! null-defaulted array slots compared with null, string keys on untyped static arrays).
@@ -9,8 +9,7 @@
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
-//! - Each source mirrors a probe in `probes/static-member/` of the elephc-laravel workspace;
-//!   expected output was produced by PHP 8.5 from the same source.
+//! - Expected output was produced by PHP 8.5 from the same source.
 
 use crate::support::*;
 
@@ -143,7 +142,7 @@ dir["",""]
 #[test]
 fn test_dynamic_static_property_name_reads_writes_isset_coalesce_ref() {
     let out = compile_and_run(r#"<?php
-// self::${$p} / static::${...} (symfony DebugClassLoader): lectura, escritura, isset, ??=, ++ y referencia.
+// self::${$p} / static::${...} (symfony DebugClassLoader): read, write, isset, ??=, ++ and reference.
 class D {
     private static array $final = [];
     private static array $finalMethods = [];
@@ -156,7 +155,7 @@ class D {
         self::${$p}['B'] ??= 4;
         self::${$p}['A'] = self::${$p}['A'] ? self::${$p}['B'] + self::${$p}['A'] : 0;
         echo json_encode(self::$final), json_encode(self::$finalMethods), "\n";
-        $r = &self::${'fin' . 'al'}; // nombre plegable: candidatas mixtas no admiten ref dinámica
+        $r = &self::${'fin' . 'al'}; // foldable name: mixed candidates do not admit a dynamic reference
         $r['C'] = 5;
         ++self::${$p}['C'];
         self::${'case' . 'Check'} = 7;
@@ -235,7 +234,7 @@ Access to undeclared static property Child::$nope
 #[test]
 fn test_return_of_static_property_keeps_its_owner() {
     let out = compile_and_run(r#"<?php
-// `return self::$p;` con el resultado descartado no debe liberar el valor de la propiedad.
+// `return self::$p;` with a discarded result must not free the property's value.
 class L {
     public static ?array $n = ['a'];
     public static array $t = ['b'];
@@ -257,7 +256,7 @@ echo json_encode(L::$n), json_encode(L::$t), json_encode(L::$u), L::$s, "\n";
 #[test]
 fn test_null_defaulted_property_holding_array_compares_with_null() {
     let out = compile_and_run(r#"<?php
-// Prop sin tipo con default null que luego guarda un array: === null, isset, is_null y ??.
+// Untyped property with a null default that later holds an array: === null, isset, is_null and ??.
 class L {
     public static $n = null;
     public $p = null;
@@ -292,7 +291,7 @@ bool(true)
 #[test]
 fn test_untyped_static_array_with_string_keys() {
     let out = compile_and_run(r#"<?php
-// Array estático sin tipo escrito con clave string (Router/PhpFileLoader self::$cache[$path]).
+// Untyped static array written with a string key (Router/PhpFileLoader self::$cache[$path]).
 class L {
     public static $c = [];
     public static $d = [];
@@ -321,7 +320,7 @@ fn test_static_property_null_coalesce_assign_with_require() {
     let out = compile_and_run_files(
         &[
             ("main.php", r#"<?php
-// ??= con require sobre propiedades estáticas sin tipo (Carbon Language, symfony Router/PhpFileLoader).
+// ??= with require on untyped static properties (Carbon Language, symfony Router/PhpFileLoader).
 class L {
     protected static $names;
     private static $cache = [];
@@ -352,7 +351,7 @@ loaded Spanish English loaded English
 }
 
 /// Verifies `++self::$a[f('k')];` / `self::$a[f()]++;` in statement position evaluate the index
-/// once and write the static element (review P42a, `e5`).
+/// once and write the static element.
 #[test]
 fn test_statement_incdec_on_static_element_with_call_index() {
     let out = compile_and_run(r#"<?php
@@ -378,7 +377,7 @@ array(1) {
 }
 
 /// Verifies a protected static property reached from outside through `A::${$n}` reports
-/// `protected`, not `private` (review P42a, `o2`).
+/// `protected`, not `private`.
 #[test]
 fn test_dynamic_static_property_visibility_messages() {
     let out = compile_and_run(r#"<?php
@@ -429,7 +428,7 @@ string(1) "W"
 
 /// Verifies a whole-value write through a runtime name runs on an untyped scalar candidate and
 /// throws the explicit elephc `Error` (never a silent skip, never an internal temp name) for a
-/// candidate whose type the arm cannot take (review P42a, `w1`).
+/// candidate whose type the arm cannot take.
 #[test]
 fn test_dynamic_static_property_whole_write_explicit_limit() {
     let out = compile_and_run(r#"<?php
@@ -453,7 +452,7 @@ P::run("u"); try { P::run("i"); } catch (\Error $e) { echo str_starts_with($e->g
 /// bound inside an `if`/`elseif` branch is not visible after the branch (`ref10`). Ignored
 /// until conditional static-property references are lowered.
 #[test]
-#[ignore = "pre-existing: reference to a static property bound inside a conditional branch (review P42a ref10)"]
+#[ignore = "pre-existing: reference to a static property bound inside a conditional branch"]
 fn test_conditional_reference_to_static_property_two_branches() {
     let out = compile_and_run(r#"<?php
 class P {
@@ -472,7 +471,7 @@ string(1) "W"
 
 /// Same limit with a single guarded branch (`ref11`).
 #[test]
-#[ignore = "pre-existing: reference to a static property bound inside a conditional branch (review P42a ref11)"]
+#[ignore = "pre-existing: reference to a static property bound inside a conditional branch"]
 fn test_conditional_reference_to_static_property_one_branch() {
     let out = compile_and_run(r#"<?php
 class P {
@@ -486,7 +485,7 @@ string(1) "W"
 "#);
 }
 
-/// Verifies `self::${$n}[] = v` on a single untyped property with an array default (review P42a r1, `x10`).
+/// Verifies `self::${$n}[] = v` on a single untyped property with an array default.
 #[test]
 fn test_dynamic_static_append_on_untyped_array_default() {
     let out = compile_and_run(r#"<?php
@@ -500,7 +499,7 @@ P::run('a');
 "#);
 }
 
-/// Verifies `self::${$n}[] = v` selecting a declared `array` property among mixed-type candidates (review P42a r1, `x1`).
+/// Verifies `self::${$n}[] = v` selecting a declared `array` property among mixed-type candidates.
 #[test]
 fn test_dynamic_static_append_on_typed_array_property() {
     let out = compile_and_run(r#"<?php
@@ -521,7 +520,7 @@ P::run('t');
 "#);
 }
 
-/// Verifies element writes and appends through `self::${$n}` on untyped and typed array properties (review P42a, `w5`).
+/// Verifies element writes and appends through `self::${$n}` on untyped and typed array properties.
 #[test]
 fn test_dynamic_static_element_writes_and_appends() {
     let out = compile_and_run(r#"<?php

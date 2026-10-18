@@ -144,8 +144,8 @@ pub(crate) struct Checker {
     /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
     ///
     /// `widen_override_untyped_method_params` runs on EVERY instance-method call and used to walk
-    /// the whole class table each time (calls × classes): on Laravel that was most of the
-    /// checker's time.
+    /// the whole class table each time (calls × classes): on a large codebase that was most
+    /// of the checker's time.
     pub class_children_index: Option<(usize, HashMap<String, Vec<String>>)>,
     /// The classes whose method table dispatches each `(implementing class, method key,
     /// is_static)` to that implementation, plus the `classes.len()` it was built for.
@@ -470,7 +470,7 @@ pub(crate) struct Checker {
     pub loop_storage_types: crate::types::LoopStorageTypes,
     /// The loop spans `loop_storage_types` holds for each scope, so a re-walk clears its scope
     /// in time proportional to that scope's loops. Clearing used to `retain` over the whole map
-    /// once per method, function and closure body, which on Laravel was quadratic.
+    /// once per method, function and closure body, which on a large codebase was quadratic.
     pub loop_storage_scope_spans: HashMap<String, Vec<crate::span::Span>>,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
     ///
@@ -1345,7 +1345,7 @@ fn check_types_on_compiler_stack(
     // parameter only while every call site passed that callable. Once the joined parameter type
     // is no longer `callable` (`value(fn () => 5); value('x')` makes it `mixed`), the one
     // recorded signature is just the last closure seen, and lowering must not type the body's
-    // invocation (or preserve the parameter's ABI) through it (P47).
+    // invocation (or preserve the parameter's ABI) through it.
     let mut callable_param_sigs = checker.callable_param_sigs;
     callable_param_sigs.retain(|(owner, param), _| {
         let Some(sig) = checker.functions.get(owner) else {

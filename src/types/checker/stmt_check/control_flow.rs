@@ -48,7 +48,7 @@ fn stabilize_loop_storage(
     packed_counter: Option<&str>,
 ) {
     stabilize_loop_storage_contracts(checker, loop_span, body, update, condition, env, packed_counter);
-    // A local the body unsets may be undefined when an iteration starts (review P2c r3, R3-3),
+    // A local the body unsets may be undefined when an iteration starts,
     // whether or not the walk has bound it yet (a later iteration reads what an earlier one
     // stored).
     for name in crate::types::checker::condition_edges::unset_locals_in(body) {

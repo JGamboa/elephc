@@ -9,7 +9,7 @@
 //! Key details:
 //! - Every fixture dispatches through the parent or interface type, so an ABI mismatch between
 //!   the parent contract and the override shows up as wrong output instead of passing silently.
-//! - Fixtures mirror `probes/lsp/` in the elephc-laravel workspace; expected output is PHP 8.5's.
+//! - Expected output is PHP 8.5's.
 
 use super::*;
 
@@ -161,7 +161,7 @@ var_dump(MyDate::createFromFormat("Y-m-d", ""));
     assert_eq!(out, "MyDate 2020-01-02\nNULL\n");
 }
 
-/// Review p10: a renamed variadic with the same element type, called positionally, by name and with spreads.
+/// A renamed variadic with the same element type, called positionally, by name and with spreads.
 #[test]
 fn test_override_renamed_variadic_with_named_and_spread_args() {
     let out = compile_and_run(
@@ -182,7 +182,7 @@ echo viaBaseSpread(new Child()), "\n";
     assert_eq!(out, "B1:[[1],[2]] C1:[[1],[2]]\nC2:{\"lists\":[3]}\nC3:[]\nC4:{\"arrays\":[5]}\nC5:[[6],[7]]\n");
 }
 
-/// Review ronda 3 (d4): `= self::X` on parent and override naming the same parent constant is the same default (the `Application::handle(..., $type = self::MAIN_REQUEST)` shape).
+/// `= self::X` on parent and override naming the same parent constant is the same default (the `Application::handle(..., $type = self::MAIN_REQUEST)` shape).
 #[test]
 fn test_override_keeps_inherited_self_constant_default() {
     let out = compile_and_run(
@@ -197,7 +197,7 @@ echo (new C)->f(), "\n";
     assert_eq!(out, "cp\ncp\n");
 }
 
-/// Review ronda 3 (d7): `= self::MAIN` resolving to the interface constant from both sides.
+/// `= self::MAIN` resolving to the interface constant from both sides.
 #[test]
 fn test_interface_impl_keeps_interface_self_constant_default() {
     let out = compile_and_run(
@@ -211,7 +211,7 @@ via(new App()); echo (new App)->handle(), "\n";
     assert_eq!(out, "1\n1\n");
 }
 
-/// Review ronda 3 (c11): union covariance that keeps the boxed representation still dispatches through the parent.
+/// Union covariance that keeps the boxed representation still dispatches through the parent.
 #[test]
 fn test_override_union_return_keeping_boxed_representation() {
     let out = compile_and_run(
@@ -226,7 +226,7 @@ via(new Node()); via(new Twig()); via(new Leaf());
     assert_eq!(out, "string(1) \"s\"\nstring(1) \"T\"\nstring(1) \"q\"\n");
 }
 
-/// Review ronda 4 (x01): parent `self::X` and override `Other::X` resolve to the same value.
+/// Parent `self::X` and override `Other::X` resolve to the same value.
 #[test]
 fn test_override_default_named_constant_matches_parent_self_constant() {
     let out = compile_and_run(
@@ -241,7 +241,7 @@ via(new P()); via(new C()); echo (new C)->f(), "\n";
     assert_eq!(out, "p1\nc1\nc1\n");
 }
 
-/// Review ronda 4 (x09): parent `parent::X` and override `self::X` both name the grandparent constant.
+/// Parent `parent::X` and override `self::X` both name the grandparent constant.
 #[test]
 fn test_override_default_parent_constant_from_grandparent() {
     let out = compile_and_run(
@@ -256,7 +256,7 @@ via(new P()); via(new C()); echo (new C)->f(), "\n";
     assert_eq!(out, "pg\ncg\ncg\n");
 }
 
-/// Review ronda 4 (x14): `self::X` defined as `self::A * 3` resolves and folds on both sides.
+/// `self::X` defined as `self::A * 3` resolves and folds on both sides.
 #[test]
 fn test_override_default_constant_expression_folds() {
     let out = compile_and_run(
@@ -270,7 +270,7 @@ via(new P()); via(new C()); echo (new C)->f(), "\n";
     assert_eq!(out, "p6\nc6\nc6\n");
 }
 
-/// Review ronda 4 (x15): `X = self::A` is written in the parent, so a child redefining `A` keeps the same default.
+/// `X = self::A` is written in the parent, so a child redefining `A` keeps the same default.
 #[test]
 fn test_override_default_constant_chain_with_redefined_operand() {
     let out = compile_and_run(
@@ -284,7 +284,7 @@ via(new P()); via(new C()); echo (new C)->f(), "\n";
     assert_eq!(out, "p2\nc2\nc2\n");
 }
 
-/// Review ronda 4 (x26): the Laravel kernel shape one level down (`MyApp extends App implements HK`, `handle($type = self::MAIN)`).
+/// The Laravel kernel shape one level down (`MyApp extends App implements HK`, `handle($type = self::MAIN)`).
 #[test]
 fn test_grandchild_override_default_interface_constant() {
     let out = compile_and_run(
@@ -300,7 +300,7 @@ via(new App()); via(new MyApp()); viaA(new MyApp()); echo (new MyApp)->handle(),
     assert_eq!(out, "a1\nm1\nm1\nm1\n");
 }
 
-/// Ronda 5 (P4 family ABI): an untyped override of `int $x` is boxed by the family and dispatches through the parent.
+/// An untyped override of `int $x` is boxed by the family and dispatches through the parent.
 #[test]
 fn test_family_override_untyped_param_of_declared_int() {
     let out = compile_and_run(
@@ -314,7 +314,7 @@ echo viaBase(new Base()), viaBase(new Child()), "\n";
     assert_eq!(out, "B7C7\n");
 }
 
-/// Ronda 5: `Foo $x` widened to `?Foo $x` is boxed by the family.
+/// `Foo $x` widened to `?Foo $x` is boxed by the family.
 #[test]
 fn test_family_override_nullable_object_param() {
     let out = compile_and_run(
@@ -329,7 +329,7 @@ echo viaBase(new Base()), viaBase(new Child()), (new Child())->f(null), "\n";
     assert_eq!(out, "BfooCfooCnull\n");
 }
 
-/// Ronda 5 (c07): `int|null` and `int|Twig` under `Node|int|null` are boxed into the family return.
+/// `int|null` and `int|Twig` under `Node|int|null` are boxed into the family return.
 #[test]
 fn test_family_override_union_return_narrowed_to_tagged_scalar() {
     let out = compile_and_run(
@@ -344,7 +344,7 @@ via(new Node()); via(new Leaf()); via(new Twig());
     assert_eq!(out, "int(4)\nint(9)\nint(5)\n");
 }
 
-/// Ronda 5 (c10): `false` under `Node|false` keeps `bool(false)` through the family return.
+/// `false` under `Node|false` keeps `bool(false)` through the family return.
 #[test]
 fn test_family_override_union_return_narrowed_to_false() {
     let out = compile_and_run(
@@ -359,7 +359,7 @@ via(new Node()); via(new Twig()); via(new Leaf());
     assert_eq!(out, "bool(false)\nstring(1) \"T\"\nbool(false)\n");
 }
 
-/// Ronda 5 (x20): `?N` narrowed to `N` inside an override family; the object returned through
+/// `?N` narrowed to `N` inside an override family; the object returned through
 /// the parent must be boxed by the family return so `$r->n` reads the property.
 #[test]
 fn test_family_override_object_return_narrowed_from_nullable() {
@@ -375,7 +375,7 @@ via(new P()); via(new C());
     assert_eq!(out, "NULL\nstring(1) \"N\"\n");
 }
 
-/// Ronda 6 (H3, review c13/c16): `static|false` narrowed to `static`; the call through the
+/// `static|false` narrowed to `static`; the call through the
 /// subclass resolves `static` to the receiver, so a property only the subclass declares reads.
 #[test]
 fn test_family_static_return_narrowed_reads_subclass_property() {
@@ -394,7 +394,7 @@ via(new M()); via(new C()); via(new D());
     assert_eq!(out, "X\nX\nYX\nfalse\nC\nD\n");
 }
 
-/// Ronda 6 (H3, review c09): `?static` -> `static|null` -> `static` over three levels keeps each
+/// `?static` -> `static|null` -> `static` over three levels keeps each
 /// receiver's own class, so the leaf's own property reads.
 #[test]
 fn test_family_nullable_static_three_levels_reads_leaf_property() {
@@ -413,8 +413,8 @@ echo viaB(new B()), viaB(new C()), "\n";
     assert_eq!(out, "null\nBB\nCC\nonlyonlyb\nBC\n");
 }
 
-/// Ronda 6 (H4, review a22): a private ancestor method is not part of the family; P4 roots the
-/// family at the first public declaration, so the untyped override is boxed and dispatches.
+/// A private ancestor method is not part of the family; the family is rooted
+/// at the first public declaration, so the untyped override is boxed and dispatches.
 #[test]
 fn test_family_rooted_below_private_ancestor() {
     let out = compile_and_run(
@@ -429,7 +429,7 @@ echo via(new B()), via(new C()), "\n";
     assert_eq!(out, "BintegerCinteger\n");
 }
 
-/// Ronda 6 (H2, review a21): a subclass implements an interface declaring a raw `int` return,
+/// A subclass implements an interface declaring a raw `int` return,
 /// but its family returns the boxed `int|string`; the interface call would read the box as an
 /// int, so it is refused at compile time.
 #[test]
@@ -447,7 +447,7 @@ echo viaI(new C()), " ", viaI(new D()), "\n";
     );
 }
 
-/// Ronda 6 (H2, review a13/a18): the same conflict with an object return narrowed from `?N`.
+/// The same conflict with an object return narrowed from `?N`.
 #[test]
 #[should_panic(expected = "cannot share one virtual call ABI: class C implements interface I whose g() returns N")]
 fn test_family_boxed_return_conflicts_with_interface_object_return() {
@@ -465,7 +465,7 @@ echo viaI(new C()), viaA(new C()), viaA(new D()), "\n";
     );
 }
 
-/// Ronda 6 (H2 non-regression, review a12): an interface whose return matches the family's
+/// Non-regression: an interface whose return matches the family's
 /// boxed return keeps dispatching.
 #[test]
 fn test_family_boxed_return_matching_interface_return() {

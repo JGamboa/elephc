@@ -336,8 +336,8 @@ fn preg_match_all_review_rejects_global_and_static_destinations() {
     }
 }
 
-/// A boxed `static` local destination works on a hidden local copy stored back into the static
-/// (front P52), and the matches persist across calls.
+/// A boxed `static` local destination works on a hidden local copy stored back into the static,
+/// and the matches persist across calls.
 #[test]
 fn preg_match_all_review_static_local_destination_is_written_back() {
     let out = compile_and_run_with_regex(r#"<?php

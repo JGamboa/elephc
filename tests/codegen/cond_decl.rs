@@ -1,14 +1,13 @@
 //! Purpose:
-//! End-to-end coverage for conditional declarations found on the Laravel frontier (front P45):
-//! the `if (! function_exists('f')) { function f() {} }` polyfill idiom of every Laravel
-//! `helpers.php`, `use` imports inside `yield`, and the `UnitEnum`/`BackedEnum` interfaces.
+//! End-to-end coverage for conditional declarations: the
+//! `if (! function_exists('f')) { function f() {} }` polyfill idiom (as in framework
+//! `helpers.php` files), `use` imports inside `yield`, and the `UnitEnum`/`BackedEnum` interfaces.
 //!
 //! Called from:
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
-//! - Each source mirrors a probe in `probes/cond-decl/` of the elephc-laravel workspace;
-//!   expected output was produced by PHP 8.5 from the same source.
+//! - Expected output was produced by PHP 8.5 from the same source.
 
 use crate::support::*;
 
@@ -117,8 +116,8 @@ fn test_function_exists_guard_inside_loop_is_not_hoisted() {
 #[test]
 fn test_use_imports_resolve_inside_yield_and_composite_expressions() {
     let out = compile_and_run(r#"<?php
-// C2: los imports `use` no se aplicaban dentro de yield (doctrine/inflector), clone, new $c(...),
-// asignaciones en expresión ni $o->{$k} = ...
+// `use` imports were not applied inside yield (doctrine/inflector), clone, new $c(...),
+// assignment expressions or $o->{$k} = ...
 namespace A\R { class P { public function __construct(public $s) {} } }
 namespace A\R\E {
 use A\R\P;
@@ -159,7 +158,7 @@ assign-expr
 #[test]
 fn test_unit_and_backed_enum_interfaces_as_types() {
     let out = compile_and_run(r#"<?php
-// C3: UnitEnum/BackedEnum como tipo: instanceof, type hints, ->name/->value y cases/from/tryFrom vía interfaz.
+// UnitEnum/BackedEnum as types: instanceof, type hints, ->name/->value and cases/from/tryFrom through the interface.
 namespace League\Uri;
 use BackedEnum;
 use UnitEnum;

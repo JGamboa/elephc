@@ -126,5 +126,5 @@ mod locals_retype;
 mod variable_variables;
 mod stack_guard;
 mod zval;
-mod parser_stmt_frontier;
+mod parser_stmt_forms;
 mod parser_names;

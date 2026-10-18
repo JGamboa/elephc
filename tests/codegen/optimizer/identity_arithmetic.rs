@@ -71,7 +71,7 @@ fn test_identity_div_one_into_float_op_is_exact() {
     assert_eq!(out, "1.5");
 }
 
-/// Review P33a r1: an identity on a `null`/`bool` operand still yields PHP's integer, so the
+/// An identity on a `null`/`bool` operand still yields PHP's integer, so the
 /// fold must not hand back the operand itself (`+true` printed `bool(true)`).
 #[test]
 fn test_identity_on_null_or_bool_operand_yields_int() {

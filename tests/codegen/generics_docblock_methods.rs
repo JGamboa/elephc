@@ -644,7 +644,7 @@ fn test_one_line_block_reads_its_opening_tag() {
         error.contains("does not determine type parameter <T>"),
         "{function_case}: {error}"
     );
-    // laravel/main (fix/generics-2, `docblock/members.rs`): a METHOD template that no parameter
+    // `docblock/members.rs`: a METHOD template that no parameter
     // or return position adopts binds nothing at a call, so it is dropped and the method compiles
     // untyped, as php-src runs it, instead of failing as an undetermined call.
     let method_cases = [

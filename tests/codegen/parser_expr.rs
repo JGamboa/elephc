@@ -1,7 +1,7 @@
 //! Purpose:
-//! End-to-end coverage for expression-level parser and lowering fixes found on the Laravel
-//! frontier: subscripts over `mixed` call results, `$obj::staticMethod()`, and the PHP 8.x
-//! expression forms listed in the lookahead inventory.
+//! End-to-end coverage for expression-level parser and lowering fixes for forms real-world
+//! vendor code uses: subscripts over `mixed` call results, `$obj::staticMethod()`, and the PHP 8.x
+//! expression forms.
 //!
 //! Called from:
 //! - The native codegen suite (`tests/codegen/mod.rs`).

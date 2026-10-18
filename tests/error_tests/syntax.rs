@@ -985,7 +985,7 @@ fn test_error_lone_keyword_is_not_a_name_segment() {
 }
 
 /// Verifies PHP's "'\static' is an invalid class name" for fully qualified `\self`, `\parent`,
-/// and `\static` outside a `::class` fetch (reviewer probes s01-s04, s09, s12).
+/// and `\static` outside a `::class` fetch.
 #[test]
 fn test_error_fully_qualified_special_class_names_are_invalid() {
     expect_error(

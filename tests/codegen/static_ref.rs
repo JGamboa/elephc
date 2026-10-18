@@ -1,5 +1,5 @@
 //! Purpose:
-//! End-to-end coverage for front P52: references between places of static properties
+//! End-to-end coverage for references between places of static properties
 //! (symfony DebugClassLoader `self::$darwinCache[$dir] = &self::$darwinCache[$k]`), `unset` of
 //! static-property elements, and untyped `static` locals that hold arrays, objects or mixed
 //! values (symfony LocaleFallbackProvider `static $p; $p ??= require F;`).
@@ -8,8 +8,7 @@
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
-//! - Each source mirrors a probe in `probes/static-ref/` of the elephc-laravel workspace;
-//!   expected output was produced by PHP 8.5 from the same source.
+//! - Expected output was produced by PHP 8.5 from the same source.
 //! - The initializer of a `static` local runs once: several tests count its side effects.
 
 use crate::support::*;
@@ -147,7 +146,7 @@ bool(false)
 }
 
 /// Verifies an untyped `static` local with no initializer persists an associative array and
-/// runs its `??=` value once (P42a gap D), plus a string-keyed cache over `static $c = []`.
+/// runs its `??=` value once, plus a string-keyed cache over `static $c = []`.
 #[test]
 fn test_untyped_static_local_assoc_array_initializer_runs_once() {
     let out = compile_and_run(r#"<?php
@@ -278,7 +277,7 @@ echo f('a'), f('b'), f('a'), "\n";
     );
 }
 
-/// Verifies the review P42a static-local array probes `s1`/`s3`: a keyed write accumulates across
+/// Verifies the static-local array cases: a keyed write accumulates across
 /// calls for string and int keys, and `count` sees every key stored by earlier calls.
 #[test]
 fn test_static_local_keyed_array_accumulates_review_s1_s3() {
@@ -295,7 +294,7 @@ echo locs('a'), locs('a'), locs('b'), "\n";
     assert_eq!(out, "{\"a\":2,\"1\":1}\n122\n121\n121\n");
 }
 
-/// Verifies the review P42a probe `s2`: an int key written into a static local initialized with a
+/// Verifies the static-local case: an int key written into a static local initialized with a
 /// string-keyed array keeps both keys (it corrupted the hash to `{"\u0000":0}`).
 #[test]
 fn test_static_local_string_keyed_initializer_takes_int_key_review_s2() {
@@ -307,7 +306,7 @@ echo "after\n";
     assert_eq!(out, "{\"x\":0,\"y\":1}{\"x\":0,\"y\":1,\"3\":1}\nafter\n");
 }
 
-/// Verifies `array_push` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `array_push` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_array_push() {
@@ -317,7 +316,7 @@ function f($x) { static $c = []; $n = array_push($c, $x, $x); return $n . json_e
     assert_eq!(out, "2[\"a\",\"a\"]4[\"a\",\"a\",\"b\",\"b\"]");
 }
 
-/// Verifies `array_unshift` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `array_unshift` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_array_unshift() {
@@ -327,7 +326,7 @@ function f($x) { static $c = []; array_unshift($c, $x); return json_encode($c); 
     assert_eq!(out, "[1][2,1][3,2,1]");
 }
 
-/// Verifies `sort` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `sort` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_sort() {
@@ -337,7 +336,7 @@ function f($x) { static $c = []; $c[] = $x; sort($c); return json_encode($c); } 
     assert_eq!(out, "[3][1,3][1,2,3]");
 }
 
-/// Verifies `ksort` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `ksort` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_ksort() {
@@ -347,7 +346,7 @@ function f($x) { static $c = []; $c[$x] = strlen($x); ksort($c); return json_enc
     assert_eq!(out, "{\"b\":1}{\"a\":1,\"b\":1}{\"a\":1,\"b\":1,\"cc\":2}");
 }
 
-/// Verifies `usort` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `usort` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_usort() {
@@ -357,7 +356,7 @@ function f($x) { static $c = []; $c[] = $x; usort($c, fn($a, $b) => $b <=> $a); 
     assert_eq!(out, "[1][3,1][3,2,1]");
 }
 
-/// Verifies `array_splice` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `array_splice` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_array_splice() {
@@ -367,7 +366,7 @@ function f($x) { static $c = []; $c[] = $x; array_splice($c, 0, count($c) > 2 ? 
     assert_eq!(out, "[1][1,2][2,3]");
 }
 
-/// Verifies `end`/`reset` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `end`/`reset` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_end_reset() {
@@ -377,7 +376,7 @@ function f($x) { static $c = []; $c[] = $x; return end($c) . reset($c); } echo f
     assert_eq!(out, "112131");
 }
 
-/// Verifies `array_shift` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `array_shift` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_array_shift() {
@@ -387,7 +386,7 @@ function f($k) { static $c = []; $c[$k] = 1; if (count($c) > 2) { array_shift($c
     assert_eq!(out, "{\"a\":1}{\"a\":1,\"b\":1}{\"b\":1,\"c\":1}");
 }
 
-/// Verifies `array_pop` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `array_pop` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_array_pop() {
@@ -397,7 +396,7 @@ function f($x) { static $c = []; $c[] = $x; $c[] = $x * 10; return array_pop($c)
     assert_eq!(out, "10/[1]20/[1,2]30/[1,2,3]");
 }
 
-/// Verifies `sort_non_empty_initializer` on a boxed `static` local matches php (front P52 round 0b: the
+/// Verifies `sort_non_empty_initializer` on a boxed `static` local matches php (the
 /// builtin works on a hidden copy that is stored back into the static).
 #[test]
 fn test_boxed_static_local_by_ref_builtin_sort_non_empty_initializer() {
@@ -407,7 +406,7 @@ function f($x) { static $c = [3]; $c[] = $x; sort($c); return json_encode($c); }
     assert_eq!(out, "[1,3][1,2,3]");
 }
 
-/// Verifies `preg_match(..., $m)` with a boxed `static` local `$m` matches php (front P52 round 0b).
+/// Verifies `preg_match(..., $m)` with a boxed `static` local `$m` matches php.
 #[test]
 fn test_boxed_static_local_by_ref_builtin_preg_match() {
     let out = compile_and_run_with_regex(r#"<?php
@@ -454,8 +453,8 @@ echo f("a"), f("b"), f("c"), "\n";
     );
 }
 
-/// Verifies a never-written static local with a literal array initializer keeps its element types
-/// (review P52 H1): a nested array element is still an `array` for `: array`, an `array`
+/// Verifies a never-written static local with a literal array initializer keeps its element types:
+/// a nested array element is still an `array` for `: array`, an `array`
 /// parameter, `array_map`, `array_merge`, `max` and `sort` on a copy.
 #[test]
 fn test_read_only_static_local_literal_keeps_element_types() {
@@ -470,7 +469,7 @@ echo json_encode(f()), h(), m(), "\n";
 }
 
 /// Verifies `static::$p[..] = &...` and `unset(static::$p[..])` from the parent reach the late
-/// static binding's own untyped redeclaration (review P52 H2; it crashed).
+/// static binding's own untyped redeclaration (it crashed).
 #[test]
 fn test_late_static_element_reference_and_unset_on_redeclared_property() {
     let out = compile_and_run(r#"<?php
@@ -489,7 +488,7 @@ Q::un(); echo count(P::$a), count(Q::$a), "\n";
 }
 
 /// Verifies `unset(C::$p[$a][$b])` with `$a` absent is a silent no-op that creates no key, and
-/// that a scalar intermediate throws php's `Error` (review P52).
+/// that a scalar intermediate throws php's `Error`.
 #[test]
 fn test_nested_static_unset_with_missing_intermediate_is_noop() {
     let out = compile_and_run(r#"<?php
@@ -504,8 +503,8 @@ try { unset(C::$a["a"]["c"]["deep"]); } catch (\Error $e) { echo get_class($e), 
     assert_eq!(out, "{\"a\":{\"c\":2}}\nError: Cannot unset offset in a non-array variable\n");
 }
 
-/// Verifies an associative static literal whose writes keep its type stays precisely typed
-/// (review P52 r1 `h03`/`h04`): a nested element is still an `array` for an `array` parameter
+/// Verifies an associative static literal whose writes keep its type stays precisely typed:
+/// a nested element is still an `array` for an `array` parameter
 /// and `sort` on a copy.
 #[test]
 fn test_type_preserving_writes_keep_assoc_static_precise() {
@@ -518,9 +517,9 @@ echo f(), f(), h(), h(), "\n";
     assert_eq!(out, "234,524,52\n");
 }
 
-/// Verifies an increment through a nested element of a static array works (review P52 `r14`),
-/// and that written indexed statics returned by value keep every call's writes (principal lost
-/// them silently).
+/// Verifies an increment through a nested element of a static array works,
+/// and that written indexed statics returned by value keep every call's writes (they used to
+/// be lost silently).
 #[test]
 fn test_written_static_arrays_nested_incdec_and_returned_by_value() {
     let out = compile_and_run(r#"<?php
@@ -537,7 +536,7 @@ q(); echo json_encode(q()), "\n";
 }
 
 /// Verifies a by-value `foreach` over a static local, a `global` and a static property iterates
-/// the array as it was when the loop started, even when the body appends to it (review P52 R2-1:
+/// the array as it was when the loop started, even when the body appends to it (before,
 /// the loop walked its own appends, and an associative variant exhausted the heap).
 #[test]
 fn test_foreach_by_value_over_static_global_and_static_property_iterates_snapshot() {

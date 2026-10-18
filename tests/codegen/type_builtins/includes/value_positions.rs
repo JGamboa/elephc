@@ -172,7 +172,7 @@ echo K::$s, '|', K::$a[0];",
     assert_eq!(out, "xS|SS");
 }
 
-/// Review round 1: operands PHP has already evaluated when an include of the same statement
+/// Operands PHP has already evaluated when an include of the same statement
 /// runs keep the value they had then, even when the included file writes them: an array
 /// element (`INIT_ARRAY`), a static property (`FETCH_STATIC_PROP_R`), a dimension read, a
 /// method receiver and a dynamic callee are snapshotted in front of the include, while a
@@ -208,7 +208,7 @@ echo $fn(require 'seto.php');",
     assert_eq!(out, "1,10|12|11|11|110|first->m(5)|fn1(5)");
 }
 
-/// Review round 1: an effectful operand before an include is materialized in order instead of
+/// An effectful operand before an include is materialized in order instead of
 /// being refused: `f(g(), require F, h())` runs `g`, the file, then `h`.
 #[test]
 fn test_include_after_effectful_operand_keeps_order() {
@@ -227,7 +227,7 @@ f(g(), require 'ret5.php', h());",
     assert_eq!(out, "g [ret5] h f 1 5 3");
 }
 
-/// Review round 2: an array literal fetches a variable KEY when it adds the element, after the
+/// An array literal fetches a variable KEY when it adds the element, after the
 /// element's value, so a key the included value writes is the new one; a computed key runs
 /// before the value; an earlier element and a later include keep PHP's order too.
 #[test]

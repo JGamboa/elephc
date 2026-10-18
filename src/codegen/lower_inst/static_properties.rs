@@ -834,8 +834,8 @@ fn ensure_static_property_value_supported(
 /// An untyped null-defaulted slot that later held an array or an object rebinds to that pointer
 /// type (its null pointer already reads as PHP null), so `static::$instance = null` has to store
 /// the null pointer back, exactly as the instance-property path does. It was a backend error
-/// (`store_static_property assigning PHP type Void`), on a pattern Laravel uses for every
-/// singleton reset (P42a).
+/// (`store_static_property assigning PHP type Void`), on the common
+/// singleton-reset pattern.
 fn is_null_for_pointer_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(value_ty, PhpType::Void | PhpType::Never)
         && matches!(

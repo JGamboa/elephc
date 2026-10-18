@@ -270,7 +270,7 @@ impl Checker {
                 });
             if seen_idx < regular_param_count
                 && (!declared || generic_array_param)
-                // A `Callable` argument is an observation like any other (P47): skipping it
+                // A `Callable` argument is an observation like any other: skipping it
                 // left `function value($v)` called with a closure AND with a string typed as
                 // whichever non-callable arrived, and the closure (or the string) was then
                 // read through the wrong representation. It joins, so the mix is `mixed`.

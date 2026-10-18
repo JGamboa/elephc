@@ -7,8 +7,7 @@
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
-//! - Expected output was produced by PHP 8.5 from the same source (probes/chained-call in the
-//!   outer repository).
+//! - Expected output was produced by PHP 8.5 from the same source.
 //! - Every case used to compile and print something else: the untyped parameter of a method
 //!   reached only through a chain kept the type its first direct call taught it, so a boxed
 //!   argument was stored into a slot typed for something else.

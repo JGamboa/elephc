@@ -229,7 +229,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     }
     // The probe classifies the key from its LOWERED value: a string or runtime-tagged key on an
     // indexed container goes through the silent mixed-key read instead of `ArrayIsset`, which
-    // only takes an integer key (`$a[$k][] = $v` with a string `$k`, P48).
+    // only takes an integer key (`$a[$k][] = $v` with a string `$k`).
     let present = crate::ir_lower::expr::lower_native_isset_offset_probe_from_value(
         ctx,
         container,
@@ -379,7 +379,7 @@ fn vivify_stmt(group: &NestedAppendGroup<'_>, span: Span) -> Stmt {
 ///
 /// A statically indexed `Array(Mixed)` local may hold HASH storage at run time: a nested write
 /// with a gap key (`$a[5]['k'] = 1`) or a string-valued boxed key promotes it in place
-/// (`__rt_array_ensure_elem_for_write`, P48). The probe / vivify / `SlotDetach` sequence below
+/// (`__rt_array_ensure_elem_for_write`). The probe / vivify / `SlotDetach` sequence below
 /// assumes dense storage for an integer key, so after such a write it read slots out of a hash
 /// table — silently wrong groups (`$g[$id]['n'] = …; $g[9][] = 1`) or a SIGSEGV. The fetch-for-
 /// write parent dispatches on the runtime container kind, autovivifies a missing or null bucket,

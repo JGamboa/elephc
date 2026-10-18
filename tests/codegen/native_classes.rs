@@ -7,7 +7,7 @@
 //! - `cargo test --test codegen_tests native_classes` through Rust's test harness.
 //!
 //! Key details:
-//! - Expected outputs were generated with PHP 8.5 (`probes/natives/` in the outer repo).
+//! - Expected outputs were generated with PHP 8.5.
 //! - `WeakMap` holds its keys strongly; only programs that do not depend on collection are
 //!   exercised, which is the contract `natives_prelude` documents.
 

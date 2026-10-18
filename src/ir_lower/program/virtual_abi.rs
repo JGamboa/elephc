@@ -93,7 +93,7 @@ fn refuse_raw_interface_returns(
                 std::slice::from_ref(member),
                 method_key,
                 &format!(
-                    "class {} implements interface {} whose {}() returns {}, but its override family returns the boxed {} (not yet supported until P10)",
+                    "class {} implements interface {} whose {}() returns {}, but its override family returns the boxed {} (not yet supported)",
                     member.class_name,
                     interface_name,
                     method_key,

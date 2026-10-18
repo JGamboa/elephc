@@ -28,8 +28,8 @@
 //!   `X ⊑ X|Y ⊑ X|Y|Z ⊑ mixed`.
 //!   Neither the old "the last writer wins" rule (`propagate_constructor_arg_type`) nor "the
 //!   first writer wins" (`union_param_type`) is a join: both let the stored class depend on the
-//!   order the writers ran in, which is exactly what made Laravel's outer fixpoint alternate
-//!   `HttpResponseException::$response` between Symfony's and Illuminate's `Response` forever.
+//!   order the writers ran in, which is exactly what made the outer fixpoint alternate
+//!   Laravel's `HttpResponseException::$response` between Symfony's and Illuminate's `Response` forever.
 //! - Arrays join element-wise through `union_param_type`'s payload rule.
 //! - A writer may still ADOPT the first observation over a placeholder that is not an
 //!   observation (the `Int` placeholder of an untyped parameter, the `Array(Mixed)` of a
@@ -85,7 +85,7 @@ impl Checker {
         classes.sort();
         classes.dedup();
         // Related classes stay distinct members too: collapsing `P0|P1` to the ancestor `P0`
-        // lost the child's own methods (review H1-bis).
+        // lost the child's own methods.
         let kept = classes;
         if kept.len() > MAX_OBJECT_UNION_MEMBERS {
             return PhpType::Mixed;

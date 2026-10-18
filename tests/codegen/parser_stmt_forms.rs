@@ -1,13 +1,13 @@
 //! Purpose:
-//! End-to-end coverage for statement-level parser constructs found on the Laravel frontier:
+//! End-to-end coverage for statement-level parser constructs:
 //! attributes on global constants, destructuring in a `while` condition, statements that
 //! start with a literal, and `include`/`require` assigned to a static property.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests parser_stmt_frontier`.
+//! - `cargo test --test codegen_tests parser_stmt_forms`.
 //!
 //! Key details:
-//! - Each test mirrors a probe in the external `probes/parser-stmt/` family and its PHP output.
+//! - Each test asserts PHP 8.5's output for the same source.
 
 use crate::support::*;
 

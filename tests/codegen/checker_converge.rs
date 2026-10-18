@@ -1,22 +1,21 @@
 //! Purpose:
-//! End-to-end coverage for front P49: the checker's fixpoints widen by a lattice JOIN
-//! (`crate::types::checker::lattice`), so they converge on Laravel (E6-bis), and untyped
-//! parameters join every call-site type, closures included (P47).
+//! End-to-end coverage for the checker's fixpoints widening by a lattice JOIN
+//! (`crate::types::checker::lattice`), so they converge on large codebases, and untyped
+//! parameters join every call-site type, closures included.
 //!
 //! Called from:
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
-//! - Each source is a probe of `probes/checker-converge/` in the elephc-laravel workspace;
-//!   the expected output was produced by PHP 8.5 from the same source.
+//! - The expected output was produced by PHP 8.5 from the same source.
 
 use crate::support::*;
 
-/// `__callStatic`'s declared `array $parameters` seen with an int, a float and an int again joins to `array<mixed>` instead of re-adopting `array<int>` (E6-bis, Carbon).
+/// `__callStatic`'s declared `array $parameters` seen with an int, a float and an int again joins to `array<mixed>` instead of re-adopting `array<int>` (Carbon).
 #[test]
 fn test_checker_converge_magic_callstatic_int_float_widen() {
     let out = compile_and_run(r#"<?php
-// E6-bis repro: __callStatic's declared `array $parameters` seen with int and float.
+// Repro: __callStatic's declared `array $parameters` seen with int and float.
 class CI
 {
     public static function __callStatic(string $method, array $parameters)
@@ -32,11 +31,11 @@ echo CI::mins(2), " ", later(), "\n";
     assert_eq!(out, "days:1\nhours:1.5\nmins:2 secs:3\n");
 }
 
-/// An untyped property filled by constructor calls with a parent and a child class joins to the parent, and scalars of different tags join to mixed (E6-bis, HttpResponseException).
+/// An untyped property filled by constructor calls with a parent and a child class joins to the parent, and scalars of different tags join to mixed (HttpResponseException).
 #[test]
 fn test_checker_converge_ctor_untyped_property_joins_parent_and_child() {
     let out = compile_and_run(r#"<?php
-// E6-bis repro: an untyped property filled from constructor calls with parent and child.
+// Repro: an untyped property filled from constructor calls with parent and child.
 class R { public function name() { return "R"; } }
 class IR extends R { public function name() { return "IR"; } }
 class HRE
@@ -56,7 +55,7 @@ echo gettype((new A(1))->v), " ", gettype((new B("s"))->v), " ", gettype((new C(
     assert_eq!(out, "R IR\ninteger string double\n");
 }
 
-/// Laravel's `value()` called with closures and with scalars keeps every value (P47).
+/// Laravel's `value()` called with closures and with scalars keeps every value.
 #[test]
 fn test_untyped_param_value_helper_closure_and_scalars() {
     let out = compile_and_run(r#"<?php
@@ -74,7 +73,7 @@ var_dump(value(null));
     assert_eq!(out, "5 5 x\n5 1.5 t\nArrayObject 3\nNULL\n");
 }
 
-/// Laravel's `tap()` called with and without a callback: the untyped `$callback = null` is `callable|null` (P47).
+/// Laravel's `tap()` called with and without a callback: the untyped `$callback = null` is `callable|null`.
 #[test]
 fn test_untyped_param_tap_helper_callable_or_null() {
     let out = compile_and_run(r#"<?php
@@ -102,7 +101,7 @@ echo get_class(tap(7)), " ", tap(7)->target, "\n";
     assert_eq!(out, "saw 5\n5\nt\n2.5\nHigherOrderTapProxy 7\n");
 }
 
-/// Laravel's `with()` with and without a callback (P47).
+/// Laravel's `with()` with and without a callback.
 #[test]
 fn test_untyped_param_with_helper_nullable_callable() {
     let out = compile_and_run(r#"<?php
@@ -117,7 +116,7 @@ echo with(1.25), " ", count(with([1, 2])), " ", with(2.5, fn ($v) => $v * 2), "\
     assert_eq!(out, "5 s 6 A\n1.25 2 5\n");
 }
 
-/// A reduced `data_get()` over arrays, objects and closure defaults (P47).
+/// A reduced `data_get()` over arrays, objects and closure defaults.
 #[test]
 fn test_untyped_param_data_get_helper_mixed_targets() {
     let out = compile_and_run(r#"<?php
@@ -148,7 +147,7 @@ echo data_get($data, ['a', 'b']), " ", count(data_get($data, null)), "\n";
     assert_eq!(out, "5 str 1.5\nprop dflt lazy\n5 2\n");
 }
 
-/// Helpers that receive mixed and return it unchanged keep each value's tag (P47).
+/// Helpers that receive mixed and return it unchanged keep each value's tag.
 #[test]
 fn test_untyped_param_identity_helpers_keep_tags() {
     let out = compile_and_run(r#"<?php
@@ -163,7 +162,7 @@ var_dump(pass(true), id(null), pass([1])[0]);
     assert_eq!(out, "1a2.5 3b1.5\ndx4\nbool(true)\nNULL\nint(1)\n");
 }
 
-/// `(string)` over a `Stringable` (or user interface) parameter calls the runtime class's `__toString` (P47).
+/// `(string)` over a `Stringable` (or user interface) parameter calls the runtime class's `__toString`.
 #[test]
 fn test_stringable_cast_dispatches_runtime_tostring() {
     let out = compile_and_run(r#"<?php
@@ -193,8 +192,8 @@ echo Cat::cat(3), "\n";
 }
 
 /// Sibling classes joined in an untyped function, instance-method and static-method parameter
-/// form a union, so a method and a property only the children declare still type-check (P49
-/// review H1: the common ancestor `A` rejected `$x->m()`).
+/// form a union, so a method and a property only the children declare still type-check (the common
+/// ancestor `A` rejected `$x->m()`).
 #[test]
 fn test_checker_converge_sibling_classes_join_to_union_in_params() {
     let out = compile_and_run(r#"<?php
@@ -214,7 +213,7 @@ echo pass(new B()), pass(new C()), "\n";
     assert_eq!(out, "B::m/ob/a\nC::m/oc/a\nB::mC::mC::mB::m\nBC\n");
 }
 
-/// Sibling classes filling an untyped property from the constructor join to a union (H1).
+/// Sibling classes filling an untyped property from the constructor join to a union.
 #[test]
 fn test_checker_converge_sibling_classes_join_to_union_in_ctor_property() {
     let out = compile_and_run(r#"<?php
@@ -228,7 +227,7 @@ echo (new H(new B()))->run(), " ", (new H(new C()))->run(), "\n";
 }
 
 /// A method whose sixty untyped parameters each widen in a different pass is monotone, so the
-/// oscillation detector must let it converge (P49 review H2: counting changes per signature
+/// oscillation detector must let it converge (counting changes per signature
 /// raised an internal error at the 49th pass).
 #[test]
 fn test_checker_converge_many_params_widening_one_per_pass_is_not_an_oscillation() {
@@ -267,7 +266,7 @@ fn test_checker_converge_many_params_widening_one_per_pass_is_not_an_oscillation
     assert_eq!(out, expected);
 }
 
-/// A parent|child join (`e(new P1); e(mkp(): P0)`) keeps the child's own method callable (P49 review H1-bis).
+/// A parent|child join (`e(new P1); e(mkp(): P0)`) keeps the child's own method callable.
 #[test]
 fn test_checker_converge_parent_child_join_keeps_child_method() {
     let out = compile_and_run(r#"<?php
@@ -280,7 +279,7 @@ echo e(new P1()), e(mkp()), "\n";
     assert_eq!(out, "e1e1\n");
 }
 
-/// When the runtime object of a parent|child join is the parent, the child-only method throws PHP's catchable `Error` (H1-bis).
+/// When the runtime object of a parent|child join is the parent, the child-only method throws PHP's catchable `Error`.
 #[test]
 fn test_checker_converge_parent_child_join_throws_php_error_on_parent() {
     let out = compile_and_run(r#"<?php
@@ -293,7 +292,7 @@ echo e(new P1()), e(mkp()), "\n";
     assert_eq!(out, "e1err\n");
 }
 
-/// An untyped property filled with an interface and its sub-interface keeps the sub-interface method callable (H1-bis, `MessageInterface::getStatusCode`).
+/// An untyped property filled with an interface and its sub-interface keeps the sub-interface method callable (`MessageInterface::getStatusCode`).
 #[test]
 fn test_checker_converge_interface_parent_child_ctor_property_join() {
     let out = compile_and_run(r#"<?php
@@ -307,7 +306,7 @@ echo (new H(asMsg()))->s(), " ", (new H(new R()))->s(), "\n";
     assert_eq!(out, "200 200\n");
 }
 
-/// `match (true)` arms see their `instanceof` condition's narrowing, so an untyped function returning `$v->value` / `$v->name` over a joined enum union keeps a string return (tren 9, Laravel `enum_value()`).
+/// `match (true)` arms see their `instanceof` condition's narrowing, so an untyped function returning `$v->value` / `$v->name` over a joined enum union keeps a string return (Laravel `enum_value()`).
 #[test]
 fn test_checker_converge_match_true_instanceof_narrows_joined_union_arms() {
     let out = compile_and_run(r#"<?php

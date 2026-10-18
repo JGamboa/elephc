@@ -275,7 +275,7 @@ echo dsn(['host' => 'db', 'port' => 5432, 'config' => 'x']), ' ', dsn([]), ' ', 
 }
 
 /// extract(EXTR_SKIP) inside a closure keeps its `use` captures, by value and by reference,
-/// like Filesystem::getRequire (P43); EXTR_OVERWRITE writes through `use (&$y)`.
+/// like Filesystem::getRequire; EXTR_OVERWRITE writes through `use (&$y)`.
 #[test]
 fn test_extract_skip_keeps_closure_captures() {
     let out = compile_and_run(
@@ -307,7 +307,7 @@ echo json_encode([$x, $y]);
 }
 
 /// EXTR_SKIP keeps null parameters, ignores a `this` key and invalid names; EXTR_OVERWRITE
-/// writes the keys before `this` in array order and then throws (P43).
+/// writes the keys before `this` in array order and then throws.
 #[test]
 fn test_extract_skip_this_and_overwrite_order() {
     let out = compile_and_run(
@@ -329,7 +329,7 @@ f(null);
 }
 
 /// Default-mode extract() of a list keeps typed locals: the `this` check stores no loop value
-/// into them (P43 ronda 1, H1).
+/// into them.
 #[test]
 fn test_extract_overwrite_list_keeps_typed_locals() {
     let out = compile_and_run(
@@ -344,8 +344,7 @@ echo f(), g(), h([1, 2, 3]), i([1, 2, 3]);
     assert_eq!(out, "k2kkok3");
 }
 
-/// An unset() after extract() (of an extracted name or of another local) does not block it
-/// (P43 ronda 2).
+/// An unset() after extract() (of an extracted name or of another local) does not block it.
 #[test]
 fn test_extract_then_later_unset() {
     let out = compile_and_run(
@@ -358,7 +357,7 @@ echo f(['a' => 1, 'b' => 2]), f([]), ' ', g(['a' => 1]), g(['tmp' => 5]);
     assert_eq!(out, "1-2--- 1---");
 }
 
-/// Destructuring targets that are variable variables write the named locals (review r1, H1).
+/// Destructuring targets that are variable variables write the named locals.
 #[test]
 fn test_varvar_destructuring_targets() {
     let out = compile_and_run(
@@ -379,7 +378,7 @@ echo f();
     assert_eq!(out, "128934");
 }
 
-/// extract() with a 'this' key throws before writing (review r1, B1).
+/// extract() with a 'this' key throws before writing.
 #[test]
 fn test_extract_this_key_throws() {
     let out = compile_and_run(
@@ -391,7 +390,7 @@ echo f(['this' => 1, 'a' => 5]), ' ', f(['a' => 6]);
     assert_eq!(out, "Cannot re-assign $this0 ok6");
 }
 
-/// A dispatched write followed by `return [...]` compiles (review r1, B2), and `$$n = v` with
+/// A dispatched write followed by `return [...]` compiles, and `$$n = v` with
 /// `$n === 'this'` raises PHP's own error.
 #[test]
 fn test_varvar_write_then_return_array_and_this() {
@@ -406,7 +405,7 @@ echo json_encode(w('b')), ' ', t('this');
 }
 
 /// A switch case that rewrites the subject and falls through, and `$$n` renaming `$n`
-/// itself, no longer trust a stale bound (review r1, B3).
+/// itself, no longer trust a stale bound.
 #[test]
 fn test_varvar_bounds_invalidated_by_rewrites() {
     let out = compile_and_run(

@@ -35,7 +35,7 @@ function __elephc_hbq_walk(mixed $items, string $prefix, string $numericPrefix, 
 }
 function http_build_query(array|object $data, string $numeric_prefix = "", ?string $arg_separator = null, int $encoding_type = PHP_QUERY_RFC1738) {
     // is_array first: the checker narrows `is_array` on both branches but not `is_object`,
-    // and `(array)` of the un-narrowed `array|object` is typed `array` (upstream #707).
+    // and `(array)` of the un-narrowed `array|object` is typed `array` (#707).
     if (is_array($data)) {
         $items = $data;
     } else {

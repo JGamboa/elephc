@@ -1,13 +1,13 @@
 //! Purpose:
-//! End-to-end coverage for prefix and member-name forms found by the P21 parse oracle on the
-//! Laravel frontier: unary `+`, reserved words as method/constant names after a dynamic `::` or
+//! End-to-end coverage for prefix and member-name forms that real-world vendor
+//! code uses: unary `+`, reserved words as method/constant names after a dynamic `::` or
 //! `->`, and `new (expr)` / `new static::$map[...]` class-name references.
 //!
 //! Called from:
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
-//! - Expected output was produced by PHP 8.5 from the same source (`probes/require-expr`).
+//! - Expected output was produced by PHP 8.5 from the same source.
 
 use crate::support::*;
 

@@ -7,13 +7,13 @@
 //! - `cargo test --test codegen_tests fcc_variable`.
 //!
 //! Key details:
-//! - The first tests mirror the external `probes/fcc/` family and assert PHP 8.5's output.
+//! - The tests assert PHP 8.5's output for the same source.
 //! - Reflection queries that have no runtime answer for a Closure reflected at run time must
 //!   throw `Error`, never return the empty compile-time defaults.
 
 use crate::support::*;
 
-/// Mirrors `probes/fcc/var_function_names.php`.
+/// Case `var_function_names` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_var_function_names() {
     let out = compile_and_run(
@@ -39,7 +39,7 @@ echo $g(7), "\n";
     assert_eq!(out, "int(40)\nstring(3) \"cba\"\nint(21)\nint(40)\n14\n");
 }
 
-/// Mirrors `probes/fcc/var_callable_arrays.php`.
+/// Case `var_callable_arrays` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_var_callable_arrays() {
     let out = compile_and_run(
@@ -65,7 +65,7 @@ echo $again('hey'), "\n";
     assert_eq!(out, "hi Ada\nQUIET\nhey Bob\n");
 }
 
-/// Mirrors `probes/fcc/var_invokable_and_closure.php`.
+/// Case `var_invokable_and_closure` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_var_invokable_and_closure() {
     let out = compile_and_run(
@@ -88,7 +88,7 @@ var_dump($same instanceof Closure);
     assert_eq!(out, "42\n101\n102\nbool(true)\n");
 }
 
-/// Mirrors `probes/fcc/var_not_callable.php`.
+/// Case `var_not_callable` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_var_not_callable() {
     let out = compile_and_run(
@@ -115,7 +115,7 @@ echo "done\n";
     assert_eq!(out, "Error\nError\nError\nError\nError\nError\ndone\n");
 }
 
-/// Mirrors `probes/fcc/from_callable_runtime.php`.
+/// Case `from_callable_runtime` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_from_callable_runtime() {
     let out = compile_and_run(
@@ -141,7 +141,7 @@ foreach ([7, 'nope', [new Box(), 'zz']] as $bad) {
     assert_eq!(out, "6\n6\nc3\nTypeError\nTypeError\nTypeError\n");
 }
 
-/// Mirrors `probes/fcc/reflection_is_anonymous.php`.
+/// Case `reflection_is_anonymous` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_reflection_is_anonymous() {
     let out = compile_and_run(
@@ -163,7 +163,7 @@ echo $byName->name, "\n";
     assert_eq!(out, "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nNULL\nbool(true)\nnamed\n");
 }
 
-/// Mirrors `probes/fcc/reflection_scope_class.php`.
+/// Case `reflection_scope_class` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_reflection_scope_class() {
     let out = compile_and_run(
@@ -194,7 +194,7 @@ var_dump($cls->getName());
     assert_eq!(out, "NULL\nNULL\nstring(8) \"App\\Base\"\nstring(8) \"App\\Base\"\nstring(9) \"App\\Child\"\nstring(9) \"App\\Child\"\nstring(9) \"App\\Child\"\nNULL\nNULL\nstring(8) \"App\\Base\"\n");
 }
 
-/// Mirrors `probes/fcc/container_class_for_callable.php`.
+/// Case `container_class_for_callable` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_container_class_for_callable() {
     let out = compile_and_run(
@@ -311,7 +311,7 @@ echo (new ReflectionProperty('Shape', 'side'))->name, "\n";
     assert_eq!(out, "Shape\nShape\ndraw\narea\nside\n");
 }
 
-/// Mirrors `probes/fcc/lifetime_destruct.php` (review round 1).
+/// Case `lifetime_destruct` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_lifetime_destruct() {
     let out = compile_and_run(
@@ -334,7 +334,7 @@ echo "main end\n";
     assert_eq!(out, "v=1\ndestruct 1\nt1 end\nv=2\ndestruct 2\nt2 end\nv=3\ndestruct 3\nt3 end\nv=4\ndestruct 4\nt4 end\ni=5\ndestruct 5\nt5 end\nmain end\n");
 }
 
-/// Mirrors `probes/fcc/lifetime_loop.php` (review round 1).
+/// Case `lifetime_loop` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_lifetime_loop() {
     let out = compile_and_run(
@@ -356,7 +356,7 @@ echo $sum, "\n";
     assert_eq!(out, "599970000\n");
 }
 
-/// Mirrors `probes/fcc/reflection_scope_loop.php` (review round 1).
+/// Case `reflection_scope_loop` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_reflection_scope_loop() {
     let out = compile_and_run(
@@ -376,7 +376,7 @@ echo $cnt, "\n";
     assert_eq!(out, "240000\n");
 }
 
-/// Mirrors `probes/fcc/static_lsb.php` (review round 1).
+/// Case `static_lsb` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_static_lsb() {
     let out = compile_and_run(
@@ -399,7 +399,7 @@ $y = $x(...); echo $y(), "\n";
     assert_eq!(out, "Sub:p\nSub:p Sub:q\nsubK|subO\nSub:p\nsubK|subO\ncallable\nSub:p\n");
 }
 
-/// Mirrors `probes/fcc/scoped_visibility.php` (review round 1).
+/// Case `scoped_visibility` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_scoped_visibility() {
     let out = compile_and_run(
@@ -428,7 +428,7 @@ foreach ([[new C, 'priv'], [new C, 'prot'], 'C::pst'] as $outside) {
     assert_eq!(out, "priv 1 C\nprot 2 C\npriv 3 C\npst C\npst C\npriv 1 D\nprot 2 D\npriv 3 D\npst C\npst D\nError\nError\nError\n");
 }
 
-/// Mirrors `probes/fcc/prune_literal_name.php` (review round 1).
+/// Case `prune_literal_name` (expected output from PHP 8.5).
 #[test]
 fn test_fcc_variable_probe_prune_literal_name() {
     let out = compile_and_run(
@@ -444,7 +444,7 @@ echo count($x), "\n";
     assert_eq!(out, "1\n");
 }
 
-/// Mirrors `probes/fcc/rejection_lifetime.php` (review round 2): a caught rejection releases the boxed input,
+/// Case `rejection_lifetime` (expected output from PHP 8.5): a caught rejection releases the boxed input,
 /// so 200k rejections stay within the default heap and every receiver is destructed.
 #[test]
 fn test_fcc_variable_probe_rejection_lifetime() {

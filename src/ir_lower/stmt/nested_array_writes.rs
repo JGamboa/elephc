@@ -75,7 +75,7 @@ pub(super) fn lower_nested_array_assign(
         // incref'd and a concrete one is boxed by `__rt_mixed_from_value`, which retains
         // refcounted payloads (strings are copied). An owning temporary that is not a string
         // (`$c['a']['k'] = f()` returning an array, an object, a Mixed) therefore still held
-        // its producer reference afterwards and leaked one block per write (P48).
+        // its producer reference afterwards and leaked one block per write.
         let parent_is_boxed = ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed;
         if parent_is_boxed
             && ctx.value_is_owning_temporary(value)
@@ -197,7 +197,7 @@ pub(crate) fn lower_nested_assign_parent(
     // The receiver is already evaluated but not a boxed Mixed cell: finish as
     // the plain subscript read the pre-#555 lowering produced. When that read
     // yields a CONTAINER (an array, hash or boxed value) it is a detached copy:
-    // the leaf write would mutate the copy and vanish (P48). Refuse it instead
+    // the leaf write would mutate the copy and vanish. Refuse it instead
     // of compiling a write that silently does nothing; an object element
     // (ArrayAccess) is a handle and keeps working through the read.
     // Only a chain rooted in named storage can lose a write this way: writing into an element
@@ -316,7 +316,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
     // The key's storage class decides the container shape, so it is classified from the LOWERED
     // value, not from syntax: a plain variable, property or call key is syntactically `Int`
     // (`infer_expr_type_syntactic`), and coercing a string-valued one to int collapsed
-    // `$c[$e]['k'] = 'x'` onto key 0 (P48). The key is lowered before the container is loaded,
+    // `$c[$e]['k'] = 'x'` onto key 0. The key is lowered before the container is loaded,
     // so a key expression that reallocates the container cannot leave a stale pointer behind.
     let syntactic_key_ty = index_expr_key_type(ctx, index);
     let key = lower_expr(ctx, index);

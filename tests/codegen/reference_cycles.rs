@@ -1,7 +1,7 @@
 //! Purpose:
 //! End-to-end tests for self-referencing arrays (`$a[] = &$a` and friends) and for references
-//! to readonly properties, enum `name`/`value` included (task P51: the SIGSEGVs the tren-8
-//! phpt run exposed).
+//! to readonly properties, enum `name`/`value` included (SIGSEGVs found by
+//! running the php-src phpt suite).
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests reference_cycle` through Rust's test harness.
@@ -271,7 +271,7 @@ var_dump($a[3]);
     assert_eq!(out, "1000 1\narray(1) {\n  [0]=>\n  *RECURSION*\n}\n");
 }
 
-/// Review r1 (H1): an ACYCLIC array deeper than the guard's storage is not a cycle. `===` on two
+/// An ACYCLIC array deeper than the guard's storage is not a cycle. `===` on two
 /// 2049-level nestings is true (it used to throw "Nesting level too deep" once the 2048-entry
 /// stack filled), and `print_r` of a 2100-level nesting renders every level instead of a false
 /// `*RECURSION*` at level 2048.

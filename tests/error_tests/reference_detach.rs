@@ -64,7 +64,7 @@ fn test_reference_detach_rejects_conditional_and_shared_storage() {
     }
 }
 
-/// A static local is never detached: `unset()` of one is refused outright (front P52).
+/// A static local is never detached: `unset()` of one is refused outright.
 #[test]
 fn test_reference_detach_static_local_unset_is_refused() {
     expect_error(

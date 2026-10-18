@@ -1,5 +1,5 @@
 //! Purpose:
-//! Regression tests for filesystem helpers whose underlying syscall fails (P41).
+//! Regression tests for filesystem helpers whose underlying syscall fails.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -216,7 +216,7 @@ echo count($r), "\n";
     assert_eq!(out.stderr, "Warning: scandir(): Failed to open directory\n");
 }
 
-/// Review round 1, finding 1: a string callable dispatches through the builtin CONTRACT's
+/// A string callable dispatches through the builtin CONTRACT's
 /// return type. The contract still said `int` while the lowering boxed `int|false`, so
 /// `$cb = 'file_put_contents'; $cb(...)` printed the boxed cell's address as an integer.
 #[test]
@@ -250,7 +250,7 @@ rmdir($d);
     );
 }
 
-/// Review round 1, findings 6 and 7: fputcsv() on a read-only stream and hash_file() of a
+/// Fputcsv() on a read-only stream and hash_file() of a
 /// directory are PHP `false`, not a negative sum of failed writes or md5("").
 #[test]
 fn test_fputcsv_read_only_and_hash_file_directory_are_false() {

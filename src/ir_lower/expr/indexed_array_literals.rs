@@ -693,8 +693,8 @@ pub(super) fn array_literal_element_type_for_ir(
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         // A static property has declared storage; the syntactic fallback answers `int` for it,
-        // which stamped `[P::$a, 5]` as `array<int>` and cast the array element to `int(1)`
-        // (P42a j1). The declared (or inferred) slot type is what the element read yields.
+        // which stamped `[P::$a, 5]` as `array<int>` and cast the array element to `int(1)`.
+        // The declared (or inferred) slot type is what the element read yields.
         ExprKind::StaticPropertyAccess { receiver, property } => ir_array_storage_type(
             static_property_result_type(ctx, receiver, property, item),
         ),

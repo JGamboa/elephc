@@ -90,7 +90,7 @@ fn null_mixed(ctx: &mut LoweringContext<'_, '_>, span: Span) -> LoweredValue {
 }
 
 /// Gives a maybe-undefined local boxed `mixed` storage and stores PHP null into it when its
-/// defined-flag is clear: what `use (&$x)` does to an undefined `$x` (review P2c r3, R3-1).
+/// defined-flag is clear: what `use (&$x)` does to an undefined `$x`.
 /// The local is defined afterwards (the store sets the flag).
 pub(super) fn define_null_if_undefined(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
     let Some(flag) = ctx.maybe_undefined_flags.get(name).cloned() else {

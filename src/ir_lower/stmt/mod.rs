@@ -349,7 +349,7 @@ fn foreach_source_is_static_local(ctx: &LoweringContext<'_, '_>, array: &Expr) -
 /// A by-value `foreach` iterates the array as it was when the loop started: writes to the
 /// variable inside the body copy-on-write split away from the iterated array. A `static` local
 /// is read from its symbol on every access, so iterating it directly let the loop walk the
-/// elements its own body appended (review P52 R2-1). A hidden local holding its own reference to
+/// elements its own body appended. A hidden local holding its own reference to
 /// the array is iterated instead, and released once the loop is done.
 fn lower_foreach_over_static_snapshot(
     ctx: &mut LoweringContext<'_, '_>,

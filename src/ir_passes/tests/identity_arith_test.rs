@@ -205,8 +205,8 @@ fn divide_by_zero_is_not_folded() {
 }
 
 /// `true * 1` must not fold onto the `bool` operand: the `i64` storage matches, but PHP's
-/// result is the INTEGER `1`, and redirecting the use changed its PHP type (review P33a r1:
-/// `+true` printed `bool(true)`, `null * 1` printed `NULL`).
+/// result is the INTEGER `1`, and redirecting the use changed its PHP type
+/// (`+true` printed `bool(true)`, `null * 1` printed `NULL`).
 #[test]
 fn mul_one_keeps_an_operand_of_another_php_type() {
     let mut function = Function::new("bool_mul".to_string(), IrType::I64, PhpType::Int);

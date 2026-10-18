@@ -1,6 +1,6 @@
 //! Purpose:
 //! Pins the refusal of a by-reference iteration or element reference through a PHP variable
-//! that shares a reference set with a typed-element array (task P51).
+//! that shares a reference set with a typed-element array.
 //!
 //! Called from:
 //! - The AST-to-EIR unit suite.

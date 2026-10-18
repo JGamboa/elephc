@@ -30,7 +30,7 @@
 //!   satisfies, and the checker reports a non-null argument as "not supported yet"
 //!   (`call_validation::require_compatible_arg_type`). This does NOT make `getLine()` correct:
 //!   like every Throwable whose class declares its own constructor, an `ErrorException` currently
-//!   reports line 0 (pending, frente P14).
+//!   reports line 0 (pending).
 //! - Injection: `WeakMap` whenever the program names it or introspects/constructs classes
 //!   dynamically; `ErrorException` only when the program NAMES it (class position or string
 //!   literal), so plain introspection does not pull in an Exception subclass.

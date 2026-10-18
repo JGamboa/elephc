@@ -617,8 +617,8 @@ mod tests {
     ///
     /// The method pass promoted `is`'s collector to `array<mixed>`, the top-level re-check joined
     /// the `'api/*'` call site back into `array<string>` (`Str` absorbs `Mixed` in the coercion
-    /// join), and the two alternated until the round budget ran out; on Laravel that budget is
-    /// thousands of rounds. The collector must end as the wider `array<mixed>`, the only type the
+    /// join), and the two alternated until the round budget ran out; on a codebase with thousands
+    /// of classes that budget is thousands of rounds. The collector must end as the wider `array<mixed>`, the only type the
     /// descriptor invoker and both call sites agree on.
     #[test]
     fn promoted_method_variadic_is_not_narrowed_back_by_a_top_level_call() {

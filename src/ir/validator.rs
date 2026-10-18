@@ -803,7 +803,7 @@ fn validate_opcode_rules(
         //
         // The one exception is a boxed `Mixed` result (a nested write's parent cell): that read
         // goes through the key-normalizing `__rt_array_get_mixed_key`, which also dispatches on
-        // the receiver's runtime storage kind, so a runtime-tagged key is accepted there (P48).
+        // the receiver's runtime storage kind, so a runtime-tagged key is accepted there.
         ArrayGetForWrite => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;

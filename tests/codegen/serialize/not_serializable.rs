@@ -122,8 +122,8 @@ echo $db->query("SELECT 7")->fetchColumn(), "\n";
 
 /// A user class named after a PHP internal elephc does not register (`WeakReference`,
 /// `ReflectionReference`) is an ordinary user class, so it serializes and round-trips instead of
-/// being refused like the internal it shares a name with. (laravel/main registers `WeakMap` and
-/// `ReflectionType` since fix/natives, so redeclaring them is the PHP error "Cannot declare
+/// being refused like the internal it shares a name with. (elephc registers `WeakMap` and
+/// `ReflectionType`, so redeclaring them is the PHP error "Cannot declare
 /// class WeakMap, because the name is already in use".)
 #[test]
 fn test_serialize_keeps_user_classes_named_like_unmodelled_internals() {

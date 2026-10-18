@@ -723,7 +723,7 @@ which keeps its identity; an undefined source is first defined as null, like PHP
 RETAINS that cell into the place and only then releases what the place held before
 (`BindPropRefCell`, `BindArrayElemRefCell` → `__rt_hash_entry_bind_reference`). The release
 runs after the place is republished because it can run a destructor that observes it.
-Consequences, all pinned by `tests/codegen/reference_places.rs` and `probes/references`:
+Consequences, all pinned by `tests/codegen/reference_places.rs`:
 
 - a write through either side lands in the shared cell, and `unset` of one side releases only
   that side's owner;

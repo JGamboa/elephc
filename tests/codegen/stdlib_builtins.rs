@@ -7,7 +7,7 @@
 //! - `cargo test --test codegen_tests stdlib_builtins` through Rust's test harness.
 //!
 //! Key details:
-//! - Each fixture is a probe from `probes/builtins` and its expected output was generated with
+//! - Each fixture's expected output was generated with
 //!   `php` 8.5.10, so these assert byte-for-byte PHP parity.
 //! - The last tests pin that code which never touches the prelude is unchanged and that a user
 //!   declaration of the same name wins over the injected one.
@@ -166,9 +166,9 @@ bool(true)
     assert_eq!(compile_and_run(source), expected);
 }
 
-/// Parity with PHP 8.5.10 for the `pack_laravel_usage` probe.
+/// Parity with PHP 8.5.10 for pack()/unpack() as vendor code uses them.
 #[test]
-fn test_stdlib_pack_laravel_usage_matches_php() {
+fn test_stdlib_pack_vendor_usage_matches_php() {
     let source = r####"<?php
 echo unpack('N', "\x00\x00\x00\x2a")[1], "\n";
 $hex = (array) unpack('H*hex', "\xde\xad\xbe\xef");

@@ -114,7 +114,7 @@ namespace {
 }
 
 /// `\static::class`, `\self::class` and `\parent::class` resolve like their unqualified
-/// forms, as in PHP 8 (reviewer probes r16, s05, t15); `\static` keeps late static binding.
+/// forms, as in PHP 8; `\static` keeps late static binding.
 #[test]
 fn test_fully_qualified_special_class_fetch_matches_unqualified() {
     let out = compile_and_run(r#"<?php

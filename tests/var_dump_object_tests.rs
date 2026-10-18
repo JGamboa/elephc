@@ -1814,7 +1814,7 @@ fn reflection_parameter_from_builtin_function_hides_backing_objects() {
 /// limitation. PHP renders the unmodelled public `name` slot here (see the divergence pin
 /// below); what this test guards is that NO `__*` backing slot appears.
 #[test]
-#[ignore = "laravel/main: `new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing since train 9, not in upstream); follow-up"]
+#[ignore = "`new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing on this branch, not reproduced upstream)"]
 fn reflection_subclass_hides_inherited_backing_slots() {
     let out = run_php(
         "vd_reflection_subclass_backing_slots",
@@ -1838,7 +1838,7 @@ fn reflection_subclass_hides_inherited_backing_slots() {
 /// rendering its private storage, so this fixture pins elephc's ACTUAL output
 /// (`object(Mine)#1 (0) {}`) against PHP's `["n"]=> NULL, ["i"]=> NULL`.
 #[test]
-#[ignore = "laravel/main: `new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing since train 9, not in upstream); follow-up"]
+#[ignore = "`new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing on this branch, not reproduced upstream)"]
 fn reflection_subclass_debug_info_projection_drops_backing_slots() {
     let out = run_php(
         "vd_reflection_subclass_debug_info_backing_slot",
@@ -1908,7 +1908,7 @@ fn user_private_underscore_property_still_renders() {
 /// A user private property that shadows a Reflection backing name has one renderer row.
 /// PHP also exposes the public `name` property; that existing divergence is pinned above.
 #[test]
-#[ignore = "laravel/main: `new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing since train 9, not in upstream); follow-up"]
+#[ignore = "`new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing on this branch, not reproduced upstream)"]
 fn reflection_subclass_shadowed_backing_name_renders_once() {
     let out = run_php(
         "vd_reflection_subclass_shadowed_backing_name",
@@ -1967,7 +1967,7 @@ Child Object
 
 /// A debug-info projection selects the visible user slot instead of the hidden backing tuple.
 #[test]
-#[ignore = "laravel/main: `new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing since train 9, not in upstream); follow-up"]
+#[ignore = "`new ReflectionClass('Mine')` over a user subclass of ReflectionClass exhausts the heap (pre-existing on this branch, not reproduced upstream)"]
 fn reflection_subclass_debug_info_uses_shadowed_user_property() {
     let out = run_php(
         "vd_reflection_subclass_debug_info_uses_shadowed_user_property",

@@ -282,7 +282,7 @@ pub(super) fn check_property_array_assign(
 /// `array<never>`) cannot: the nested-write lowering only has a write-through path for boxed
 /// slots, and the copy it fell back to silently dropped the write — Symfony's
 /// `EventDispatcher::addListener` (`$this->listeners[$eventName][$priority][] = $listener`) left
-/// the property empty (P48). The slot is widened to the general PHP array representation that a
+/// the property empty. The slot is widened to the general PHP array representation that a
 /// declared `array` property already uses; a null-defaulted slot widens to `mixed`, which keeps
 /// the null observable. Declared, hooked or scope-dynamic slots are left alone.
 pub(super) fn widen_property_root_for_nested_write(

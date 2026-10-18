@@ -1,6 +1,6 @@
 //! Purpose:
 //! Folds `function_exists('name')` for USER functions before type checking, so the PHP polyfill
-//! idiom `if (! function_exists('f')) { function f() {} }` (every Laravel `helpers.php`)
+//! idiom `if (! function_exists('f')) { function f() {} }` (framework `helpers.php` files)
 //! materializes its declaration exactly when PHP would execute it.
 //!
 //! Called from:

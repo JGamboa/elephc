@@ -18,7 +18,7 @@ use crate::support::*;
 fn test_reference_new_element_local_and_nested() {
     let out = compile_and_run(
         r#"<?php
-// $r = &$a[] crea un elemento null y liga $r a él.
+// $r = &$a[] creates a null element and binds $r to it.
 $a = [1, 2];
 $r = &$a[];
 var_dump($a);
@@ -85,7 +85,7 @@ array(3) {
 fn test_reference_new_element_walk_creates_levels() {
     let out = compile_and_run(
         r#"<?php
-// Forma de nette Arrays::associate: $x = &$x[] recorre y crea niveles nuevos.
+// nette Arrays::associate shape: $x = &$x[] walks down and creates new levels.
 function root(bool $object): mixed { return $object ? new stdClass : []; }
 $res = root(false);
 foreach ([['a' => 1], ['a' => 2]] as $row) {
@@ -132,7 +132,7 @@ array(1) {
 fn test_reference_new_element_through_property() {
     let out = compile_and_run(
         r#"<?php
-// Forma de symfony EventDispatcher::optimizeListeners.
+// symfony EventDispatcher::optimizeListeners shape.
 class D {
     public array $optimized = [];
     public $loose;
@@ -176,7 +176,7 @@ array(1) {
 fn test_reference_append_target() {
     let out = compile_and_run(
         r#"<?php
-// $a[] = &$x: el elemento nuevo se liga a una variable (debugbar, sebastian).
+// $a[] = &$x: the new element is bound to a variable (debugbar, sebastian).
 $x = 1;
 $a = [];
 $a[] = &$x;
@@ -223,7 +223,7 @@ array(1) {
 fn test_reference_foreach_into_new_element() {
     let out = compile_and_run(
         r#"<?php
-// $a[] como destino de foreach por valor y por referencia.
+// $a[] as a foreach target, by value and by reference.
 $c = [];
 foreach ([1, 2, 3] as $c[]) {}
 var_dump($c);
@@ -267,7 +267,7 @@ array(2) {
 fn test_reference_dynamic_property_bind() {
     let out = compile_and_run(
         r#"<?php
-// $o->{$k} = &$v y $o->$k = &$v (laravel serializable-closure Native.php).
+// $o->{$k} = &$v and $o->$k = &$v (laravel serializable-closure Native.php).
 class P { public $decl = 0; public array $arr = []; }
 $o = new P();
 $v = 1;
@@ -487,7 +487,7 @@ var_dump(f(), $g);
 fn test_reference_dynamic_property_source() {
     let out = compile_and_run(
         r#"<?php
-// $r = &$o->{$k} y $r = &$o->$k sobre propiedades declaradas, dinámicas y de stdClass.
+// $r = &$o->{$k} and $r = &$o->$k on declared, dynamic and stdClass properties.
 class P { public $decl = 1; }
 $o = new P();
 $k = 'decl';
@@ -530,7 +530,7 @@ string(1) "w"
 fn test_reference_dynamic_property_source_walk() {
     let out = compile_and_run(
         r#"<?php
-// nette Arrays::associate: $x = &$x->{$k} recorre y crea propiedades, y $r = &$o->{$k}[$i].
+// nette Arrays::associate: $x = &$x->{$k} walks and creates properties, and $r = &$o->{$k}[$i].
 $res = new stdClass();
 foreach ([['id' => 'a', 'v' => 1], ['id' => 'b', 'v' => 2]] as $row) {
     $x = &$res;
@@ -588,7 +588,7 @@ object(stdClass)#4 (1) {
 fn test_reference_dynamic_property_source_readonly() {
     let out = compile_and_run(
         r#"<?php
-// Una referencia a una propiedad readonly por nombre dinámico lanza Error.
+// A reference to a readonly property through a dynamic name throws Error.
 final class R {
     public function __construct(public readonly array $v = [1]) {}
     public function take(string $k) {
