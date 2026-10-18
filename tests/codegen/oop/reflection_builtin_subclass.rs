@@ -69,3 +69,40 @@ var_dump((new ReflectionClass('Hooked'))->hasMethod('__propset_label'));
     );
     assert_eq!(out, "run\nbool(false)\nbool(false)\n");
 }
+
+/// `getProperties()` on a receiver known at lowering time is expanded statically (including the
+/// `getProperties()[N]` index form); it must apply the same listing rule as the runtime metadata,
+/// so the builtin Reflection `__*` storage slots never surface there either.
+#[test]
+fn static_get_properties_hides_reflection_backing_slots() {
+    let out = compile_and_run(
+        r#"<?php
+class Mine extends ReflectionClass {}
+$rc = new ReflectionClass('Mine');
+foreach ($rc->getProperties() as $p) { echo $p->getName(), "\n"; }
+echo $rc->getProperties()[0]->getName(), "\n";
+echo count($rc->getProperties(ReflectionProperty::IS_PRIVATE)), "\n";
+"#,
+    );
+    assert_eq!(out, "name\nname\n0\n");
+}
+
+/// PHP's `getProperties()` never lists a parent's private properties (instance or static), on
+/// the statically expanded path too.
+#[test]
+fn static_get_properties_skips_inherited_private_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class P { private $__y; private $z; private static $__x; public $pub; }
+class C extends P { private $own; }
+$rc = new ReflectionClass('C');
+$names = [];
+foreach ($rc->getProperties() as $p) { $names[] = $p->getName(); }
+sort($names);
+echo implode(",", $names), "\n";
+echo count($rc->getProperties(ReflectionProperty::IS_PRIVATE)), "\n";
+echo $rc->getProperties(ReflectionProperty::IS_PRIVATE)[0]->getName(), "\n";
+"#,
+    );
+    assert_eq!(out, "own,pub\n1\nown\n");
+}
