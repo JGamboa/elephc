@@ -130,6 +130,16 @@ pub(super) fn reflection_class_method_names_for_filter(
         .keys()
         .chain(class_info.static_methods.keys())
     {
+        // Property-hook accessors (`__propget_*` / `__propset_*`) are compiler-generated, not
+        // PHP methods; PHP's getMethods() never lists them.
+        let declaring = class_info
+            .method_declaring_classes
+            .get(name)
+            .and_then(|class| ctx.classes.get(class))
+            .unwrap_or(class_info);
+        if declaring.is_property_hook_method(name) {
+            continue;
+        }
         if seen.insert(php_symbol_key(name))
             && reflection_method_matches_filter(class_info, name, filter)
         {

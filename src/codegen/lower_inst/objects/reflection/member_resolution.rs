@@ -29,9 +29,20 @@ pub(super) fn reflection_property_visible_from_class(
     } else {
         info.property_declaring_classes.get(property_name)
     };
-    declaring_class
-        .map(|declaring_class| php_symbol_key(declaring_class) == php_symbol_key(reflected_class))
-        .unwrap_or(false)
+    let Some(declaring_class) = declaring_class else {
+        return false;
+    };
+    // The private `__*` slots elephc declares on PHP's builtin Reflection classes are compiler
+    // storage, not PHP properties (PHP's Reflection classes declare no private properties), so
+    // reflecting a Reflection class must not list them. Besides fidelity this bounds the eager
+    // metadata graph: every ReflectionMethod of a Reflection subclass embeds a declaring-class
+    // ReflectionClass, and listing ~40 boxed backing defaults in each exhausted the heap.
+    if property_name.starts_with("__")
+        && crate::types::checker::REFLECTION_CLASS_NAMES.contains(&declaring_class.as_str())
+    {
+        return false;
+    }
+    php_symbol_key(declaring_class) == php_symbol_key(reflected_class)
 }
 
 /// Returns the class that declares one reflected instance or static method.
