@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **982 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **982 / 2169** (45%), classes **148 / 329** (45%), constants **1116 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -21,7 +21,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | - |
 | `bz2` | 0 / 10 · 0% | - | - |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
-| `core` | 62 / 62 · 100% | 21 / 40 · 52% | 37 / 89 · 42% |
+| `core` | 62 / 62 · 100% | 26 / 40 · 65% | 37 / 89 · 42% |
 | `ctype` | 4 / 11 · 36% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
@@ -60,7 +60,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | - | 0 / 43 · 0% |
 | `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
 | `readline` | 1 / 13 · 8% | - | 0 / 1 · 0% |
-| `reflection` | - | 16 / 26 · 62% | - |
+| `reflection` | - | 17 / 26 · 65% | - |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
 | `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | - |
 | `simplexml` | 0 / 3 · 0% | 0 / 2 · 0% | - |
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 384 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 384 / 545 · 70% | 2 / 6 · 33% | 165 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -97,7 +97,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
 - `standard` functions: 384 / 344
-- `standard` constants: 163 / 142
+- `standard` constants: 165 / 144
 
 Of those functions, 195 from `exif`, `gd`, `mysqli`, `pdo`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
@@ -134,9 +134,9 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [Fibers](./fibers.md) ([PHP](https://www.php.net/manual/en/language.fibers.php)) | ✅ Supported |  |
 | [Exceptions (try / catch / finally)](./control-structures.md) ([PHP](https://www.php.net/manual/en/language.exceptions.php)) | ✅ Supported |  |
 | [match expressions](./control-structures.md) ([PHP](https://www.php.net/manual/en/control-structures.match.php)) | ✅ Supported |  |
-| References (&) ([PHP](https://www.php.net/manual/en/language.references.php)) | ✅ Supported | Includes `$o->p = &$x`, `$a[$k] = &$x`, `[&$x]` and `&C::$p` sources. Also `&$a[]`, `$a[] = &$x`, `foreach ($a as &$d[])` `$o->{$k} = &$v` and `$r = &$o->{$k}` (declared, dynamic and `stdClass` properties; a typed property that is not `mixed` cannot be bound through a runtime name, and a name PHP would route to `__get`/`__set` throws an explicit `Error`). Superglobals and static properties cannot be bound into a property or element, `f($a[])` as a by-reference argument is not supported, and `serialize()` writes a shared reference's value again instead of PHP's `R:` back-reference. See [Binding a place by reference](../internals/memory-model.md#binding-a-place-by-reference). |
+| References (&) ([PHP](https://www.php.net/manual/en/language.references.php)) | ✅ Supported |  |
 | [Namespaces](./namespaces.md) ([PHP](https://www.php.net/manual/en/language.namespaces.php)) | ✅ Supported |  |
-| include / require ([PHP](https://www.php.net/manual/en/function.include.php)) | ✅ Supported | Static, compile-time resolved paths; usable as an expression (argument, operand, `??=`, ternary branch). An include in a loop condition or a `match` arm, or after a variable passed to the same call (it may be by reference), is a compile error |
+| include / require ([PHP](https://www.php.net/manual/en/function.include.php)) | ✅ Supported | Static, compile-time resolved paths |
 | [eval()](./eval.md) ([PHP](https://www.php.net/manual/en/function.eval.php)) | 🟡 Partial | Experimental; embeds an optional interpreter bridge when runtime parsing is required |
 
 ## Extensions

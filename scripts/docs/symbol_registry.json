@@ -110,6 +110,24 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "interface",
+      "module": "elephc",
+      "name": "__ElephcUnsupportedErrorExceptionFileOrLine",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -233,6 +251,24 @@
       "name": "AssertionError",
       "php_manual": null,
       "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "interface",
+      "module": "core",
+      "name": "BackedEnum",
+      "php_manual": null,
+      "since": "8.1"
     },
     {
       "aot": {
@@ -1293,6 +1329,24 @@
       "kind": "class",
       "module": "core",
       "name": "Error",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "core",
+      "name": "ErrorException",
       "php_manual": null,
       "since": null
     },
@@ -2897,6 +2951,24 @@
       "internal": false,
       "kind": "class",
       "module": "reflection",
+      "name": "ReflectionType",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "reflection",
       "name": "ReflectionUnionType",
       "php_manual": null,
       "since": null
@@ -2957,6 +3029,24 @@
     },
     {
       "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "interface",
+      "module": "core",
+      "name": "Serializable",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
         "kind": "prelude",
         "supported": true
       },
@@ -2975,12 +3065,12 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "checker-injected",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "kind": "prelude",
+        "kind": "interpreter",
         "supported": true
       },
       "extension": false,
@@ -3453,9 +3543,45 @@
       },
       "extension": false,
       "internal": false,
+      "kind": "interface",
+      "module": "core",
+      "name": "UnitEnum",
+      "php_manual": null,
+      "since": "8.1"
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "kind": "class",
       "module": "core",
       "name": "ValueError",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "core",
+      "name": "WeakMap",
       "php_manual": null,
       "since": null
     },
@@ -21054,6 +21180,42 @@
       "value": {
         "target_dependent": "str"
       }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PHP_QUERY_RFC1738",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PHP_QUERY_RFC3986",
+      "route": "predefined",
+      "since": null,
+      "value": 2
     },
     {
       "aot": {
