@@ -352,8 +352,6 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // PSR-4 class files that call `pack()`, `random_bytes()`, ... are visible to its detector.
     let resolved = elephc::stdlib_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("stdlib prelude injection failed");
-    let resolved = elephc::natives_prelude::inject_if_used(resolved, &mut prelude_inventory)
-        .expect("natives prelude injection failed");
     // Mirrors `pipeline::compile`: the declared-return coercion helper `ir_lower` calls.
     let resolved = elephc::return_coerce_prelude::inject(resolved, &mut prelude_inventory)
         .expect("return-coercion prelude injection failed");

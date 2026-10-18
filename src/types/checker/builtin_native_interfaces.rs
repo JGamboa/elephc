@@ -1,23 +1,18 @@
 //! Purpose:
-//! Injects the PHP core interfaces that carry no runtime behavior of their own: `UnitEnum`,
-//! `BackedEnum`, `Serializable` and `SessionHandlerInterface`.
+//! Injects `SessionHandlerInterface` and the enum-only checks for PHP's `UnitEnum` /
+//! `BackedEnum` (declared with `Serializable` by `builtin_interfaces`).
 //!
 //! Called from:
 //! - `crate::types::checker::driver` during builtin type/schema initialization.
 //!
 //! Key details:
 //! - `UnitEnum` / `BackedEnum` are implemented IMPLICITLY by every enum, exactly as in PHP:
-//!   `schema::enums::insert_enum_metadata` appends them to the enum's interface list when they
-//!   are registered, which is what makes `$case instanceof UnitEnum` and a `BackedEnum $e`
-//!   parameter work. They are registered unconditionally because a program can observe them
-//!   without spelling them (`class_implements(Suit::Hearts)`).
+//!   `schema::enums::insert_enum_metadata` appends them to the enum's interface list, which is
+//!   what makes `$case instanceof UnitEnum` and a `BackedEnum $e` parameter work. A class may not
+//!   implement them (`reject_non_enum_unit_enum`).
 //! - `SessionHandlerInterface` is also declared by the `--web` prelude (`web_prelude::build`).
 //!   That internal declaration wins and this injection skips the name; a declaration in the
 //!   user's own source is a redeclaration error, as PHP reports it.
-//! - `Serializable` is deprecated since PHP 8.1: declaring a class that implements it WITHOUT
-//!   `__serialize()`/`__unserialize()` makes PHP print a `Deprecated:` notice when the class is
-//!   declared. elephc does not reproduce that notice, so such a class is rejected at compile
-//!   time instead of producing output PHP would not (see `reject_legacy_serializable`).
 
 use std::collections::HashMap;
 
@@ -33,7 +28,6 @@ use super::builtin_types::InterfaceDeclInfo;
 pub(crate) const UNIT_ENUM: &str = "UnitEnum";
 /// Name of PHP's implicit interface for every backed enum.
 pub(crate) const BACKED_ENUM: &str = "BackedEnum";
-const SERIALIZABLE: &str = "Serializable";
 
 /// Whether `name` is `UnitEnum`, `BackedEnum` or an interface extending them (never a class).
 ///
@@ -60,7 +54,7 @@ pub(crate) fn is_enum_contract_interface(
 }
 const SESSION_HANDLER_INTERFACE: &str = "SessionHandlerInterface";
 
-/// Registers `UnitEnum`, `BackedEnum`, `Serializable` and `SessionHandlerInterface`.
+/// Registers `SessionHandlerInterface` and rejects classes implementing the enum interfaces.
 ///
 /// Rejects user redeclarations (PHP case-insensitive). A same-named declaration that came from
 /// an internal prelude (the `--web` `SessionHandlerInterface`) is kept and not duplicated.
@@ -70,7 +64,7 @@ pub(crate) fn inject_builtin_native_interfaces(
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
     let mut skip = Vec::new();
-    for builtin_name in [UNIT_ENUM, BACKED_ENUM, SERIALIZABLE, SESSION_HANDLER_INTERFACE] {
+    for builtin_name in [SESSION_HANDLER_INTERFACE] {
         let builtin_key = php_symbol_key(builtin_name);
         let collides = interface_map
             .keys()
@@ -101,30 +95,6 @@ pub(crate) fn inject_builtin_native_interfaces(
         ));
     }
 
-    // Declared WITHOUT their `cases()` / `from()` / `tryFrom()` contracts. Every enum already
-    // carries those as synthesized static methods (`schema::enums::insert_enum_metadata`), and the
-    // eval bridge (Magician) treats these two names as engine markers: an eval enum implementing
-    // `interface M extends UnitEnum` is checked against the HOST interface's abstract methods,
-    // which an enum's synthesized `cases()` does not satisfy there. As markers they keep
-    // `instanceof`, parameter types and `class_implements()` exact.
-    interface_map.insert(UNIT_ENUM.to_string(), interface(UNIT_ENUM, Vec::new(), Vec::new()));
-    interface_map.insert(
-        BACKED_ENUM.to_string(),
-        interface(BACKED_ENUM, vec![UNIT_ENUM.to_string()], Vec::new()),
-    );
-    // PHP declares both methods without a return type (their tentative types are `?string`
-    // and `void`), so an implementation may leave its return type off.
-    interface_map.insert(
-        SERIALIZABLE.to_string(),
-        interface(
-            SERIALIZABLE,
-            Vec::new(),
-            vec![
-                abstract_method("serialize", false, Vec::new(), None),
-                abstract_method("unserialize", false, vec![("data", TypeExpr::Str)], None),
-            ],
-        ),
-    );
     if !skip.contains(&SESSION_HANDLER_INTERFACE) {
         interface_map.insert(
             SESSION_HANDLER_INTERFACE.to_string(),
@@ -167,8 +137,7 @@ pub(crate) fn inject_builtin_native_interfaces(
             ),
         );
     }
-    reject_non_enum_unit_enum(interface_map, class_map)?;
-    reject_legacy_serializable(interface_map, class_map)
+    reject_non_enum_unit_enum(interface_map, class_map)
 }
 
 /// Rejects a class that implements `UnitEnum` (or `BackedEnum`), which PHP reserves for enums:
@@ -202,41 +171,6 @@ fn reject_non_enum_unit_enum(
     Ok(())
 }
 
-/// Rejects a concrete class that implements `Serializable` without `__serialize()` and
-/// `__unserialize()`.
-///
-/// PHP 8.1+ prints `Deprecated: X implements the Serializable interface, which is deprecated.
-/// Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP
-/// versions is necessary)` when such a class is declared. elephc emits no such notice, so the
-/// compiled program would print something different from PHP; failing the compile is the honest
-/// answer. Methods inherited from a parent class count, as they do in php-src.
-fn reject_legacy_serializable(
-    interface_map: &HashMap<String, InterfaceDeclInfo>,
-    class_map: &HashMap<String, FlattenedClass>,
-) -> Result<(), CompileError> {
-    let mut names: Vec<&String> = class_map.keys().collect();
-    names.sort();
-    for name in names {
-        let class = &class_map[name];
-        if class.is_abstract || !class_implements(class_map, interface_map, class, SERIALIZABLE) {
-            continue;
-        }
-        let has = |method: &str| class_has_method(class_map, class, method);
-        if !(has("__serialize") && has("__unserialize")) {
-            return Err(CompileError::new(
-                class.span,
-                &format!(
-                    "{} implements the Serializable interface, which is deprecated: PHP prints a \
-                     Deprecated notice that elephc does not reproduce. Implement __serialize() \
-                     and __unserialize() (or in addition to serialize()/unserialize())",
-                    class.name
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Returns whether `class` (or a parent class) lists `target` among its interfaces, directly or
 /// through interface inheritance.
 fn class_implements(
@@ -261,28 +195,6 @@ fn class_implements(
             if let Some(info) = interface_map.get(interface) {
                 stack.extend(info.extends.iter().map(String::as_str));
             }
-        }
-        guard += 1;
-        if guard > 256 {
-            return false;
-        }
-        current = class.extends.as_deref().and_then(|parent| class_map.get(parent));
-    }
-    false
-}
-
-/// Returns whether `class` or one of its parents declares `method` (case-insensitively).
-fn class_has_method(
-    class_map: &HashMap<String, FlattenedClass>,
-    class: &FlattenedClass,
-    method: &str,
-) -> bool {
-    let key = php_symbol_key(method);
-    let mut current = Some(class);
-    let mut guard = 0;
-    while let Some(class) = current {
-        if class.methods.iter().any(|m| php_symbol_key(&m.name) == key) {
-            return true;
         }
         guard += 1;
         if guard > 256 {

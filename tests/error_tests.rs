@@ -78,8 +78,6 @@ fn check_source_with_defines_and_options(
     // helper's own name is rejected here rather than reaching the checker as a duplicate.
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
         .map_err(|e| e.message.clone())?;
-    let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)
-        .map_err(|e| e.message.clone())?;
     let ast = elephc::return_coerce_prelude::inject(ast, &mut prelude_inventory)
         .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
@@ -113,7 +111,6 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
-    let ast = elephc::natives_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::return_coerce_prelude::inject(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::variable_variables::desugar(ast)?;

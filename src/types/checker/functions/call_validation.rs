@@ -536,21 +536,6 @@ impl Checker {
     ) -> Result<(), CompileError> {
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
-        } else if expected
-            .to_string()
-            .contains(crate::natives_prelude::ERROR_EXCEPTION_FILE_LINE_MARKER)
-        {
-            // `natives_prelude` types ErrorException's `$filename`/`$line` with an internal
-            // marker so a non-null value cannot compile; name the limitation, not the marker.
-            Err(CompileError::new(
-                span,
-                &format!(
-                    "{}: elephc does not support a non-null filename or line in ErrorException \
-                     yet (getFile()/getLine() cannot report a caller-supplied location); pass \
-                     null or omit the argument",
-                    context
-                ),
-            ))
         } else {
             let mut message = format!("{} expects {}, got {}", context, expected, actual);
             if let Some(hint) = self.variance_refusal_hint(expected, actual) {

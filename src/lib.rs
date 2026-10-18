@@ -84,7 +84,6 @@ pub mod shared_ini_prelude;
 pub mod object_cast_prelude;
 /// Return-type coercion helper prelude (declared scalar returns, coercive and strict modes).
 pub mod return_coerce_prelude;
-pub mod natives_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.

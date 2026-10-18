@@ -649,21 +649,6 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     };
     timings.record_since("stdlib-prelude", phase_started);
 
-    // Inject the elephc-PHP core classes (`WeakMap`, `ErrorException`) the program can reach.
-    // Post-autoload for the same reason as the object-cast prelude: a program may name them only
-    // in autoloaded vendor files.
-    crate::progress::phase("natives-prelude");
-    let phase_started = Instant::now();
-    let ast = match crate::natives_prelude::inject_if_used(ast, &mut prelude_inventory) {
-        Ok(injected) => injected,
-        Err(e) => {
-            crate::progress::clear();
-            errors::report(&e);
-            process::exit(1);
-        }
-    };
-    timings.record_since("natives-prelude", phase_started);
-
     // Inject the declared-return coercion helper LAST among the preludes, so its detection sees
     // every injected declaration's return annotation too. `ir_lower` lowers a `return` whose static type
     // does not prove a declared scalar contract (`mixed` into `: bool`, `?int`, `int|string`, ...)

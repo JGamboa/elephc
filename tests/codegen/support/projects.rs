@@ -360,8 +360,6 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     // Mirrors `pipeline::compile`: the stdlib prelude is injected after autoloading too.
     let resolved = elephc::stdlib_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("stdlib prelude injection failed");
-    let resolved = elephc::natives_prelude::inject_if_used(resolved, &mut prelude_inventory)
-        .expect("natives prelude injection failed");
     // Mirrors `pipeline::compile`: the declared-return coercion helper `ir_lower` calls.
     let resolved = elephc::return_coerce_prelude::inject(resolved, &mut prelude_inventory)
         .expect("return-coercion prelude injection failed");
@@ -546,8 +544,6 @@ fn compile_and_run_files_with_defines_per_argv(
     // Mirrors `pipeline::compile`: the stdlib prelude is injected after autoloading too.
     let resolved = elephc::stdlib_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("stdlib prelude injection failed");
-    let resolved = elephc::natives_prelude::inject_if_used(resolved, &mut prelude_inventory)
-        .expect("natives prelude injection failed");
     // Mirrors `pipeline::compile`: the declared-return coercion helper `ir_lower` calls.
     let resolved = elephc::return_coerce_prelude::inject(resolved, &mut prelude_inventory)
         .expect("return-coercion prelude injection failed");
