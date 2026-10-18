@@ -238,3 +238,21 @@ try { $m[null] = 1; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
         "Serialization of 'WeakMap' is not allowed|Unserialization of 'WeakMap' is not allowed|WeakMap key must be an object\n"
     );
 }
+
+/// Internal Core prelude classes (`__ElephcWeakMapIterator`) stay out of
+/// `get_declared_classes()`, so instantiating every listed class does not reach them.
+#[test]
+fn test_declared_classes_hide_internal_core_prelude_classes() {
+    let out = compile_and_run(
+        r#"<?php
+$map = new WeakMap();
+foreach (get_declared_classes() as $class) {
+    if (stripos($class, '__elephc') === 0) {
+        echo "internal: ", $class, "\n";
+    }
+}
+echo in_array('WeakMap', get_declared_classes(), true) ? "WeakMap listed\n" : "WeakMap missing\n";
+"#,
+    );
+    assert_eq!(out, "WeakMap listed\n");
+}
