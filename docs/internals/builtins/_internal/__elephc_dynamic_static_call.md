@@ -2,7 +2,7 @@
 title: "__elephc_dynamic_static_call() - internals"
 description: "Compiler internals for __elephc_dynamic_static_call(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1121
+  order: 1135
 ---
 
 ## `__elephc_dynamic_static_call()` - internals

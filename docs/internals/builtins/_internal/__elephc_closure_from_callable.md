@@ -2,7 +2,7 @@
 title: "__elephc_closure_from_callable() - internals"
 description: "Compiler internals for __elephc_closure_from_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1074
+  order: 1088
 ---
 
 ## `__elephc_closure_from_callable()` - internals

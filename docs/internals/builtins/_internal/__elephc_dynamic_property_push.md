@@ -2,7 +2,7 @@
 title: "__elephc_dynamic_property_push() - internals"
 description: "Compiler internals for __elephc_dynamic_property_push(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1120
+  order: 1134
 ---
 
 ## `__elephc_dynamic_property_push()` - internals

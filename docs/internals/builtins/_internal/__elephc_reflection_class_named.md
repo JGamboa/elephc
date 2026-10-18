@@ -2,7 +2,7 @@
 title: "__elephc_reflection_class_named() - internals"
 description: "Compiler internals for __elephc_reflection_class_named(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1171
+  order: 1185
 ---
 
 ## `__elephc_reflection_class_named()` - internals

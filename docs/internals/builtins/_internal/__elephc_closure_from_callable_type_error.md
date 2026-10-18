@@ -2,7 +2,7 @@
 title: "__elephc_closure_from_callable_type_error() - internals"
 description: "Compiler internals for __elephc_closure_from_callable_type_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1075
+  order: 1089
 ---
 
 ## `__elephc_closure_from_callable_type_error()` - internals

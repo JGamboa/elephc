@@ -2,7 +2,7 @@
 title: "__elephc_callable_scope_class() - internals"
 description: "Compiler internals for __elephc_callable_scope_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1071
+  order: 1085
 ---
 
 ## `__elephc_callable_scope_class()` - internals

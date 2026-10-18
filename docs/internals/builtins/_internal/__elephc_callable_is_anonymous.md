@@ -2,7 +2,7 @@
 title: "__elephc_callable_is_anonymous() - internals"
 description: "Compiler internals for __elephc_callable_is_anonymous(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1069
+  order: 1083
 ---
 
 ## `__elephc_callable_is_anonymous()` - internals

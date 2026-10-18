@@ -2,7 +2,7 @@
 title: "__elephc_dynamic_static_property() - internals"
 description: "Compiler internals for __elephc_dynamic_static_property(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1122
+  order: 1136
 ---
 
 ## `__elephc_dynamic_static_property()` - internals

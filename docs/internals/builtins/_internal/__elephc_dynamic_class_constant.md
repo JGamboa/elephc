@@ -2,7 +2,7 @@
 title: "__elephc_dynamic_class_constant() - internals"
 description: "Compiler internals for __elephc_dynamic_class_constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1119
+  order: 1133
 ---
 
 ## `__elephc_dynamic_class_constant()` - internals
