@@ -434,3 +434,17 @@ expect_builtin_arity_error!(
     "<?php function up(array $a): string { return strtoupper($a); } echo up([\"x\"]);",
     "strtoupper(): Argument #1 ($string) must be of type string, array given"
 );
+
+// Tests version_compare() arity error when called with one argument (accepts 2 or 3).
+expect_builtin_arity_error!(
+    test_error_version_compare_wrong_args,
+    "<?php version_compare(\"1\");",
+    "version_compare() takes 2 or 3 arguments"
+);
+
+// Tests random_bytes() arity error when called with no arguments.
+expect_builtin_arity_error!(
+    test_error_random_bytes_wrong_args,
+    "<?php random_bytes();",
+    "random_bytes() takes exactly 1 argument"
+);
