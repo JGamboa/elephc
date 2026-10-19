@@ -792,6 +792,7 @@ pub enum RuntimeFnId {
     Usleep,
     GetResourceId,
     GetResourceType,
+    GetDebugType,
     Gettype,
     IntvalBase,
     IsCallable,
@@ -1293,6 +1294,7 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod |
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
+            RuntimeFnId::GetDebugType |
             RuntimeFnId::Gettype |
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
@@ -2642,6 +2644,9 @@ impl RuntimeFnId {
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
+                // `get_debug_type()` answers from the same static type names and class-name
+                // metadata, never from the inspected value's storage.
+                | RuntimeFnId::GetDebugType
                 // Class names come from metadata, including Closure and incomplete-class
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
@@ -3308,6 +3313,7 @@ impl RuntimeFnId {
             RuntimeFnId::Usleep => "usleep",
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
+            RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::Gettype => "gettype",
             RuntimeFnId::IntvalBase => "intval_base",
             RuntimeFnId::IsCallable => "is_callable",
