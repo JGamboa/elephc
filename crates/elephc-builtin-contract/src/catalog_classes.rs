@@ -232,6 +232,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("ReflectionObject", "reflectionobject", Class, Reflection, CheckerInjected),
     class!("ReflectionParameter", "reflectionparameter", Class, Reflection, CheckerInjected),
     class!("ReflectionProperty", "reflectionproperty", Class, Reflection, CheckerInjected),
+    class!("ReflectionType", "reflectiontype", Class, Reflection, CheckerInjected),
     class!("ReflectionUnionType", "reflectionuniontype", Class, Reflection, CheckerInjected),
     class!("RegexIterator", "regexiterator", Class, Spl, CheckerInjected),
     class!("RequestParseBodyException", "requestparsebodyexception", Class, Core, CheckerInjected, since: Php84),
