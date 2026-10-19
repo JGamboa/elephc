@@ -509,3 +509,26 @@ echo in_array('WeakMap', get_declared_classes(), true) ? "WeakMap listed\n" : "W
     );
     assert_eq!(out, "WeakMap listed\n");
 }
+
+/// `SessionHandlerInterface` is a builtin contract outside `--web` too: a user handler can
+/// implement it and be passed through a parameter typed with it.
+#[test]
+fn test_session_handler_interface_is_implementable_without_web() {
+    let out = compile_and_run(
+        r#"<?php
+class H implements SessionHandlerInterface {
+    public function open(string $path, string $name): bool { return true; }
+    public function close(): bool { return true; }
+    public function read(string $id): string|false { return "r" . $id; }
+    public function write(string $id, string $data): bool { return true; }
+    public function destroy(string $id): bool { return true; }
+    public function gc(int $max_lifetime): int|false { return 0; }
+}
+function useHandler(SessionHandlerInterface $h): string|false { return $h->read("1"); }
+$h = new H();
+echo ($h instanceof SessionHandlerInterface ? 1 : 0), useHandler($h), "\n";
+echo interface_exists('SessionHandlerInterface') ? "exists\n" : "missing\n";
+"#,
+    );
+    assert_eq!(out, "1r1\nexists\n");
+}

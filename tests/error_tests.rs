@@ -376,6 +376,15 @@ fn test_error_iterator_aggregate_cannot_be_redeclared() {
     );
 }
 
+/// A user `SessionHandlerInterface` collides with the builtin interface, as in PHP.
+#[test]
+fn test_error_session_handler_interface_cannot_be_redeclared() {
+    expect_error(
+        "<?php interface SessionHandlerInterface { public function close(): bool; }",
+        "Cannot redeclare built-in interface: SessionHandlerInterface",
+    );
+}
+
 /// Verifies the error diagnostic for iterator method requires declared return type.
 #[test]
 fn test_error_iterator_method_requires_declared_return_type() {

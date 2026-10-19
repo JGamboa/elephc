@@ -244,7 +244,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("SensitiveParameterValue", "sensitiveparametervalue", Class, Core, Prelude, since: Php82),
     class!("Serializable", "serializable", Interface, Core, CheckerInjected),
     class!("SessionHandler", "sessionhandler", Class, Session, Prelude),
-    class!("SessionHandlerInterface", "sessionhandlerinterface", Interface, Session, Prelude),
+    class!("SessionHandlerInterface", "sessionhandlerinterface", Interface, Session, CheckerInjected),
     class!("SessionIdInterface", "sessionidinterface", Interface, Session, Prelude),
     class!("SessionUpdateTimestampHandlerInterface", "sessionupdatetimestamphandlerinterface", Interface, Session, Prelude),
     class!("SortDirection", "sortdirection", Enum, Core, CheckerInjected, since: Php86),
