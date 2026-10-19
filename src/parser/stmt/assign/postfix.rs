@@ -273,6 +273,19 @@ pub(crate) fn assignment_target_store_stmt(
                 value,
             })
         }
+        ExprKind::DynamicPropertyAccess { object, property } => Ok(StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::DynamicPropertyAccess { object, property },
+                    target.span,
+                )),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        ))),
         ExprKind::ArrayAccess { array, index } => match array.kind {
             ExprKind::Variable(array) => Ok(StmtKind::ArrayAssign {
                 array,
@@ -551,6 +564,32 @@ fn has_delayed_static_receiver(target: &Expr) -> bool {
         ExprKind::ArrayAccess { array, .. } => has_delayed_static_receiver(array),
         _ => false,
     }
+}
+
+/// Builds the statement for `$place[] = value` from an already-parsed place: a `foreach`
+/// value target such as `foreach ($rows as $list[])`.
+pub(crate) fn append_to_place_stmt(place: Expr, element: Expr, span: Span) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_dynamic_member_write(&place, span)?;
+    let place_span = place.span;
+    let stmt = match place.kind {
+        ExprKind::Variable(array) => StmtKind::ArrayPush { array, value: element },
+        ExprKind::PropertyAccess { object, property } => {
+            StmtKind::PropertyArrayPush { object, property, value: element }
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            StmtKind::StaticPropertyArrayPush { receiver, property, value: element }
+        }
+        kind @ ExprKind::ArrayAccess { .. } => {
+            return lower_nested_append_assignment(Expr::new(kind, place_span), element, span);
+        }
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Appending to this foreach target (`foreach ($a as $place[])`) is not supported; append to a variable, property or array element",
+            ))
+        }
+    };
+    Ok(Stmt::new(stmt, span))
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)

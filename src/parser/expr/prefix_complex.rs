@@ -821,33 +821,15 @@ pub(super) fn parse_named_expr(
                 let property = property.clone();
                 *pos += 1;
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-                    // `C::$method(args)` is a dynamic static method call. Desugar to
-                    // `call_user_func([C::class, $method], ...args)` so it reuses the runtime
-                    // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
-                    *pos += 1; // consume '('
-                    let dynamic_args = parse_args(tokens, pos, span)?;
-                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-                    crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
-                        &dynamic_args,
+                    // `C::$method(args)` calls the method named by `$method` on `C`.
+                    let method = Expr::new(ExprKind::Variable(property), span);
+                    return super::calls::finish_scoped_dynamic_method_call(
+                        tokens,
+                        pos,
                         span,
-                    )?;
-                    let receiver = Expr::new(
-                        ExprKind::ClassConstant {
-                            receiver: receiver.clone(),
-                        },
-                        span,
+                        receiver.clone(),
+                        method,
                     );
-                    let method_expr = Expr::new(ExprKind::Variable(property), span);
-                    let mut call_args =
-                        vec![Expr::new(ExprKind::ArrayLiteral(vec![receiver, method_expr]), span)];
-                    call_args.extend(dynamic_args);
-                    return Ok(Expr::new(
-                        ExprKind::FunctionCall {
-                            name: crate::names::Name::unqualified("call_user_func"),
-                            args: call_args,
-                        },
-                        span,
-                    ));
                 }
                 return Ok(Expr::new(
                     ExprKind::StaticPropertyAccess {
@@ -865,6 +847,17 @@ pub(super) fn parse_named_expr(
                     },
                     span,
                 ));
+            }
+            // `C::{'is' . $kind}(args)`: a computed method name.
+            Some(Token::LBrace) => {
+                let method = super::calls::parse_braced_member_name(tokens, pos, span)?;
+                return super::calls::finish_scoped_dynamic_method_call(
+                    tokens,
+                    pos,
+                    span,
+                    receiver.clone(),
+                    method,
+                );
             }
             // PHP 8 allows semi-reserved keywords as static method / class-constant names
             // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.

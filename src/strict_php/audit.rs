@@ -78,9 +78,12 @@ fn is_dynamic_class_member_desugar(name: &Name, args: &[Expr]) -> bool {
         "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property" => {
             matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }])
         }
-        "__elephc_dynamic_static_call" => {
-            matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }, ..])
-        }
+        // `self::$m()` / `C::{expr}()` mark the named class with a `::class` receiver.
+        "__elephc_dynamic_static_call" => matches!(
+            args,
+            [_, Expr { kind: ExprKind::StringLiteral(_), .. }, ..]
+                | [Expr { kind: ExprKind::ClassConstant { .. } | ExprKind::StringLiteral(_), .. }, _, ..]
+        ),
         _ => false,
     }
 }

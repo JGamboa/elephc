@@ -232,7 +232,7 @@ fn runtime_class_name_expr(receiver_type: &PhpType, receiver: Expr, span: Span) 
 }
 
 /// Builds `strcasecmp($name, 'Class') === 0`.
-fn class_name_matches_expr(name_local: &str, class_name: &str, span: Span) -> Expr {
+pub(super) fn class_name_matches_expr(name_local: &str, class_name: &str, span: Span) -> Expr {
     let compare = Expr::new(
         ExprKind::FunctionCall {
             name: Name::unqualified("strcasecmp"),
@@ -337,6 +337,26 @@ fn lower_dynamic_static_call(
     let [receiver, method, call_args @ ..] = args else {
         return None;
     };
+    {
+        // `self::$m()` / `static::{expr}()` / `C::$m()`: the class is named in the source and
+        // only the method name is dynamic. The parser marks the receiver with `<Receiver>::class`;
+        // constant folding has already turned a named `C::class` into the literal `'C'`, and may
+        // have folded the name itself (`parent::{'a' . 'b'}()`), which must still forward
+        // late static binding like `parent::ab()`.
+        let literal_method = matches!(method.kind, ExprKind::StringLiteral(_));
+        let scoped = match &receiver.kind {
+            ExprKind::ClassConstant { receiver } => Some(receiver.clone()),
+            ExprKind::StringLiteral(class_name) if !literal_method => {
+                Some(StaticReceiver::Named(Name::from(class_name.clone())))
+            }
+            _ => None,
+        };
+        if let Some(scoped) = scoped {
+            return super::scoped_dynamic_calls::lower_scoped_dynamic_call(
+                ctx, &scoped, method, call_args, expr,
+            );
+        }
+    }
     let ExprKind::StringLiteral(method) = &method.kind else {
         return None;
     };
@@ -611,12 +631,12 @@ fn subclass_overrides_method(ctx: &LoweringContext<'_, '_>, class_name: &str, me
 }
 
 /// Builds a string literal expression.
-fn literal(text: &str, span: Span) -> Expr {
+pub(super) fn literal(text: &str, span: Span) -> Expr {
     Expr::new(ExprKind::StringLiteral(text.to_string()), span)
 }
 
 /// Folds `parts` into one left-associated `.` concatenation.
-fn string_concat_expr(parts: Vec<Expr>, span: Span) -> Expr {
+pub(super) fn string_concat_expr(parts: Vec<Expr>, span: Span) -> Expr {
     parts
         .into_iter()
         .reduce(|left, right| {
@@ -629,7 +649,7 @@ fn string_concat_expr(parts: Vec<Expr>, span: Span) -> Expr {
 }
 
 /// Terminates the current block with a `CondBr` on `cond`.
-fn conditional_branch(ctx: &mut LoweringContext<'_, '_>, cond: ValueId, then_target: BlockId, else_target: BlockId) {
+pub(super) fn conditional_branch(ctx: &mut LoweringContext<'_, '_>, cond: ValueId, then_target: BlockId, else_target: BlockId) {
     ctx.builder.terminate(Terminator::CondBr {
         cond,
         then_target,
@@ -640,7 +660,7 @@ fn conditional_branch(ctx: &mut LoweringContext<'_, '_>, cond: ValueId, then_tar
 }
 
 /// Throws `new Error($message)` and keeps the unreachable fallthrough well formed.
-fn throw_error_and_merge(
+pub(super) fn throw_error_and_merge(
     ctx: &mut LoweringContext<'_, '_>,
     error_class: &str,
     message: Expr,
@@ -684,7 +704,7 @@ fn strip_one_leading_backslash(name: Expr, span: Span) -> Expr {
 
 /// Returns whether the lowering scope (the class whose code is being lowered, if any) may see a
 /// member of `visibility` declared on `declaring`, by PHP's rules.
-fn scope_can_access(
+pub(super) fn scope_can_access(
     ctx: &LoweringContext<'_, '_>,
     visibility: Option<&Visibility>,
     declaring: &str,
@@ -703,7 +723,7 @@ fn scope_can_access(
 }
 
 /// PHP's spelling of a non-public visibility in access errors.
-fn visibility_word(visibility: Option<&Visibility>) -> &'static str {
+pub(super) fn visibility_word(visibility: Option<&Visibility>) -> &'static str {
     match visibility {
         Some(Visibility::Private) => "private",
         _ => "protected",
@@ -831,7 +851,7 @@ pub(super) fn evaluate_args_for_effects(
 /// Returns the arguments one arm passes. PHP evaluates surplus arguments to a non-variadic user
 /// method and then ignores them; the call node cannot carry them, so every argument is first
 /// evaluated, in order, into a temporary and only the first `max` are passed.
-fn arm_call_args(
+pub(super) fn arm_call_args(
     ctx: &mut LoweringContext<'_, '_>,
     call_args: &[Expr],
     max: Option<usize>,
@@ -879,7 +899,7 @@ fn inherited_private_static_method<'a>(
 }
 
 /// Expands `...[a, b]` (a literal list) into plain arguments so arity can be checked per arm.
-fn flatten_literal_spreads(args: &[Expr]) -> Vec<Expr> {
+pub(super) fn flatten_literal_spreads(args: &[Expr]) -> Vec<Expr> {
     let mut flat = Vec::with_capacity(args.len());
     for arg in args {
         match &arg.kind {

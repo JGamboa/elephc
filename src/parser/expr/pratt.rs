@@ -256,6 +256,16 @@ fn parse_expr_bp_inner(
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
+                            if !nullsafe && super::dynamic_calls::has_named_args(&dynamic_args) {
+                                // The method is only named at run time: bind the names there.
+                                lhs = super::dynamic_calls::dynamic_method_call_with_named_args(
+                                    lhs,
+                                    property,
+                                    dynamic_args,
+                                    arrow_span,
+                                )?;
+                                continue;
+                            }
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
                             if nullsafe {
                                 lhs = Expr::new(
@@ -391,6 +401,8 @@ fn parse_expr_bp_inner(
                         | ExprKind::FunctionCall { .. }
                         | ExprKind::MethodCall { .. }
                         | ExprKind::StaticMethodCall { .. }
+                        // `[$class, 'method']()` calls the callable array literal.
+                        | ExprKind::ArrayLiteral(_)
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;
