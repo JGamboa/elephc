@@ -491,3 +491,21 @@ eval($source);
     assert_eq!(out.stdout, "same:closure:1:1:0:dead:eval:0:dead");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Internal Core prelude classes (`__ElephcWeakMapIterator`) stay out of
+/// `get_declared_classes()`, so instantiating every listed class does not reach them.
+#[test]
+fn test_declared_classes_hide_internal_core_prelude_classes() {
+    let out = compile_and_run(
+        r#"<?php
+$map = new WeakMap();
+foreach (get_declared_classes() as $class) {
+    if (stripos($class, '__elephc') === 0) {
+        echo "internal: ", $class, "\n";
+    }
+}
+echo in_array('WeakMap', get_declared_classes(), true) ? "WeakMap listed\n" : "WeakMap missing\n";
+"#,
+    );
+    assert_eq!(out, "WeakMap listed\n");
+}
