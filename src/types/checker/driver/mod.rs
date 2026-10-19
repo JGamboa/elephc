@@ -495,7 +495,16 @@ pub(super) fn check_types_impl(
                 &checker.functions,
             );
         }
-        let stabilized = checker.classes == classes_before
+        // The builtin SPL storage patch below re-pins fields such as
+        // `CallbackFilterIterator::$callback` before every method pass, so a round that only
+        // moved a pinned field changes nothing the next round reads. Compare modulo the patch:
+        // otherwise a constructor call that widens the pinned field keeps the loop alternating
+        // until the oscillation detector refuses the program. The classes the top level left
+        // are kept as they are.
+        let classes_after = checker.classes.clone();
+        patch_builtin_spl_storage_signatures(&mut checker);
+        let patched_after = std::mem::replace(&mut checker.classes, classes_after);
+        let stabilized = patched_after == classes_before
             && checker.functions == functions_before
             && checker.static_local_declared_types == statics_before;
         if stabilized || final_rounds_remaining == 0 {
@@ -503,7 +512,7 @@ pub(super) fn check_types_impl(
         }
         if let Some(message) = oscillation.record(
             &classes_before,
-            &checker.classes,
+            &patched_after,
             Some((&functions_before, &checker.functions)),
         ) {
             errors.push(CompileError::new(crate::span::Span::dummy(), &message));
