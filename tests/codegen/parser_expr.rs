@@ -283,6 +283,24 @@ fn test_dynamic_static_call_arity_per_candidate() {
     );
 }
 
+/// Regression: a `$class::m()` arm that throws `ArgumentCountError` for too few arguments
+/// still evaluates the supplied arguments first, in order, as PHP does.
+#[test]
+fn test_dynamic_static_call_too_few_arguments_evaluates_supplied_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+        class C { public static function f($a, $b) { return $a . $b; } }
+        function side(int $n) { echo "side$n\n"; return $n; }
+        $c = 'C';
+        try { $c::f(side(1)); } catch (\ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "side1\nToo few arguments to function C::f(), 1 passed and exactly 2 expected\n"
+    );
+}
+
 /// Verifies a class-name string loses exactly one leading backslash, like PHP.
 #[test]
 fn test_dynamic_class_name_strips_one_leading_backslash() {

@@ -50,6 +50,52 @@ pub(super) fn lower_dynamic_class_member_call(
     let ExprKind::StringLiteral(member) = &member.kind else {
         return None;
     };
+    Some(lower_dynamic_class_member(ctx, kind, receiver, member, expr, false))
+}
+
+/// Lowers `$class::$prop` as the operand of a silent probe (`??`, `isset()`, `empty()`), or
+/// returns `None` when `expr` is not a dynamic static-property read.
+///
+/// PHP reads the property in `BP_VAR_IS` mode there: an uninitialized typed property, an
+/// undeclared name or one the scope cannot see yields `null` instead of raising. Known
+/// limitation: an unknown class also yields `null`, where PHP throws `Class "X" not found`.
+pub(super) fn lower_dynamic_static_property_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return None;
+    };
+    if php_symbol_key(name.as_str().trim_start_matches('\\')) != "__elephc_dynamic_static_property" {
+        return None;
+    }
+    let [receiver, member] = args.as_slice() else {
+        return None;
+    };
+    let ExprKind::StringLiteral(member) = &member.kind else {
+        return None;
+    };
+    Some(lower_dynamic_class_member(
+        ctx,
+        DynamicMember::StaticProperty,
+        receiver,
+        member,
+        expr,
+        true,
+    ))
+}
+
+/// Expands one dynamic-receiver member read; `silent` selects the probe semantics described on
+/// [`lower_dynamic_static_property_probe`].
+fn lower_dynamic_class_member(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: DynamicMember,
+    receiver: &Expr,
+    member: &str,
+    expr: &Expr,
+    silent: bool,
+) -> LoweredValue {
+    let member = &member.to_string();
     let span = expr.span;
 
     // Evaluate the receiver once; later reads go through the synthetic local.
@@ -87,35 +133,58 @@ pub(super) fn lower_dynamic_class_member_call(
         ctx.builder.position_at_end(skip);
     }
 
-    // No candidate matched: PHP raises a catchable Error.
-    let error = Expr::new(
-        ExprKind::NewObject {
-            class_name: Name::unqualified("Error"),
-            args: vec![missing_member_message_expr(kind, &name_local, member, span)],
-        },
-        span,
-    );
-    let error = lower_expr(ctx, &error);
-    // Expression-position throw, exactly like `lower_throw_access_error_expr`: the opcode
-    // unwinds, and the null store below only keeps the (unreachable) fallthrough well formed.
-    ctx.emit_void(
-        Op::ThrowException,
-        vec![error.value],
-        None,
-        Op::ThrowException.default_effects(),
-        Some(span),
-    );
-    store_expr_into_temp(ctx, &result_temp, result_type.clone(), &Expr::new(ExprKind::Null, span), span);
-    branch_to(ctx, merge);
+    if silent {
+        // No class declares the property: a silent probe answers null. PHP still throws
+        // `Class "X" not found` for an unknown class; telling the two apart needs a runtime
+        // class table at this site, the code-size cost the non-silent message also avoids.
+        store_expr_into_temp(ctx, &result_temp, result_type.clone(), &Expr::new(ExprKind::Null, span), span);
+        branch_to(ctx, merge);
+    } else {
+        // No candidate matched: PHP raises a catchable Error.
+        let error = Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("Error"),
+                args: vec![missing_member_message_expr(kind, &name_local, member, span)],
+            },
+            span,
+        );
+        let error = lower_expr(ctx, &error);
+        // Expression-position throw, exactly like `lower_throw_access_error_expr`: the opcode
+        // unwinds, and the null store below only keeps the (unreachable) fallthrough well formed.
+        ctx.emit_void(
+            Op::ThrowException,
+            vec![error.value],
+            None,
+            Op::ThrowException.default_effects(),
+            Some(span),
+        );
+        store_expr_into_temp(ctx, &result_temp, result_type.clone(), &Expr::new(ExprKind::Null, span), span);
+        branch_to(ctx, merge);
+    }
 
     for (arm, class_name) in arms {
         ctx.builder.position_at_end(arm);
         ctx.restore_initialized_slots(split_initialized.clone());
         if let Some(message) = member_read_access_error(ctx, kind, &class_name, member) {
-            throw_error_and_merge(ctx, "Error", literal(&message, span), &result_temp, merge, span);
+            if silent {
+                // A property the scope cannot see is simply "not set" to a silent probe.
+                store_expr_into_temp(ctx, &result_temp, result_type.clone(), &Expr::new(ExprKind::Null, span), span);
+                branch_to(ctx, merge);
+            } else {
+                throw_error_and_merge(ctx, "Error", literal(&message, span), &result_temp, merge, span);
+            }
             continue;
         }
         let receiver = StaticReceiver::Named(Name::from(class_name));
+        if silent && super::property_access::static_property_can_be_uninitialized(ctx, &receiver, member) {
+            // The ordinary read raises on an uninitialized typed slot; the probe answers null.
+            let value = super::property_access::lower_initialized_static_property_value(
+                ctx, &receiver, member, expr,
+            );
+            store_value_into_temp(ctx, &result_temp, result_type.clone(), value, span);
+            branch_to(ctx, merge);
+            continue;
+        }
         let read = match kind {
             DynamicMember::Constant => Expr::new(
                 ExprKind::ScopedConstantAccess { receiver, name: member.clone() },
@@ -130,8 +199,9 @@ pub(super) fn lower_dynamic_class_member_call(
         branch_to(ctx, merge);
     }
     ctx.builder.position_at_end(merge);
-    Some(take_owned_temp(ctx, &result_temp, span))
+    take_owned_temp(ctx, &result_temp, span)
 }
+
 
 /// Builds the expression that yields the receiver's runtime class name as a string.
 ///
@@ -410,6 +480,8 @@ fn lower_dynamic_static_call(
                 "Too few arguments to function {declaring}::{method}(), {} passed and {bound} {required} expected",
                 call_args.len()
             );
+            // PHP evaluates the supplied arguments before the callee raises the arity error.
+            evaluate_args_for_effects(ctx, call_args, span);
             throw_error_and_merge(
                 ctx,
                 "ArgumentCountError",
@@ -673,6 +745,24 @@ struct MethodCandidate {
     max_args: Option<usize>,
     /// Why this arm cannot be lowered faithfully; the arm then throws instead.
     unsupported: Option<String>,
+}
+
+/// Evaluates every supplied argument, in order, only for its side effects, keeping each value
+/// in a synthetic local so its ownership is released like any other temporary.
+///
+/// Used by arms that raise `ArgumentCountError` for too few arguments: PHP evaluates the
+/// arguments the caller supplied before the callee rejects the call.
+pub(super) fn evaluate_args_for_effects(
+    ctx: &mut LoweringContext<'_, '_>,
+    call_args: &[Expr],
+    span: Span,
+) {
+    for arg in call_args {
+        let value = lower_expr(ctx, arg);
+        let value_type = normalize_value_php_type(ctx.builder.value_php_type(value.value));
+        let local = ctx.declare_synthetic_php_local(value_type.clone());
+        store_value_into_temp(ctx, &local, value_type, value, span);
+    }
 }
 
 /// Returns the arguments one arm passes. PHP evaluates surplus arguments to a non-variadic user

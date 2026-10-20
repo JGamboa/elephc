@@ -181,3 +181,26 @@ fn test_dynamic_class_constant_is_accepted_by_strict_php() {
     );
     assert_eq!(out, "v1v1");
 }
+
+/// Regression: `$class::$p` under `??`, `isset()` and `empty()` is a silent probe, as in PHP:
+/// an uninitialized typed property, an undeclared name and a property the scope cannot see
+/// answer the default / `false` / `true` instead of raising, while a plain read still raises.
+#[test]
+fn test_dynamic_static_property_silent_probes() {
+    let out = compile_and_run(
+        r#"<?php
+        class C { public static int $p; private static int $priv = 3; public static $n = null; public static int $r = 5; }
+        $c = 'C';
+        echo $c::$p ?? 7, $c::$nope ?? 'a', $c::$priv ?? 'b', $c::$r ?? 9, "\n";
+        var_dump(isset($c::$p), isset($c::$nope), isset($c::$priv), isset($c::$n), isset($c::$r));
+        var_dump(empty($c::$p), empty($c::$nope), empty($c::$r));
+        $o = new C;
+        echo $o::$p ?? 'd', "\n";
+        try { echo $c::$p, "\n"; } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "7ab5\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nd\nTyped static property C::$p must not be accessed before initialization\n"
+    );
+}
