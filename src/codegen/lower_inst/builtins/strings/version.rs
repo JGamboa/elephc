@@ -74,6 +74,7 @@ pub(crate) fn lower_version_compare(ctx: &mut FunctionContext<'_>, inst: &Instru
         }
         OperatorShape::Boxed => {
             let operator = expect_operand(inst, 2)?;
+            // -- stage a boxed operator: string text, null selects the int form --
             ctx.load_value_to_result(operator)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             let not_string = ctx.next_label("version_compare_operator_not_string");
@@ -108,6 +109,7 @@ pub(crate) fn lower_version_compare(ctx: &mut FunctionContext<'_>, inst: &Instru
         }
     }
     // The predicate flag decides how a boxed result is shaped after the call.
+    // -- park the predicate flag and reload both versions for the helper --
     abi::emit_push_reg(ctx.emitter, has_reg);
     if arm {
         ctx.emitter.instruction("ldp x3, x4, [sp, #16]");                       // reload the second version under the parked flag
@@ -118,6 +120,7 @@ pub(crate) fn lower_version_compare(ctx: &mut FunctionContext<'_>, inst: &Instru
         ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");               // reload the first version pointer
         ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 40]");               // reload the first version length
     }
+    // -- compare, raising ValueError for an unknown operator --
     abi::emit_call_label(ctx.emitter, "__rt_version_compare");
     let ok = ctx.next_label("version_compare_operator_ok");
     if arm {
@@ -128,6 +131,7 @@ pub(crate) fn lower_version_compare(ctx: &mut FunctionContext<'_>, inst: &Instru
     }
     super::super::exceptions::emit_value_error(ctx, VERSION_COMPARE_OPERATOR_MESSAGE);
     ctx.emitter.label(&ok);
+    // -- restore the parked flag and versions, then shape the result --
     let flag = if arm { "x9" } else { "r11" };
     abi::emit_pop_reg(ctx.emitter, flag);
     abi::emit_pop_reg_pair(ctx.emitter, v2_ptr, v2_len);

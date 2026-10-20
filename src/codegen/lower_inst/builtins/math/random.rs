@@ -84,6 +84,7 @@ pub(crate) fn lower_random_bytes(ctx: &mut FunctionContext<'_>, inst: &Instructi
         super::super::super::exceptions::ValueGuard::SignedAtLeast(result, 1),
         RANDOM_BYTES_LENGTH_MESSAGE,
     );
+    // -- fill the buffer, throwing when the operating system refuses randomness --
     abi::emit_call_label(ctx.emitter, "__rt_random_bytes");
     let ok = ctx.next_label("random_bytes_ok");
     match ctx.emitter.target.arch {
