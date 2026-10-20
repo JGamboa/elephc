@@ -30,6 +30,10 @@ fn forwards(receiver: &StaticReceiver) -> bool {
     matches!(receiver, StaticReceiver::Static | StaticReceiver::Self_ | StaticReceiver::Parent)
 }
 
+/// Returns true when one statement may observe the called class: a `static::` write target,
+/// or any tainting expression in its own expressions or nested bodies (blocks, loops, `try`,
+/// `switch`). Nested function and class declarations stop the walk, since their bodies run in
+/// their own scope.
 fn stmt_tainted(stmt: &Stmt) -> bool {
     let expr = expr_tainted;
     let body = body_uses_late_static_binding;
@@ -98,6 +102,10 @@ fn stmt_tainted(stmt: &Stmt) -> bool {
     }
 }
 
+/// Returns true when an expression may observe the called class: a `static` receiver
+/// (`static::X`, `static::$p`, `static::class`, `new static`, `instanceof static`), a forwarding
+/// `self::`/`parent::`/`static::` method call, or `get_called_class()`, found anywhere in its
+/// operands and in the bodies of closures it creates.
 fn expr_tainted(value: &Expr) -> bool {
     let expr = expr_tainted;
     let args = |values: &[Expr]| values.iter().any(expr_tainted);
