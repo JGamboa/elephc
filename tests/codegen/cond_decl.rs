@@ -1,56 +1,20 @@
 //! Purpose:
-//! End-to-end coverage for conditional declarations: the
-//! `if (! function_exists('f')) { function f() {} }` polyfill idiom (as in framework
-//! `helpers.php` files), `use` imports inside `yield`, and the `UnitEnum`/`BackedEnum` interfaces.
+//! End-to-end coverage for the conditional-declaration follow-ups that are not optimizer
+//! folds: Laravel's `helpers.php` polyfills across includes together with enum helpers, `use`
+//! imports inside `yield` and composite expressions, and the `UnitEnum`/`BackedEnum` interfaces.
 //!
 //! Called from:
 //! - The native codegen suite (`tests/codegen/mod.rs`).
 //!
 //! Key details:
 //! - Expected output was produced by PHP 8.5 from the same source.
+//! - The compile-time `function_exists()` polyfill folding cases live in
+//!   `tests/codegen/optimizer/function_exists_guards.rs`.
 
 use crate::support::*;
 
-/// Verifies a guarded user function is declared, and that `function_exists` follows program order.
-#[test]
-fn test_function_exists_guard_declares_user_function() {
-    let out = compile_and_run(r#"<?php
-var_dump(function_exists('g_late'));
-if (!function_exists('g_late')) { function g_late() { return 'late'; } }
-var_dump(function_exists('g_late'));
-echo g_late(), "\n";
-function probe() { return function_exists('g_late') ? 'y' : 'n'; }
-echo probe(), "\n";
-"#);
-    assert_eq!(out, "bool(false)\nbool(true)\nlate\ny\n");
-}
-
-/// Verifies an existing builtin or unconditional user function keeps the branch from declaring.
-#[test]
-fn test_function_exists_guard_skips_existing_functions() {
-    let out = compile_and_run(r#"<?php
-if (!function_exists('strlen')) { echo "no\n"; }
-function plain() { return 'plain'; }
-if (!function_exists('plain')) { function plain2() { return 'x'; } }
-var_dump(function_exists('plain2'));
-echo plain(), "\n";
-if (function_exists('nowhere')) { echo "no\n"; } else { echo "absent\n"; }
-"#);
-    assert_eq!(out, "bool(false)\nplain\nabsent\n");
-}
-
-/// Verifies the leading backslash, case-insensitive names and an invalid `\\` needle.
-#[test]
-fn test_function_exists_guard_name_normalization() {
-    let out = compile_and_run(r#"<?php
-if (!function_exists('\Mixed_Case')) { function mixed_case() { return 'mc'; } }
-echo MIXED_CASE(), "\n";
-var_dump(function_exists('\\\\mixed_case'), function_exists('\MIXED_case'));
-"#);
-    assert_eq!(out, "mc\nbool(false)\nbool(true)\n");
-}
-
 /// Verifies Laravel's helpers.php pattern across includes: first included declaration wins,
+
 /// calls from earlier-declared functions resolve, and a namespaced guard name works.
 #[test]
 fn test_function_exists_guard_across_included_helpers() {
@@ -100,17 +64,9 @@ if (! function_exists('Illuminate\Support\enum_valuex')) {
 }
 
 /// Control (also passes on main): a guard whose declaration is not a clean top-level polyfill
-/// stays a clear error.
-#[test]
-fn test_function_exists_guard_inside_loop_is_not_hoisted() {
-    let err = compile_cli_file_with_flags_expect_failure(
-        "<?php\nforeach ([1] as $_) { if (!function_exists('lp')) { function lp() { return 1; } } }\necho lp();\n",
-        &[],
-    );
-    assert!(err.contains("Undefined function: lp"), "{err}");
-}
 
 /// Verifies `use` imports apply inside `yield`, `yield $k =>`, `yield from`, arrow fns and closures
+
 /// in generators, `clone`, `new $c(...)` arguments, `$o->{$k} = ...` and assignment expressions.
 #[test]
 fn test_use_imports_resolve_inside_yield_and_composite_expressions() {
@@ -146,7 +102,9 @@ A\R\P
 }
 
 /// Verifies `UnitEnum`/`BackedEnum` as types: `instanceof`, parameter types (also nullable, in
+
 /// unions and through a derived interface), `->name`/`->value` dispatched on the runtime enum,
+
 /// and an untyped read of `->value` through `UnitEnum`.
 #[test]
 fn test_unit_and_backed_enum_interfaces_as_types() {
@@ -183,40 +141,8 @@ int(2)
 "#);
 }
 
-/// Verifies an include-discovered function keeps its runtime load-order answer next to a polyfill.
-#[test]
-fn test_function_exists_guard_leaves_include_variants_to_runtime() {
-    let out = compile_and_run_files(
-        &[
-            (
-                "main.php",
-                r#"<?php
-function load_lib() { include 'lib.php'; }
-if (!function_exists('poly_cd')) { function poly_cd() { return 'poly'; } }
-echo function_exists('late_cd') ? 'yes' : 'no', '|', poly_cd(), '|';
-load_lib();
-echo function_exists('late_cd') ? late_cd() : 'no';
-"#,
-            ),
-            ("lib.php", "<?php function late_cd() { return 'late'; }"),
-        ],
-        "main.php",
-    );
-    assert_eq!(out, "no|poly|late");
-}
-
-/// Control (also passes on main): top-level `eval()` keeps literal probes at runtime, where eval-declared names exist.
-#[test]
-fn test_function_exists_probe_after_top_level_eval_stays_runtime() {
-    let out = compile_and_run(r#"<?php
-echo function_exists('ev_cd') ? 'y' : 'n';
-eval('function ev_cd() { return "e"; }');
-echo function_exists('ev_cd') ? ev_cd() : 'n', "\n";
-"#);
-    assert_eq!(out, "ne\n");
-}
-
 /// Reading `->value` after `instanceof BackedEnum` on a `mixed` value, in a namespace that
+
 /// imports the interface (issue #832), dispatches on the runtime enum.
 #[test]
 fn test_backed_enum_value_after_instanceof_narrowing() {
