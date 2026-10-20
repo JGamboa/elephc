@@ -439,7 +439,7 @@ pub(super) fn resolve_stmts(
                 by_ref_return,
                 body,
             } => {
-                let body = resolve_isolated(
+                let body = resolve_function_body(
                     body.clone(),
                     base_dir,
                     declared_once,
@@ -590,6 +590,29 @@ pub(super) fn resolve_isolated(
     )
 }
 
+/// Resolves a function, method or closure body like [`resolve_isolated`], but in a new
+/// function scope: the enclosing function's `static $x;` locals (`ResolveState::static_locals`)
+/// are not visible there, since the body's `$x` is a separate ordinary local.
+pub(super) fn resolve_function_body(
+    stmts: Vec<Stmt>,
+    base_dir: &Path,
+    declared_once: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
+) -> Result<Vec<Stmt>, CompileError> {
+    let mut local = state.clone();
+    local.static_locals.clear();
+    resolve_stmts(
+        stmts,
+        base_dir,
+        declared_once,
+        include_chain,
+        &mut local,
+        function_variants,
+    )
+}
+
 /// Resolves the body of each class method in isolation, cloning `state` for each
 /// method so that include/constant effects inside one method do not leak to others.
 fn resolve_methods(
@@ -603,7 +626,7 @@ fn resolve_methods(
     methods
         .iter()
         .map(|method| {
-            let body = resolve_isolated(
+            let body = resolve_function_body(
                 method.body.clone(),
                 base_dir,
                 declared_once,

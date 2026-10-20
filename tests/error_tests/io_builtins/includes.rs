@@ -168,12 +168,16 @@ fn test_error_include_expression_dynamic_path_is_rejected() {
 /// Verifies a variable or property passed to a call before an include of the same call is a
 /// compile error: PHP binds it before the file runs, so a file that writes it
 /// must not change it, but the parameter may be by reference, so it cannot be copied either.
+/// A dimension whose index is computed (`$a[index()]`) is such a place too.
 #[test]
 fn test_error_place_argument_before_include_is_rejected() {
     for src in [
         "<?php function f($a, $b) { echo $a, $b; } $x = 1; f($x, require 'a.php');",
         "<?php class K { public static $p = 1; } function f($a, $b) {} f(K::$p, require 'a.php');",
         "<?php function f($a, $b) {} $x = 1; $c = true; f($x, $c ? require 'a.php' : 0);",
+        // A dimension with a computed index is as writable as one with a literal index.
+        "<?php function index() { return 0; } function f(&$v, $b) { $v = 9; } $a = [1]; f($a[index()], require 'a.php');",
+        "<?php function k() { return 'x'; } function f(&$v, $b) {} $o = new stdClass; $o->p = []; f($o->p[k()][0], require 'a.php');",
     ] {
         let err = resolve_files_error(&[("main.php", src), ("a.php", "<?php $x = 2; return 10;")], "main.php");
         assert!(

@@ -291,6 +291,11 @@ impl Hoister {
         if let ExprKind::NamedArg { value, .. } = &mut expr.kind {
             return self.visit_in(value, ctx);
         }
+        // A closure is one completed operand: its creation captures values, but its body (and
+        // any include in it) runs only when it is called and is resolved on its own.
+        if matches!(expr.kind, ExprKind::Closure { .. }) {
+            return self.completed(expr, ctx);
+        }
         if !expr_has_includes(expr) {
             return self.completed(expr, ctx);
         }
@@ -319,7 +324,7 @@ impl Hoister {
             return Ok(());
         }
         let span = expr.span;
-        if (ctx == Ctx::Arg && is_place_read(expr)) || matches!(expr.kind, ExprKind::Spread(_)) {
+        if (ctx == Ctx::Arg && is_writable_place(expr)) || matches!(expr.kind, ExprKind::Spread(_)) {
             return Err(CompileError::new(
                 span,
                 "a variable, property or spread passed to a call before an include/require of \
@@ -555,7 +560,13 @@ impl Hoister {
                 );
             }
             ExprKind::NullCoalesce { mut value, default } => {
-                self.visit(&mut value)?;
+                // The left operand is read silently by the probe below, which is hoisted right
+                // here in evaluation order. Walking it as an ordinary operand would snapshot
+                // `$missing` into a plain assignment that warns and loses `??`'s default; it is
+                // only walked for includes of its own.
+                if expr_has_includes(&value) {
+                    self.visit(&mut value)?;
+                }
                 let value_temp = fresh_temp();
                 let probe = ExprKind::NullCoalesce { value, default: Box::new(null()) };
                 self.hoisted.push(assign(&value_temp, Expr::new(probe, span), span));
@@ -665,8 +676,25 @@ fn is_place_read(expr: &Expr) -> bool {
     }
 }
 
-/// Whether `expr` is a value no include can change: a literal, a constant, `$this`, or a
-/// closure (whose creation runs none of its body).
+/// Whether `expr` names storage a by-reference parameter could bind to: a variable, `$this`, a
+/// static property, or a property or dimension of such a place, whatever its index computes
+/// (`$a[index()]` is as writable as `$a[0]`). Copying one into a temporary would break the
+/// reference, so these call arguments are refused instead of snapshotted.
+fn is_writable_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_writable_place(object),
+        ExprKind::ArrayAccess { array, .. } => is_writable_place(array),
+        _ => false,
+    }
+}
+
+/// Whether `expr` is a value no include can change: a literal, a constant or `$this`.
+///
+/// A closure is NOT inert: creating it captures its `use` variables (and an arrow function's
+/// free variables) by value, so `f(fn() => $x, require F)` must create it before the file runs
+/// and can change `$x`. It is snapshotted like any other completed operand; its body is never
+/// entered.
 fn is_inert_leaf(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -680,7 +708,6 @@ fn is_inert_leaf(expr: &Expr) -> bool {
             | ExprKind::This
             | ExprKind::ClassConstant { .. }
             | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::Closure { .. }
     )
 }
 

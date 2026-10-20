@@ -287,3 +287,72 @@ echo Holder::$list[0], "|", Holder::$list[1]['a'], "\n";
     );
     assert_eq!(out, "alphabeta\nbeta\nfirst|alpha\n");
 }
+
+/// Regression: a closure passed before an include of the same call is created before the file
+/// runs, so its captures (an arrow function's free `$x`, a `use ($x)`) keep the value from
+/// before the include even when the included file assigns `$x`.
+#[test]
+fn test_closure_argument_captures_before_include() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function f(callable $c, string $s): void { echo $c(), ' ', $s, '|'; }
+$x = 1;
+f(fn() => $x, require 'set.php');
+$x = 1;
+f(function () use ($x) { return $x; }, require 'set.php');
+echo $x;",
+            ),
+            ("set.php", "<?php $x = 2; return 'inc';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1 inc|1 inc|2");
+}
+
+/// Regression: an earlier `$cfg['k'] ?? require F` element keeps `??`'s silent read when a
+/// later include of the same statement forces the earlier operands to be materialized first:
+/// the missing key must not raise `Undefined array key` (observed through an error handler).
+#[test]
+fn test_null_coalesce_probe_stays_silent_before_later_include() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php set_error_handler(function ($no, $msg) { echo \"[warn: $msg]\"; return true; });
+function g(array $cfg) { $r = [$cfg['k'] ?? require 'a.php', require 'b.php']; echo implode(',', $r); }
+g([]);
+echo '|';
+g(['k' => 'K']);",
+            ),
+            ("a.php", "<?php return 'A';"),
+            ("b.php", "<?php return 'B';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "A,B|K,B");
+}
+
+/// Regression: an outer function's `static $q;` does not leak into a closure (or a nested
+/// function) declared in it, whose `$q` is a separate ordinary local, so a conditional include
+/// assigned to that `$q` is accepted there.
+#[test]
+fn test_outer_static_local_does_not_block_inner_closure_include() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function outer() {
+    static $q;
+    $inner = function () { $q = null; $q ??= require 'a.php'; return $q; };
+    echo $inner(), '|';
+}
+outer();",
+            ),
+            ("a.php", "<?php return 'A';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "A|");
+}

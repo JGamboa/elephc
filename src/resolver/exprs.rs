@@ -255,7 +255,7 @@ pub(super) fn resolve_expr(
             variadic_by_ref,
             variadic_type,
             return_type,
-            body: resolve_isolated(
+            body: super::engine::resolve_function_body(
                 body,
                 base_dir,
                 declared_once,
