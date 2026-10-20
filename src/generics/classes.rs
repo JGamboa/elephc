@@ -1225,6 +1225,8 @@ mod tests {
     /// Returns the marker interfaces: the empty interfaces templates leave behind. None of
     /// these tests declares an empty interface of its own.
     fn markers(program: &Program) -> Vec<String> {
+        /// Pushes the name of every member-less interface declared in `stmts`, descending into
+        /// namespace blocks.
         fn walk(stmts: &[Stmt], out: &mut Vec<String>) {
             for stmt in stmts {
                 match &stmt.kind {
