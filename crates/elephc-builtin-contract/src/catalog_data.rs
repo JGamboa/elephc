@@ -14035,6 +14035,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Gets the type name of a variable in a way that is suitable for debugging.",
         examples: &[
+            "// Full example: examples/type-ops/main.php\necho get_debug_type(42);           // int\necho get_debug_type(new Square());   // Square\necho get_debug_type(new class {});   // class@anonymous",
         ],
         php_manual: Some("function.get-debug-type"),
         deprecation: None,
