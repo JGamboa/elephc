@@ -256,3 +256,21 @@ echo (new O())->a($argc)->v, (new O())->b($argc)->v, get_class((new P())->a($arg
     );
     assert_eq!(out, "55P\n");
 }
+
+/// A string a method returns reaches the caller of a 30-function return chain
+/// (`f00()` returns `f01()`, ..., `f30()` returns `(new M)->get()`) even though the
+/// program declares a single class. Each final checker round moves the discovered
+/// return type back one caller, so a round budget counted from classes alone ran
+/// out first and `f00()` kept the `Int` placeholder (`int(0)`).
+#[test]
+fn test_long_function_return_chain_over_a_method_call_keeps_the_string() {
+    let mut src = String::from(
+        "<?php\nclass M { public string $s = \"hello\"; public function get() { return $this->s; } }\n",
+    );
+    for i in 0..30 {
+        src.push_str(&format!("function f{:02}() {{ return f{:02}(); }}\n", i, i + 1));
+    }
+    src.push_str("function f30() { return (new M)->get(); }\nvar_dump(f00());\n");
+    let out = compile_and_run(&src);
+    assert_eq!(out, "string(5) \"hello\"\n");
+}

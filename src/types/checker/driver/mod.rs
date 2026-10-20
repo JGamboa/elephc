@@ -453,8 +453,12 @@ pub(super) fn check_types_impl(
     // a pointer as an int), silently. So function bodies are re-checked once the method pass
     // has return types, and whenever the top level or a function body still changes a class or
     // function signature, the method bodies, the function bodies and the top level all run
-    // again, until none of them moves.
-    let mut final_rounds_remaining = (methods_to_check.len().max(1) * 2) + 1;
+    // again, until none of them moves. The budget counts functions as well as classes: each
+    // round re-checks the function bodies once, so a return type discovered by the method pass
+    // travels back one caller per round through a chain of functions (`f0()` returns `f1()`,
+    // ..., the last returns a method call), however few classes the program declares.
+    let mut final_rounds_remaining =
+        ((methods_to_check.len() + checker.fn_decls.len()).max(1) * 2) + 1;
     let (final_global_env, final_top_level_errors) = loop {
         let classes_before = checker.classes.clone();
         let functions_before = checker.functions.clone();
