@@ -68,7 +68,13 @@ pub(super) fn dynamic_method_call_with_named_args(
         }
     }
 
-    let args_value = if spreads == 0 {
+    // A plain variable passed by name may bind a by-reference parameter of the method that is
+    // only resolved at run time. An array element cannot alias a variable, so the variable is
+    // made to alias the element instead (`$args['x'] = $n; $n =& $args['x'];`), which carries a
+    // write through the callable invoker back to `$n` and is invisible for a by-value parameter.
+    let binds_place = |value: &Expr| matches!(&value.kind, ExprKind::Variable(name) if name != "this");
+    let has_place_named = named.iter().any(|(_, value, _)| binds_place(value));
+    let args_value = if spreads == 0 && !has_place_named {
         // Every name is distinct (validated) and no positional key is a string, so the literal
         // is exactly the argument list.
         let mut entries = leading;
@@ -88,9 +94,23 @@ pub(super) fn dynamic_method_call_with_named_args(
             span,
         ));
         for (index, (name, value, arg_span)) in named.into_iter().enumerate() {
-            let value_local = local(&format!("value{index}"));
             let key = Expr::new(ExprKind::StringLiteral(name.clone()), arg_span);
-            prelude.push(Stmt::new(StmtKind::Assign { name: value_local.clone(), value }, arg_span));
+            let place = match &value.kind {
+                ExprKind::Variable(variable) if binds_place(&value) => Some(variable.clone()),
+                _ => None,
+            };
+            let stored = if place.is_some() {
+                value
+            } else {
+                let value_local = local(&format!("value{index}"));
+                prelude.push(Stmt::new(StmtKind::Assign { name: value_local.clone(), value }, arg_span));
+                var(&value_local)
+            };
+            if spreads == 0 {
+                // No unpacked list can have supplied this name already (names are validated).
+                push_named_entry(&mut prelude, &args_local, key, stored, place, arg_span);
+                continue;
+            }
             let already_passed = Expr::new(
                 ExprKind::FunctionCall {
                     name: Name::unqualified("array_key_exists"),
@@ -129,14 +149,7 @@ pub(super) fn dynamic_method_call_with_named_args(
                 },
                 arg_span,
             ));
-            prelude.push(Stmt::new(
-                StmtKind::ArrayAssign {
-                    array: args_local.clone(),
-                    index: key,
-                    value: var(&value_local),
-                },
-                arg_span,
-            ));
+            push_named_entry(&mut prelude, &args_local, key, stored, place, arg_span);
         }
         var(&args_local)
     };
@@ -164,6 +177,33 @@ pub(super) fn dynamic_method_call_with_named_args(
         },
         span,
     ))
+}
+
+/// Appends `$args[key] = value;` to the prelude and, for a plain variable passed by name, makes
+/// that variable alias the new element (`$var =& $args[key];`) so a by-reference parameter's
+/// write reaches it.
+fn push_named_entry(
+    prelude: &mut Vec<Stmt>,
+    args_local: &str,
+    key: Expr,
+    value: Expr,
+    place: Option<String>,
+    span: Span,
+) {
+    prelude.push(Stmt::new(
+        StmtKind::ArrayAssign { array: args_local.to_string(), index: key.clone(), value },
+        span,
+    ));
+    if let Some(variable) = place {
+        let element = Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::new(ExprKind::Variable(args_local.to_string()), span)),
+                index: Box::new(key),
+            },
+            span,
+        );
+        prelude.push(Stmt::new(StmtKind::RefAssign { target: variable, source: element }, span));
+    }
 }
 
 /// Enforces PHP's compile-time argument-list rules that the desugaring would otherwise blur.

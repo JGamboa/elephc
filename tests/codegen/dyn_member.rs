@@ -296,3 +296,71 @@ fn test_property_callable_array_and_closure_callees() {
     );
     assert_eq!(out, "invoke abc def\ncb:e\n");
 }
+
+/// Regression: a plain variable passed by name to a runtime method name reaches a by-reference
+/// parameter (`$o->$m(x: $n)` increments `$n`), while by-value parameters still see a copy.
+#[test]
+fn test_dynamic_method_named_argument_binds_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+        class O {
+            public function bump(&$x, $by = 1) { $x += $by; return $x; }
+            public function val($a, $b = 'B') { return $a . $b; }
+        }
+        $o = new O; $m = 'bump'; $v = 'val';
+        $n = 1; $k = 5;
+        echo $o->$m(x: $n, by: $k), " ", $n, " ", $k, "\n";
+        $s = 'a'; echo $o->$v(b: $s, a: 'z'), " ", $s, "\n";
+        $p = 10; echo $o->$m(...[], x: $p), " ", $p, "\n";
+        $copy = $n; $copy++; echo $n, " ", $copy, "\n";
+        "#,
+    );
+    assert_eq!(out, "6 6 5\nza a\n11 11\n6 7\n");
+}
+
+/// Regression: a runtime name that is itself `__callStatic` / `__call` calls that method
+/// directly with the supplied arguments; only an unmatched name takes the magic fallback.
+#[test]
+fn test_scoped_dynamic_call_explicit_magic_method_names() {
+    let out = compile_and_run(
+        r#"<?php
+        class C {
+            public static function __callStatic($name, $args) { echo "cs:", $name, ":", count($args), "\n"; }
+            public function __call($name, $args) { echo "c:", $name, ":", count($args), "\n"; }
+            public static function run() { $m = '__callStatic'; C::$m('given', []); static::$m('given', []); }
+            public function inst() { $m = '__call'; self::$m('given', []); }
+        }
+        C::run();
+        (new C)->inst();
+        $m = 'other';
+        C::$m(1, 2);
+        "#,
+    );
+    assert_eq!(out, "cs:given:0\ncs:given:0\nc:given:0\ncs:other:2\n");
+}
+
+/// Regression: `self::$m()`, `static::$m()` and `C::$m()` arms that throw `ArgumentCountError`
+/// still evaluate the supplied arguments first, as PHP does.
+#[test]
+fn test_scoped_dynamic_call_too_few_arguments_evaluates_supplied_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+        function sideEffect() { echo "side\n"; return 1; }
+        class C {
+            public static function two($a, $b) { return $a . $b; }
+            public static function run() {
+                $m = 'two';
+                try { self::$m(sideEffect()); } catch (ArgumentCountError $e) { echo "ACE\n"; }
+                try { static::$m(sideEffect()); } catch (ArgumentCountError $e) { echo "ACE\n"; }
+            }
+        }
+        class Base { public static function run() { $m = 'only'; try { static::$m(sideEffect()); } catch (ArgumentCountError $e) { echo "ACE\n"; } } }
+        class Sub extends Base { public static function only($a, $b) { return 1; } }
+        C::run();
+        Sub::run();
+        $m = 'two';
+        try { C::$m(sideEffect()); } catch (ArgumentCountError $e) { echo "ACE\n"; }
+        "#,
+    );
+    assert_eq!(out, "side\nACE\nside\nACE\nside\nACE\nside\nACE\n");
+}

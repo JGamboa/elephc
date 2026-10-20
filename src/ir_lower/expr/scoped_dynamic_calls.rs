@@ -26,9 +26,11 @@
 //! - No match falls back like PHP: `__call` on `$this` when the class has it and `$this` is an
 //!   instance of it, then `__callStatic`, and otherwise `Call to undefined method C::m()`. An
 //!   inaccessible method takes the same magic fallback before its visibility `Error`.
+//!   A name that is itself `__call`/`__callStatic` calls that method directly.
 
 use super::dynamic_class_access::{
-    arm_call_args, class_name_matches_expr, conditional_branch, flatten_literal_spreads, literal,
+    arm_call_args, class_name_matches_expr, conditional_branch, evaluate_args_for_effects,
+    flatten_literal_spreads, literal,
     scope_can_access, string_concat_expr, throw_error_and_merge, visibility_word,
 };
 use super::*;
@@ -210,6 +212,8 @@ pub(super) fn lower_scoped_dynamic_call(
             let message = format!(
                 "Too few arguments to function {declaring}::{method}(), {passed_args} passed and {bound} {required} expected"
             );
+            // PHP evaluates the supplied arguments before the callee raises the arity error.
+            evaluate_args_for_effects(ctx, call_args, span);
             throw_error_and_merge(
                 ctx,
                 "ArgumentCountError",
@@ -335,8 +339,9 @@ fn receiver_spelling(receiver: &StaticReceiver, class_name: &str) -> String {
 }
 
 /// Every method `class_name` declares or inherits (static and instance), with what an arm needs.
-/// The magic methods are left to the fallback: PHP never selects them by a runtime name
-/// differently from a direct call, and they are reached through it anyway.
+/// `__call` and `__callStatic` are ordinary candidates too: a runtime name that IS
+/// `'__callStatic'` calls it directly with the supplied arguments, exactly like
+/// `C::__callStatic('given', [])`; only a name that matches nothing takes the magic fallback.
 fn scoped_candidates(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
@@ -385,14 +390,8 @@ fn scoped_candidates(
             push(key, sig, false);
         }
     }
-    candidates.retain(|candidate| !is_magic_fallback_method(&php_symbol_key(&candidate.method)));
     candidates.sort_by(|left, right| left.method.cmp(&right.method));
     candidates
-}
-
-/// `__call` / `__callStatic` are reached through the fallback, never as a name match.
-fn is_magic_fallback_method(key: &str) -> bool {
-    matches!(key, "__call" | "__callstatic")
 }
 
 /// The declared spelling of `key` on `declaring` (method tables are keyed case-folded).
@@ -446,7 +445,7 @@ fn subclass_only_methods(
         }
         for decl in &info.method_decls {
             let key = php_symbol_key(&decl.name);
-            if known.contains(&key) || is_magic_fallback_method(&key) {
+            if known.contains(&key) {
                 continue;
             }
             let (sig, is_static, visibility) = match (info.static_methods.get(&key), info.methods.get(&key)) {
@@ -554,6 +553,7 @@ fn lower_subclass_static_arms(
                 call_args.len(),
                 declarer.required
             );
+            evaluate_args_for_effects(ctx, call_args, span);
             throw_error_and_merge(ctx, "ArgumentCountError", literal(&message, span), result_temp, merge, span);
         } else {
             if declarer.uses_late_static_binding {
@@ -628,6 +628,9 @@ struct MagicFallback {
 }
 
 impl MagicFallback {
+    /// Decides which magic fallback applies for `receiver` (resolved to `class_name`): `__call`
+    /// on `$this` when the class declares it, `$this` exists and (for a named receiver) the
+    /// scope is related to the class; `__callStatic` when the class declares it.
     fn new(
         ctx: &LoweringContext<'_, '_>,
         receiver: &StaticReceiver,
