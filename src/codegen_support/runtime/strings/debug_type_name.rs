@@ -112,6 +112,7 @@ fn emit_debug_type_name_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: debug_type_name (get_debug_type() name of an unboxed value) ---");
     emitter.label_global("__rt_debug_type_name");
 
+    // -- dispatch on the runtime tag --
     for (tag, symbol) in SCALAR_TAG_ARMS {
         emitter.instruction(&format!("cmp x0, #{tag}"));                        // test the runtime tag against this scalar arm
         emitter.instruction(&format!("b.eq __rt_debug_type_name{symbol}"));     // answer the scalar arm's static type name
@@ -122,6 +123,7 @@ fn emit_debug_type_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_debug_type_name_resource");                  // resources answer their type in parentheses
     emitter.instruction("b __rt_debug_type_name_debug_type_null");              // null and every other tag are PHP null
 
+    // -- objects: look the class id up in the debug-name table --
     emitter.label("__rt_debug_type_name_object");
     emitter.instruction("cbz x1, __rt_debug_type_name_debug_type_null");        // a null object pointer is PHP null
     emitter.instruction("ldr x9, [x1]");                                        // load the object's concrete runtime class id
@@ -138,16 +140,19 @@ fn emit_debug_type_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [x10, #8]");                                   // load the class debug-name length
     emitter.instruction("ret");                                                 // return the class debug name
 
+    // -- incomplete unserialized objects --
     emitter.label("__rt_debug_type_name_incomplete");
     abi::emit_symbol_address(emitter, "x1", "_incomplete_class_name");
     abi::emit_load_int_immediate(emitter, "x2", INCOMPLETE_CLASS_NAME_LEN);
     emitter.instruction("ret");                                                 // return the incomplete-class name
 
+    // -- unknown class ids answer an empty name --
     emitter.label("__rt_debug_type_name_missing");
     abi::emit_symbol_address(emitter, "x1", "_class_name_missing");
     abi::emit_load_int_immediate(emitter, "x2", 0);
     emitter.instruction("ret");                                                 // return the empty name for an unknown class id
 
+    // -- resources: default context, closed, stream filter, or stream --
     emitter.label("__rt_debug_type_name_resource");
     abi::emit_load_int_immediate(emitter, "x9", DEFAULT_CONTEXT_PAYLOAD);
     emitter.instruction("cmp x1, x9");                                          // recognize PHP's implicit default stream context
@@ -157,6 +162,7 @@ fn emit_debug_type_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_debug_type_name_debug_type_resource_filter"); // preserve PHP's distinct stream filter resource name
     emitter.instruction("b __rt_debug_type_name_debug_type_resource_stream");   // every other open resource is a stream
 
+    // -- literal-returning arms shared by every branch above --
     let mut arms: Vec<&str> = SCALAR_TAG_ARMS.iter().map(|(_, symbol)| *symbol).collect();
     arms.dedup();
     arms.extend([
@@ -180,6 +186,7 @@ fn emit_debug_type_name_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: debug_type_name (get_debug_type() name of an unboxed value) ---");
     emitter.label_global("__rt_debug_type_name");
 
+    // -- dispatch on the runtime tag --
     for (tag, symbol) in SCALAR_TAG_ARMS {
         emitter.instruction(&format!("cmp rax, {tag}"));                        // test the runtime tag against this scalar arm
         emitter.instruction(&format!("je __rt_debug_type_name{symbol}_x86"));   // answer the scalar arm's static type name
@@ -190,6 +197,7 @@ fn emit_debug_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_debug_type_name_resource_x86");                // resources answer their type in parentheses
     emitter.instruction("jmp __rt_debug_type_name_debug_type_null_x86");        // null and every other tag are PHP null
 
+    // -- objects: look the class id up in the debug-name table --
     emitter.label("__rt_debug_type_name_object_x86");
     emitter.instruction("test rdi, rdi");                                       // test whether the object pointer is null
     emitter.instruction("je __rt_debug_type_name_debug_type_null_x86");         // a null object pointer is PHP null
@@ -205,16 +213,19 @@ fn emit_debug_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");                   // load the class debug-name length
     emitter.instruction("ret");                                                 // return the class debug name
 
+    // -- incomplete unserialized objects --
     emitter.label("__rt_debug_type_name_incomplete_x86");
     abi::emit_symbol_address(emitter, "rax", "_incomplete_class_name");
     abi::emit_load_int_immediate(emitter, "rdx", INCOMPLETE_CLASS_NAME_LEN);
     emitter.instruction("ret");                                                 // return the incomplete-class name
 
+    // -- unknown class ids answer an empty name --
     emitter.label("__rt_debug_type_name_missing_x86");
     emitter.instruction("lea rax, [rip + _class_name_missing]");                // return the shared empty class-name pointer
     emitter.instruction("xor edx, edx");                                        // return zero bytes for an unknown class id
     emitter.instruction("ret");                                                 // return the empty name for an unknown class id
 
+    // -- resources: default context, closed, stream filter, or stream --
     emitter.label("__rt_debug_type_name_resource_x86");
     abi::emit_load_int_immediate(emitter, "r10", DEFAULT_CONTEXT_PAYLOAD);
     emitter.instruction("cmp rdi, r10");                                        // recognize PHP's implicit default stream context
@@ -225,6 +236,7 @@ fn emit_debug_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_debug_type_name_debug_type_resource_filter_x86"); // preserve PHP's distinct stream filter resource name
     emitter.instruction("jmp __rt_debug_type_name_debug_type_resource_stream_x86"); // every other open resource is a stream
 
+    // -- literal-returning arms shared by every branch above --
     let mut arms: Vec<&str> = SCALAR_TAG_ARMS.iter().map(|(_, symbol)| *symbol).collect();
     arms.dedup();
     arms.extend([
