@@ -408,6 +408,8 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
             });
             crate::optimize::user_guards::fold_block_stmt(transparent, || {
                 let stmt = fold_stmt(stmt);
+                // A polyfill declaration exists for the statements after it in its guard body.
+                crate::optimize::user_guards::record_reached_declaration(&stmt);
                 if active_fold_target().is_some() && target_dependent_if {
                     let kept = prune_target_boolean_if(stmt);
                     // A folded top-level polyfill guard flattens its declaration into this block.

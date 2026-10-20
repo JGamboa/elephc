@@ -119,6 +119,36 @@ pub(super) fn record_materialized(stmts: &[Stmt]) {
     });
 }
 
+/// Adds a clean polyfill's declaration to the inventory at the point its guard body reaches it.
+///
+/// A conditional `function f() {}` exists from the moment PHP executes that statement, so a
+/// probe later in the same guard body (`if (!function_exists('f')) { function f() {} var_dump(
+/// function_exists('f')); }`) must fold to `true`. [`record_materialized`] only runs after the
+/// whole guard was folded, too late for those probes. Only names whose every nested declaration
+/// is a clean polyfill are recorded, and only outside callable bodies: their declarations sit
+/// in a top-level guard body, and that body is only kept when the guard folds to true (when it
+/// folds to false the name already exists, so recording it changes nothing).
+pub(super) fn record_reached_declaration(stmt: &Stmt) {
+    let StmtKind::FunctionDecl { name, .. } = &stmt.kind else {
+        return;
+    };
+    if active_fold_target().is_none() || CALLABLE_DEPTH.with(Cell::get) > 0 {
+        return;
+    }
+    let key = php_symbol_key(name);
+    let clean = OPAQUE_USER_FUNCTIONS.with(|slot| {
+        matches!(slot.borrow().as_ref(), Some(Some(opaque)) if !opaque.contains(&key))
+    });
+    if !clean {
+        return;
+    }
+    ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
+        if let Some(functions) = slot.borrow_mut().as_mut() {
+            functions.insert(key);
+        }
+    });
+}
+
 /// PHP's `function_exists()` needle: one optional leading `\`, nothing empty, no `\\` prefix.
 fn needle(name: &str) -> Option<&str> {
     let bare = name.strip_prefix('\\').unwrap_or(name);
@@ -209,6 +239,11 @@ fn classify_block(stmts: &[Stmt], top: bool, opaque: &mut HashSet<String>) {
     }
 }
 
+/// Classifies one statement for [`classify_block`]: inserts into `opaque` every function it
+/// declares at a non-top-level position other than a clean polyfill (whose names keep a
+/// compile-time `function_exists` answer), then scans its nested statement bodies as
+/// non-top-level positions. Transparent wrappers (`Synthetic`, namespace and include-once
+/// blocks) keep `top` for their bodies.
 fn classify_stmt(stmt: &Stmt, top: bool, opaque: &mut HashSet<String>) {
     match &stmt.kind {
         StmtKind::FunctionDecl { name, body, .. } => {
