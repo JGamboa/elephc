@@ -26,7 +26,14 @@ builtin! {
 
 /// Returns `int` for the comparison form, `bool` for the operator form, and `int|bool` when
 /// the operator may be null at run time.
+///
+/// Both versions are checked like PHP's `string` parameters and the operator like `?string`
+/// before the result type is chosen: argument lowering would otherwise turn an array into the
+/// string `"Array"` and compare it.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    check_string_parameter(cx, 0, "version1", false)?;
+    check_string_parameter(cx, 1, "version2", false)?;
+    check_string_parameter(cx, 2, "operator", true)?;
     let Some(operator) = cx.args.get(2) else {
         return Ok(PhpType::Int);
     };
@@ -37,4 +44,44 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
         _ => Ok(PhpType::Bool),
     }
+}
+
+/// Rejects an argument PHP's coercive `string` (or, with `nullable`, `?string`) parameter
+/// refuses: an array, an object, or another container shape, with PHP's `TypeError` wording.
+fn check_string_parameter(
+    cx: &mut BuiltinCheckCtx,
+    index: usize,
+    parameter: &str,
+    nullable: bool,
+) -> Result<(), CompileError> {
+    let Some(argument) = cx.args.get(index) else {
+        return Ok(());
+    };
+    let span = argument.span;
+    let inferred = cx.checker.infer_type(argument, cx.env)?;
+    // A bare `array` declaration is represented as a boxed union, so ask for PHP arrays first.
+    let accepted = !inferred.is_php_array() && match inferred.codegen_repr() {
+        PhpType::Str
+        | PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Mixed
+        | PhpType::TaggedScalar
+        | PhpType::Union(_) => true,
+        PhpType::Void | PhpType::Never => nullable,
+        _ => false,
+    };
+    if accepted {
+        return Ok(());
+    }
+    let expected = if nullable { "?string" } else { "string" };
+    Err(CompileError::new(
+        span,
+        &format!(
+            "version_compare(): Argument #{} (${parameter}) must be of type {expected}, {} given",
+            index + 1,
+            crate::builtins::math::random_bytes::given_type_name(&inferred),
+        ),
+    ))
 }
