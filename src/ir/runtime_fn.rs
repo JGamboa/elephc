@@ -1294,7 +1294,6 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod |
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
-            RuntimeFnId::GetDebugType |
             RuntimeFnId::Gettype |
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
@@ -1412,7 +1411,11 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
-            RuntimeFnId::ElephcObjectIsEnum
+            // `get_debug_type()` reads the inspected value's runtime state: a boxed cell's tag, an
+            // object's class id and a resource payload whose sign an explicit close flips, so
+            // its answer is not state-independent and calls must not be merged across them.
+            RuntimeFnId::GetDebugType
+            | RuntimeFnId::ElephcObjectIsEnum
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
