@@ -203,11 +203,13 @@ impl Checker {
                     // ternary gives (`$x->prop` on a joined `A|B` union is read from `A`). The
                     // else narrowing is not chained into later arms: a non-bool condition that is
                     // not `=== true` need not be falsy. An arm that writes the variable keeps the
-                    // un-narrowed type, as before.
+                    // un-narrowed type, as before. Only plain locals are narrowed: a property
+                    // place (`$h->p instanceof A`) can be rewritten by an assignment anywhere in
+                    // the arm, which the local write check does not see.
                     let narrowed = match conditions.as_slice() {
                         [condition] if subject_is_true => self
                             .guard_narrowing(condition, env)?
-                            .filter(|guard| !crate::ir_lower::expr_writes_local(result, &guard.var))
+                            .filter(|guard| match_arm_may_narrow(result, &guard.var))
                             .map(|guard| {
                                 let mut arm_env = env.clone();
                                 arm_env.insert(guard.var, guard.then_ty);
@@ -510,4 +512,13 @@ impl Checker {
 /// path; everything else (arrays, objects, buffers, pointers) reaches this diagnostic.
 fn increment_type_error(name: &str, ty: &PhpType) -> String {
     format!("Cannot increment/decrement ${} of type {}", name, ty)
+}
+
+/// Returns whether a `match (true)` arm may see its `instanceof` guard's then-narrowing of `key`.
+///
+/// Only a plain local the arm never writes qualifies. A property place (the synthetic `\x01`
+/// key of `$h->p`) is left un-narrowed: an assignment such as `($h->p = new B())` inside the
+/// arm replaces the value behind it, and the local write check cannot see that store.
+pub(super) fn match_arm_may_narrow(result: &Expr, key: &str) -> bool {
+    !Checker::narrowed_place_key_is_property(key) && !crate::ir_lower::expr_writes_local(result, key)
 }

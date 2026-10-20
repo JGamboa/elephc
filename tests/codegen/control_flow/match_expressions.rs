@@ -808,3 +808,27 @@ var_dump(w(new A), w(new B));
     );
     assert_eq!(out, "string(10) \"reassigned\"\nstring(1) \"z\"\n");
 }
+
+/// A `match (true)` arm guarded by a PROPERTY `instanceof` that reassigns the
+/// property inside the arm reads the new value: the arm is not narrowed to the
+/// guard's class, so `$h->p->m()` after `($h->p = new B())` resolves against
+/// the declared `mixed` property instead of failing with "Undefined method: A::m".
+#[test]
+fn test_match_true_instanceof_property_guard_rewritten_in_arm_is_not_narrowed() {
+    let out = compile_and_run(
+        r#"<?php
+class A {}
+class B { public function m() { return "B::m"; } }
+class Holder { public mixed $p; }
+function keep($x) { return ""; }
+$h = new Holder();
+$h->p = new A();
+$r = match (true) {
+    $h->p instanceof A => keep($h->p = new B()) . $h->p->m(),
+    default => "none",
+};
+var_dump($r);
+"#,
+    );
+    assert_eq!(out, "string(4) \"B::m\"\n");
+}

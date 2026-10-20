@@ -227,7 +227,7 @@ impl Checker {
                     let narrowing = match conditions.as_slice() {
                         [condition] if matches!(subject.kind, ExprKind::BoolLiteral(true)) => {
                             self.guard_narrowing(condition, &arm_env)?.filter(|guard| {
-                                !crate::ir_lower::expr_writes_local(result, &guard.var)
+                                super::basic::match_arm_may_narrow(result, &guard.var)
                             })
                         }
                         _ => None,
