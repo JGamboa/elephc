@@ -366,6 +366,8 @@ pub(crate) fn unset_locals_in(stmts: &[crate::parser::ast::Stmt]) -> BTreeSet<St
     out
 }
 
+/// Recursive worker of [`unset_locals_in`]: adds every plain local an `unset(...)` statement in
+/// `stmts` names, descending into `foreach` and every other nested statement body.
 fn collect_unset_locals(stmts: &[crate::parser::ast::Stmt], out: &mut BTreeSet<String>) {
     use crate::parser::ast::StmtKind;
     for stmt in stmts {
@@ -401,6 +403,8 @@ pub(crate) fn has_inner_break_or_continue(stmts: &[crate::parser::ast::Stmt]) ->
     rest.iter().any(stmt_has_break_or_continue)
 }
 
+/// Whether `stmt` is, or nests, a `break` or `continue` (closures are not statements, so their
+/// bodies are never reached).
 fn stmt_has_break_or_continue(stmt: &crate::parser::ast::Stmt) -> bool {
     use crate::parser::ast::StmtKind;
     match &stmt.kind {
@@ -414,6 +418,7 @@ fn stmt_has_break_or_continue(stmt: &crate::parser::ast::Stmt) -> bool {
 
 type NameSet = std::collections::HashSet<String>;
 
+/// Snapshots the names bound in `env`, for the maybe-undefined joins below.
 fn env_keys(env: &crate::types::TypeEnv) -> NameSet {
     env.keys().cloned().collect()
 }
@@ -459,6 +464,7 @@ pub(crate) struct SwitchMaybeUndefined {
 }
 
 impl SwitchMaybeUndefined {
+    /// Starts the join of a `switch` from the marks and bound names at its entry.
     pub(crate) fn enter(checker: &super::Checker, env: &crate::types::TypeEnv) -> Self {
         Self {
             entry: checker.maybe_undefined_locals.clone(),
@@ -471,6 +477,8 @@ impl SwitchMaybeUndefined {
         }
     }
 
+    /// Sets the marks a case body starts with: the entry marks, the previous body's end marks
+    /// (fall-through), and every local an earlier body introduced.
     pub(crate) fn start_body(&mut self, checker: &mut super::Checker, env: &crate::types::TypeEnv) {
         let mut start = self.entry.clone();
         if let Some(previous) = self.previous_end.take() {
@@ -484,6 +492,8 @@ impl SwitchMaybeUndefined {
         self.body_keys = env_keys(env);
     }
 
+    /// Records how a case body leaves: a trailing `break` is a switch exit, falling through feeds
+    /// the next body, and an inner `break`/`continue` adds a conservative exit.
     pub(crate) fn end_body(
         &mut self,
         checker: &mut super::Checker,
@@ -512,6 +522,8 @@ impl SwitchMaybeUndefined {
         self.introduced.extend(introduced_here);
     }
 
+    /// Joins every recorded exit (plus falling off the last body, and matching nothing when there
+    /// is no `default`) into the marks that hold after the `switch`.
     pub(crate) fn finish(
         mut self,
         checker: &mut super::Checker,
@@ -546,6 +558,7 @@ pub(crate) struct TryMaybeUndefined {
 }
 
 impl TryMaybeUndefined {
+    /// Starts the join of a `try` from the marks and bound names at its entry.
     pub(crate) fn enter(checker: &super::Checker, env: &crate::types::TypeEnv) -> Self {
         Self {
             entry: checker.maybe_undefined_locals.clone(),
@@ -591,6 +604,8 @@ impl TryMaybeUndefined {
         self.introduced = keys.difference(&self.keys_entry).cloned().collect();
     }
 
+    /// Sets the marks a handler starts with: the entry marks, every mark the `try` body may have
+    /// left when it threw, and every local the body or an earlier handler introduced.
     pub(crate) fn start_catch(&mut self, checker: &mut super::Checker, env: &crate::types::TypeEnv) {
         let mut start = self.entry.clone();
         start.extend(self.try_marks.iter().cloned());
@@ -601,6 +616,8 @@ impl TryMaybeUndefined {
         self.catch_keys = env_keys(env);
     }
 
+    /// Records a handler that falls through as an exit of the construct, and the locals it
+    /// introduced for the handlers after it.
     pub(crate) fn end_catch(
         &mut self,
         checker: &mut super::Checker,
@@ -615,6 +632,8 @@ impl TryMaybeUndefined {
             .extend(keys.difference(&self.catch_keys).cloned());
     }
 
+    /// Joins the `try` body's and the handlers' fall-through exits into the marks after the
+    /// construct (before any `finally`).
     pub(crate) fn join(&mut self, checker: &mut super::Checker, env: &crate::types::TypeEnv) {
         let mut fallback = self.entry.clone();
         fallback.extend(self.try_marks.iter().cloned());
