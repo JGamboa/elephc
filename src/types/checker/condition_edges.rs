@@ -182,6 +182,15 @@ impl super::Checker {
             && !self.top_level_binding_is_program_global(name)
     }
 
+    /// Clears the maybe-undefined marks of the locals `condition` assigns for sure on its true
+    /// edge: a loop body (and a `for` update) runs only on that edge, so those locals are
+    /// defined there even when the lazy-operand join marked them after the condition.
+    pub(crate) fn clear_true_edge_marks(&mut self, condition: &Expr) {
+        for name in definitely_assigned_on_edge(condition, true) {
+            self.maybe_undefined_locals.remove(&name);
+        }
+    }
+
     /// Marks `name` maybe-undefined from this point of the walk.
     pub(crate) fn mark_maybe_undefined(&mut self, name: &str) {
         if self.local_is_flaggable(name) {
@@ -529,6 +538,8 @@ pub(crate) struct TryMaybeUndefined {
     entry: NameSet,
     keys_entry: NameSet,
     try_marks: NameSet,
+    /// Every mark seen after a statement of the `try` body, where an exception may leave it.
+    intermediate_marks: NameSet,
     introduced: NameSet,
     catch_keys: NameSet,
     exits: Vec<(NameSet, NameSet)>,
@@ -540,12 +551,24 @@ impl TryMaybeUndefined {
             entry: checker.maybe_undefined_locals.clone(),
             keys_entry: env_keys(env),
             try_marks: NameSet::new(),
+            intermediate_marks: NameSet::new(),
             introduced: NameSet::new(),
             catch_keys: NameSet::new(),
             exits: Vec::new(),
         }
     }
 
+    /// Records the marks after one top-level statement of the `try` body: an exception thrown
+    /// by a later statement reaches the handlers with these marks, even when a later assignment
+    /// clears them before the body ends.
+    pub(crate) fn record_try_point(&mut self, checker: &super::Checker) {
+        self.intermediate_marks
+            .extend(checker.maybe_undefined_locals.iter().cloned());
+    }
+
+    /// Leaves the `try` body: records its fall-through exit and the marks a handler or `finally`
+    /// may start from. Besides the end and intermediate marks, any local the body unsets
+    /// anywhere (a nested `if` arm that throws right after `unset`, say) may be undefined there.
     pub(crate) fn end_try(
         &mut self,
         checker: &mut super::Checker,
@@ -557,7 +580,14 @@ impl TryMaybeUndefined {
         if !checker.body_cannot_fall_through(body) {
             self.exits.push((marks.clone(), keys.clone()));
         }
-        self.try_marks = marks;
+        let mut handler_marks = marks;
+        handler_marks.extend(self.intermediate_marks.iter().cloned());
+        handler_marks.extend(
+            unset_locals_in(body)
+                .into_iter()
+                .filter(|name| checker.local_is_flaggable(name)),
+        );
+        self.try_marks = handler_marks;
         self.introduced = keys.difference(&self.keys_entry).cloned().collect();
     }
 

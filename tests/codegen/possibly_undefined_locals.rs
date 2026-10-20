@@ -339,3 +339,67 @@ fn test_maybe_undefined_array_access_receiver_probes() {
     );
     assert_eq!(out, "E|empty\nEG|empty\nE|set\n|empty\n|empty\n|unset\n");
 }
+
+/// Verifies a loop body reads a local its `while` / `for` condition assigns on the true edge as
+/// the assigned value: `while ($c && ($a = [1]))` binds `$a` before every iteration, so passing it
+/// to an `array` parameter compiles and runs.
+#[test]
+fn test_loop_condition_true_edge_defines_the_body_local() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function take(array $a) { echo count($a), "\n"; }
+function w($c) { while ($c && ($a = [1, 2])) { take($a); break; } }
+function f($c) { for (; $c && ($b = [1, 2, 3]); ) { take($b); break; } }
+w(true);
+f(true);
+w(false);
+f(false);
+echo "done\n";
+"#,
+    );
+    assert_eq!(out.stdout, "2\n3\ndone\n");
+    assert!(!out.stderr.contains("Undefined variable"), "stderr: {:?}", out.stderr);
+}
+
+/// Verifies an `elseif` condition that reads a local only an earlier clause's body assigned sees
+/// it as undefined: PHP warns and compares null, so `elseif ($x > 3)` takes the `else`.
+#[test]
+fn test_elseif_condition_reads_earlier_body_local_as_undefined() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function t($c) {
+    if ($c) { $x = 5; } elseif ($x > 3) { echo "wrong\n"; } else { echo "else\n"; }
+}
+t(true);
+t(false);
+t(false);
+"#,
+    );
+    assert_eq!(out.stdout, "else\nelse\n");
+    assert_eq!(out.stderr.matches("Undefined variable $x").count(), 2, "stderr: {:?}", out.stderr);
+}
+
+/// Verifies a `catch` body reads a local the `try` body unset before throwing as undefined, even
+/// though a later statement of the `try` body assigns it again.
+#[test]
+fn test_catch_reads_local_unset_before_the_throw() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function t($c) {
+    $x = 1;
+    try {
+        unset($x);
+        if ($c) throw new Exception("e");
+        $x = 2;
+    } catch (Exception $e) {
+        var_dump($x);
+    }
+    var_dump($x);
+}
+t(true);
+t(false);
+"#,
+    );
+    assert_eq!(out.stdout, "NULL\nNULL\nint(2)\n");
+    assert_eq!(out.stderr.matches("Undefined variable $x").count(), 2, "stderr: {:?}", out.stderr);
+}

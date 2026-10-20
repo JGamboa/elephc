@@ -690,6 +690,11 @@ impl Checker {
                 let mut arm_end_keys: Vec<std::collections::HashSet<String>> = Vec::new();
                 for (cond, body) in &clauses {
                     self.maybe_undefined_locals = path_marks.clone();
+                    // A later clause's condition is reached only when no earlier body ran, so a
+                    // local those bodies introduced may be undefined while it is evaluated.
+                    for name in &body_introduced {
+                        self.mark_maybe_undefined(name);
+                    }
                     self.infer_type_with_assignment_effects(cond, env)?;
                     let marks_after_cond = self.maybe_undefined_locals.clone();
                     let true_names = super::super::condition_edges::definitely_assigned_on_edge(cond, true);
@@ -933,7 +938,9 @@ impl Checker {
                 if let Some(g) = &guard {
                     env.insert(g.var.clone(), g.then_ty.clone());
                 }
-                // `while ($ok && ($row = next()))`: the body runs on the condition's true edge.
+                // `while ($ok && ($row = next()))`: the body runs on the condition's true edge,
+                // which assigns `$row` for sure even though the lazy-operand join marked it.
+                self.clear_true_edge_marks(condition);
                 let true_defs = self.condition_edge_definitions(condition, env, true);
                 let true_inserted = Self::insert_edge_definitions(env, &true_defs);
                 let errors = self.check_break_continue_target_body(body, env);
@@ -1043,6 +1050,9 @@ impl Checker {
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
+                    // A handler can start after any statement, so it sees every intermediate
+                    // mark, not only those left at the end of the body.
+                    maybe_undefined.record_try_point(self);
                 }
                 maybe_undefined.end_try(self, try_body, env);
                 for catch_clause in catches {
@@ -1270,6 +1280,7 @@ impl Checker {
         if let Some(c) = condition {
             self.infer_type_with_assignment_effects(c, env)?;
             // The body and the update run on the condition's true edge.
+            self.clear_true_edge_marks(c);
             let true_defs = self.condition_edge_definitions(c, env, true);
             true_inserted = Self::insert_edge_definitions(env, &true_defs);
         }
