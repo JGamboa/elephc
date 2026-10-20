@@ -27301,6 +27301,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Quotes regular expression characters.",
         examples: &[
+            "// Full example: examples/string-ops/main.php\necho preg_quote(\"1.5*2=3?\", \"/\");  // 1\\.5\\*2\\=3\\?",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.preg-quote.php"),
         deprecation: None,
@@ -31134,6 +31135,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Finds the length of the initial segment not matching a mask.",
         examples: &[
+            "// Full example: examples/string-ops/main.php\necho strcspn(\"key=value pair\", \" \");  // 9",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.strcspn.php"),
         deprecation: None,
@@ -33165,6 +33167,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Finds the last occurrence of a character in a string.",
         examples: &[
+            "// Full example: examples/string-ops/main.php\necho strrchr(\"/var/log/app/error.log\", \"/\");  // /error.log",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.strrchr.php"),
         deprecation: None,
@@ -33331,6 +33334,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Finds the length of the initial segment matching a mask.",
         examples: &[
+            "// Full example: examples/string-ops/main.php\necho strspn(\"  42 apples\", \" \");                // 2\necho strspn(\"  42 apples\", \"0123456789\", 2);  // 2",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.strspn.php"),
         deprecation: None,
@@ -33645,6 +33649,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Binary safe comparison of two strings from an offset, up to length characters.",
         examples: &[
+            "// Full example: examples/string-ops/main.php\necho substr_compare(\"error.log\", \".LOG\", -4, 4, true);  // 0",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.substr-compare.php"),
         deprecation: None,
