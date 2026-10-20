@@ -22,13 +22,10 @@ builtin! {
     contract: "__elephc_dynamic_static_call",
     semantics: internal_eir_semantics(
         lower,
-        Effects::from_bits_retain(
-            Effects::READS_GLOBAL.bits()
-                | Effects::READS_HEAP.bits()
-                | Effects::ALLOC_HEAP.bits()
-                | Effects::REFCOUNT_OP.bits()
-                | Effects::MAY_THROW.bits(),
-        ),
+        // The call runs an arbitrary user method (which may write globals, the heap, files or
+        // output), so passes that read this descriptor before the expansion must treat it as
+        // opaquely as an ordinary user call.
+        Effects::all(),
         BuiltinResultOwnership::Fresh,
     ),
 }
