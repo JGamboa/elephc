@@ -510,6 +510,24 @@ echo in_array('WeakMap', get_declared_classes(), true) ? "WeakMap listed\n" : "W
     assert_eq!(out, "WeakMap listed\n");
 }
 
+/// User classes and interfaces whose names merely start with `__elephc` stay listed: only the
+/// exact compiler-owned prelude names registered as internal are hidden.
+#[test]
+fn test_declared_classes_keep_user_names_with_the_internal_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+class __ElephcUser {}
+interface __ElephcIface {}
+$o = new __ElephcUser();
+$map = new WeakMap();
+var_dump(in_array("__ElephcUser", get_declared_classes(), true));
+var_dump(in_array("__ElephcIface", get_declared_interfaces(), true));
+var_dump(in_array("__ElephcWeakMapIterator", get_declared_classes(), true));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\n");
+}
+
 /// `SessionHandlerInterface` is a builtin contract outside `--web` too: a user handler can
 /// implement it and be passed through a parameter typed with it.
 #[test]
