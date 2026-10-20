@@ -130,21 +130,73 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 /// promoted constructor properties, and member attributes.
 /// `owner_kind` is used only for error messages (e.g., "class", "trait").
 /// `enclosing_is_abstract` controls whether abstract property declarations are permitted.
+///
+/// A method whose body fails to parse after its closing `}` was consumed (the body's own
+/// statement recovery already reported those errors) does not stop the member list: its
+/// errors are kept and parsing continues with the next member, so every malformed method of a
+/// class is reported in one compile. The kept errors are returned, ahead of any later fatal
+/// member error, once the body ends.
 pub(in crate::parser::stmt) fn parse_class_like_body(
     tokens: &[SpannedToken],
     pos: &mut usize,
     owner_kind: &str,
     enclosing_is_abstract: bool,
-) -> Result<
-    (
-        Vec<TraitUse>,
-        Vec<ClassProperty>,
-        Vec<ClassMethod>,
-        Vec<ClassConst>,
-        Vec<EnumCaseDecl>,
-    ),
-    CompileError,
-> {
+) -> Result<ClassLikeBody, CompileError> {
+    let mut member_errors = Vec::new();
+    let result = parse_class_like_members(
+        tokens,
+        pos,
+        owner_kind,
+        enclosing_is_abstract,
+        &mut member_errors,
+    );
+    match result {
+        Ok(_) if !member_errors.is_empty() => Err(CompileError::from_many(member_errors)),
+        Ok(body) => Ok(body),
+        Err(error) => {
+            member_errors.push(error);
+            Err(CompileError::from_many(member_errors))
+        }
+    }
+}
+
+/// The members of a class-like body: trait uses, properties, methods, constants, enum cases.
+type ClassLikeBody = (
+    Vec<TraitUse>,
+    Vec<ClassProperty>,
+    Vec<ClassMethod>,
+    Vec<ClassConst>,
+    Vec<EnumCaseDecl>,
+);
+
+/// Returns true when `tokens[start..end]` ends with a `}` that closes every `{` opened since
+/// `start`: the member that began at `start` was consumed completely, body included.
+fn member_fully_consumed(tokens: &[SpannedToken], start: usize, end: usize) -> bool {
+    if end <= start || !matches!(tokens.get(end - 1).map(|(token, _)| token), Some(Token::RBrace))
+    {
+        return false;
+    }
+    let mut depth = 0isize;
+    for (token, _) in tokens.iter().take(end).skip(start) {
+        match token {
+            Token::LBrace => depth += 1,
+            Token::RBrace => depth -= 1,
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// Parses the members of a class-like body up to (not including) its closing `}`; see
+/// [`parse_class_like_body`]. Errors of a method whose body was consumed completely are pushed
+/// onto `member_errors` instead of ending the walk.
+fn parse_class_like_members(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    owner_kind: &str,
+    enclosing_is_abstract: bool,
+    member_errors: &mut Vec<CompileError>,
+) -> Result<ClassLikeBody, CompileError> {
     let mut trait_uses = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
@@ -266,7 +318,8 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Readonly methods are not supported",
                 ));
             }
-            let (mut method, promoted_properties) = parse_class_like_method(
+            let method_start = *pos;
+            let parsed = parse_class_like_method(
                 tokens,
                 pos,
                 member_span,
@@ -274,7 +327,17 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 modifiers.is_static,
                 modifiers.is_abstract,
                 modifiers.is_final,
-            )?;
+            );
+            let (mut method, promoted_properties) = match parsed {
+                Ok(parsed) => parsed,
+                // The body's own recovery already reported its errors and consumed its `}`:
+                // keep them and go on with the next member.
+                Err(error) if member_fully_consumed(tokens, method_start, *pos) => {
+                    member_errors.extend(error.flatten());
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             method.attributes = member_attributes;
             append_promoted_properties(&mut properties, promoted_properties)?;
             methods.push(method);

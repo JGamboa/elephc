@@ -414,3 +414,15 @@ fn test_parser_recovery_unclosed_delimiter_stops_at_statement_end() {
         assert!(messages[1].contains("Expected ';'"), "{src}: {:?}", messages);
     }
 }
+
+/// Verifies that each malformed method of a class reports its own error in one compile: after
+/// the first method's body fails (and its `}` is consumed), recovery continues with the next
+/// member instead of skipping the rest of the class, and the trailing statement still parses.
+#[test]
+fn test_parser_recovery_reports_every_malformed_method_of_a_class() {
+    let messages = parse_error_messages(
+        "<?php class K { function a() { echo 1 +; } function ok() { return 1; } function b() { echo 2 +; } }\necho $x 3;",
+    );
+    assert_eq!(messages.len(), 3, "expected one error per broken method plus the echo, got {:?}", messages);
+    assert!(messages[2].contains("Expected ';'"), "{:?}", messages);
+}
