@@ -46,7 +46,7 @@ pub const DEBUG_TYPE_NAMES: [(&str, &str); 11] = [
 ];
 
 /// Byte length of `__PHP_Incomplete_Class`, the literal `_incomplete_class_name` holds.
-const INCOMPLETE_CLASS_NAME_LEN: i64 = 22;
+pub const INCOMPLETE_CLASS_NAME_LEN: i64 = 22;
 
 /// Returns the byte length of one `DEBUG_TYPE_NAMES` literal.
 fn debug_type_name_len(symbol: &str) -> i64 {

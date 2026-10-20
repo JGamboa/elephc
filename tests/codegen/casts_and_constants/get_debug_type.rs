@@ -114,3 +114,31 @@ echo (new \ReflectionFunction('get_debug_type'))->isInternal() ? 1 : 0,
     );
     assert_eq!(out, "class@anonymous,App\\Base@anonymous,App\\Shape@anonymous,Closure,int,null,\nclass@anonymous,App\\Base@anonymous,App\\Shape@anonymous,App\\Base,Closure,float,string,array,bool,resource (stream),\nint float null array bool\nint,string,null,App\\Base,array,float\n111\n");
 }
+
+/// An `iterable` parameter holds either an array or a `Traversable` object behind one
+/// type-erased pointer: objects report their class name, not `array`.
+#[test]
+fn test_get_debug_type_names_objects_passed_through_iterable() {
+    let out = compile_and_run(
+        r##"<?php
+function gen() { yield 1; }
+function name(iterable $items): string { return get_debug_type($items); }
+echo name(gen()), "|", name(new ArrayIterator([1])), "|", name([1]), "|", name(["k" => 1]), "\n";
+"##,
+    );
+    assert_eq!(out, "Generator|ArrayIterator|array|array\n");
+}
+
+/// An incomplete object created by compiled `unserialize()` keeps its
+/// `__PHP_Incomplete_Class` name when eval code inspects it, for `get_debug_type()` and
+/// `get_class()` alike, instead of failing the eval call.
+#[test]
+fn test_get_debug_type_names_incomplete_objects_inside_eval() {
+    let out = compile_and_run(
+        r##"<?php
+$o = unserialize('O:7:"Missing":0:{}');
+eval('echo get_debug_type($o), "|", get_class($o), "\n";');
+"##,
+    );
+    assert_eq!(out, "__PHP_Incomplete_Class|__PHP_Incomplete_Class\n");
+}

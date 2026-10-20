@@ -314,4 +314,4 @@ pub use resource_write_stdout::emit_resource_write_stdout;
 /// Emit the PHP-compatible URL component scanner.
 pub use parse_url::emit_parse_url;
 /// Emit the `get_debug_type()` name resolver for an unboxed runtime value, and its literals.
-pub use debug_type_name::{emit_debug_type_name, DEBUG_TYPE_NAMES};
+pub use debug_type_name::{emit_debug_type_name, DEBUG_TYPE_NAMES, INCOMPLETE_CLASS_NAME_LEN};

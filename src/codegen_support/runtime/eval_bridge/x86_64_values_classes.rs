@@ -328,10 +328,13 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
 /// `__elephc_eval_value_object_class_name` reads `_class_name_entries` for `get_class()`;
 /// `__elephc_eval_value_object_debug_class_name` reads `_class_debug_name_entries` for
 /// `get_debug_type()`, which spells anonymous classes the way php-src does. Both tables share
-/// the `_class_name_count` bound.
+/// the `_class_name_count` bound. The reserved incomplete-class id (`-2`) has no table row and
+/// answers `__PHP_Incomplete_Class`, as the native helpers do.
 fn emit_x86_64_object_class_name_wrapper(emitter: &mut Emitter, symbol: &str, table: &str) {
     let miss = format!("{symbol}_miss_x86");
+    let incomplete = format!("{symbol}_incomplete_x86");
     label_c_global(emitter, symbol);
+    // -- resolve the boxed receiver to a concrete object payload --
     emitter.instruction("push rbp");                                            // align the helper call and preserve caller linkage
     emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced object
     emitter.instruction("call __rt_mixed_deref");                               // resolve the concrete receiver before class-name lookup
@@ -349,7 +352,10 @@ fn emit_x86_64_object_class_name_wrapper(emitter: &mut Emitter, symbol: &str, ta
         "r11",
         &miss,
     );
+    // -- look the class id up in the selected name table --
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the object's runtime class id
+    emitter.instruction("cmp r11, -2");                                         // is this the reserved incomplete-class id (-2)?
+    emitter.instruction(&format!("je {incomplete}"));                           // incomplete objects have no class-name table row
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
     emitter.instruction("cmp r11, rdx");                                        // check whether the class id is in table bounds
     emitter.instruction(&format!("jae {miss}"));                                // reject missing or out-of-range class ids
@@ -360,8 +366,20 @@ fn emit_x86_64_object_class_name_wrapper(emitter: &mut Emitter, symbol: &str, ta
     emitter.instruction("mov rsi, QWORD PTR [rdx + 8]");                        // load the class-name string length
     emitter.instruction("test rsi, rsi");                                       // table holes use a zero-length name
     emitter.instruction(&format!("jz {miss}"));                                 // reject table holes with empty names
+    // -- box the selected class name for Rust --
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("jmp __rt_mixed_from_value");                           // persist and box the class-name string for Rust
+    // -- incomplete objects answer the fixed incomplete-class name --
+    emitter.label(&incomplete);
+    abi::emit_symbol_address(emitter, "rdi", "_incomplete_class_name");
+    abi::emit_load_int_immediate(
+        emitter,
+        "rsi",
+        crate::codegen_support::runtime::strings::INCOMPLETE_CLASS_NAME_LEN,
+    );
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("jmp __rt_mixed_from_value");                           // persist and box the incomplete-class name for Rust
+    // -- failure: no class name is available --
     emitter.label(&miss);
     emitter.instruction("xor eax, eax");                                        // report failure as a null C pointer to Rust
     emitter.instruction("ret");                                                 // return the failure sentinel
