@@ -206,45 +206,23 @@ fn push_named_entry(
     }
 }
 
-/// Enforces PHP's compile-time argument-list rules that the desugaring would otherwise blur.
+/// Enforces PHP's compile-time argument-list rules that the desugaring would otherwise blur,
+/// through the shared `call_args` rule set for callees unknown at compile time.
 fn validate_argument_order(args: &[Expr]) -> Result<(), CompileError> {
-    let mut seen_named: Vec<&str> = Vec::new();
-    let mut seen_spread = false;
-    for arg in args {
-        match &arg.kind {
-            ExprKind::NamedArg { name, .. } => {
-                if seen_named.contains(&name.as_str()) {
-                    return Err(CompileError::new(
-                        arg.span,
-                        &format!("Duplicate named parameter ${name}"),
-                    ));
-                }
-                seen_named.push(name);
-            }
-            ExprKind::Spread(_) => {
-                if !seen_named.is_empty() {
-                    return Err(CompileError::new(
-                        arg.span,
-                        "Cannot use argument unpacking after named arguments",
-                    ));
-                }
-                seen_spread = true;
-            }
-            _ => {
-                if !seen_named.is_empty() {
-                    return Err(CompileError::new(
-                        arg.span,
-                        "Cannot use positional argument after named argument",
-                    ));
-                }
-                if seen_spread {
-                    return Err(CompileError::new(
-                        arg.span,
-                        "Cannot use positional argument after argument unpacking",
-                    ));
-                }
-            }
+    use crate::types::call_args::CallArgPlanError;
+    crate::types::call_args::validate_unknown_callee_arg_order(args).map_err(|error| match error {
+        CallArgPlanError::Duplicate { span, name, .. } => {
+            CompileError::new(span, &format!("Duplicate named parameter ${name}"))
         }
-    }
-    Ok(())
+        CallArgPlanError::SpreadAfterNamed { span } => {
+            CompileError::new(span, "Cannot use argument unpacking after named arguments")
+        }
+        CallArgPlanError::PositionalAfterNamed { span } => {
+            CompileError::new(span, "Cannot use positional argument after named argument")
+        }
+        CallArgPlanError::PositionalAfterSpread { span } => {
+            CompileError::new(span, "Cannot use positional argument after argument unpacking")
+        }
+        other => unreachable!("validate_unknown_callee_arg_order only reports ordering errors: {other:?}"),
+    })
 }
