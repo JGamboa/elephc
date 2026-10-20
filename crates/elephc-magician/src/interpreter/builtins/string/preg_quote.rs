@@ -33,12 +33,13 @@ pub(in crate::interpreter) fn eval_builtin_preg_quote(
     for arg in args {
         evaluated.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_preg_quote_values_result(&evaluated, values)
+    eval_preg_quote_values_result(&evaluated, context, values)
 }
 
 /// Dispatches already evaluated `preg_quote()` arguments.
 pub(in crate::interpreter) fn eval_preg_quote_values_result(
     args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (subject, delimiter) = match args {
@@ -49,6 +50,15 @@ pub(in crate::interpreter) fn eval_preg_quote_values_result(
     let subject = values.string_bytes(subject)?;
     let delimiter = match delimiter {
         Some(delimiter) if !values.is_null(delimiter)? => {
+            eval_reject_container_argument(
+                "preg_quote",
+                2,
+                "delimiter",
+                "?string",
+                delimiter,
+                context,
+                values,
+            )?;
             values.string_bytes(delimiter)?.first().copied()
         }
         _ => None,

@@ -136,3 +136,40 @@ echo (new \ReflectionFunction('strspn'))->isInternal() ? 1 : 0,
     );
     assert_eq!(out, "22/b0a\\.b\n2.z21\\+1\n1111111111\n");
 }
+
+/// Inside eval, an array or a non-`Stringable` object passed to an integer `$offset` / `$length`
+/// or to `preg_quote()`'s `$delimiter` throws PHP's `TypeError` instead of being cast to `0` /
+/// `""`; null, numeric strings and `Stringable` objects are still coerced.
+#[test]
+fn test_span_compare_eval_rejects_container_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Slash { public function __toString(): string { return "/"; } }
+$calls = [
+    'return strspn("aaa", "a", 0, []);',
+    'return strcspn("abc", "c", []);',
+    'return substr_compare("aaa", "a", 0, []);',
+    'return substr_compare("aaa", "a", new stdClass());',
+    'return preg_quote("a.b", []);',
+];
+foreach ($calls as $code) {
+    try {
+        var_dump(eval($code));
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+echo eval('return preg_quote("a/b", new Slash());'), " ", eval('return strspn("aaab", "a", 0, null);'),
+    " ", eval('return strspn("aaab", "a", 0, "2");'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "strspn(): Argument #4 ($length) must be of type ?int, array given\n\
+strcspn(): Argument #3 ($offset) must be of type int, array given\n\
+substr_compare(): Argument #4 ($length) must be of type ?int, array given\n\
+substr_compare(): Argument #3 ($offset) must be of type int, stdClass given\n\
+preg_quote(): Argument #2 ($delimiter) must be of type ?string, array given\n\
+a\\/b 3 2\n"
+    );
+}

@@ -46,9 +46,21 @@ pub(in crate::interpreter) fn eval_substr_compare_values_result(
     };
     let haystack = values.string_bytes(haystack)?;
     let needle = values.string_bytes(needle)?;
+    eval_reject_container_argument("substr_compare", 3, "offset", "int", offset, context, values)?;
     let offset = eval_int_value(offset, values)?;
     let length = match rest.first() {
-        Some(length) if !values.is_null(*length)? => Some(eval_int_value(*length, values)?),
+        Some(length) if !values.is_null(*length)? => {
+            eval_reject_container_argument(
+                "substr_compare",
+                4,
+                "length",
+                "?int",
+                *length,
+                context,
+                values,
+            )?;
+            Some(eval_int_value(*length, values)?)
+        }
         _ => None,
     };
     let case_insensitive = match rest.get(1) {

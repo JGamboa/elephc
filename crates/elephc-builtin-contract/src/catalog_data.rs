@@ -27287,7 +27287,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "delimiter",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -31120,7 +31120,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "length",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -33317,7 +33317,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "length",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -33625,7 +33625,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "length",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
