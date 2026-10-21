@@ -64,6 +64,31 @@ try { echo strlen(random_bytes($n)), "\n"; } catch (ValueError $e) { echo $e->ge
     );
 }
 
+/// A string `$length` follows PHP's weak-mode `int` parameter: numeric strings (with
+/// surrounding whitespace, or a float form that truncates) are lengths, anything else is the
+/// catchable `TypeError`, compiled and in eval.
+#[test]
+fn test_random_bytes_numeric_string_lengths() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["16", " 4", "4 ", "2.0", "3abc", "abc", ""] as $s) {
+    try { echo strlen(random_bytes($s)), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+echo strlen(random_bytes("8")), "\n";
+eval('echo strlen(random_bytes(" 1e1 ")), "\n"; try { random_bytes("3abc"); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "16\n4\n4\n2\n\
+         random_bytes(): Argument #1 ($length) must be of type int, string given\n\
+         random_bytes(): Argument #1 ($length) must be of type int, string given\n\
+         random_bytes(): Argument #1 ($length) must be of type int, string given\n8\n\
+         10\n\
+         random_bytes(): Argument #1 ($length) must be of type int, string given\n"
+    );
+}
+
 /// The fresh result strings are released like any other owned string.
 #[test]
 fn test_random_bytes_results_do_not_leak() {
