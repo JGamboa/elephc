@@ -203,6 +203,11 @@ pub(super) fn lower_array_access_from_receiver(
 
 /// Lowers a subscript-chain receiver with undefined-offset warnings suppressed on
 /// nested array reads, so `isset()`/`??` stay silent across chained subscripts.
+///
+/// A runtime-named `$class::$p` at the root of the chain is read in the same silent mode: an
+/// uninitialized typed property, an undeclared name or one the scope cannot see yields `null`
+/// there instead of raising, so `$c::$p['x'] ?? 'd'` answers the default like PHP's
+/// `BP_VAR_IS` fetch.
 pub(super) fn lower_subscript_receiver_silently(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -210,7 +215,23 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
+    if let Some(probed) = super::dynamic_class_access::lower_dynamic_static_property_probe(ctx, array) {
+        return probed;
+    }
     lower_expr(ctx, array)
+}
+
+/// Whether the root of the subscript chain `array` must be read as a silent probe (see
+/// [`lower_subscript_receiver_silently`]): `isset()` over such a chain cannot take the eager
+/// builtin route, whose ordinary read of the root raises.
+pub(super) fn subscript_root_needs_silent_probe(array: &Expr) -> bool {
+    match &array.kind {
+        ExprKind::ArrayAccess { array: inner, .. } => subscript_root_needs_silent_probe(inner),
+        ExprKind::FunctionCall { name, .. } => {
+            php_symbol_key(name.as_str().trim_start_matches('\\')) == "__elephc_dynamic_static_property"
+        }
+        _ => false,
+    }
 }
 
 /// Lowers array access once the receiver is already evaluated.

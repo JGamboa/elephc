@@ -204,3 +204,32 @@ fn test_dynamic_static_property_silent_probes() {
         "7ab5\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nd\nTyped static property C::$p must not be accessed before initialization\n"
     );
 }
+
+/// Regression: the silent probe also covers `$class::$p` as the root of a subscript chain under
+/// `??`, `isset()` and `empty()` (`$c::$p['x'] ?? 'd'` with `$p` an uninitialized typed array);
+/// a hidden root, a missing key and a deeper chain answer silently too, and no warning is
+/// raised.
+#[test]
+fn test_dynamic_static_property_subscript_silent_probes() {
+    let out = compile_and_run(
+        r#"<?php
+        set_error_handler(function ($no, $msg) { echo "[warn: $msg]"; return true; });
+        class C {
+            public static array $p;
+            private static array $hidden = ['x' => 1];
+            public static $u = ['k' => ['n' => 5]];
+        }
+        $c = 'C';
+        echo $c::$p['x'] ?? 'default', $c::$p['x']['y'] ?? 'deep', "\n";
+        var_dump(isset($c::$p['x']), empty($c::$p['x']), isset($c::$p['x']['y']));
+        echo $c::$u['k']['n'] ?? 'no', $c::$u['k']['m'] ?? 'nm', $c::$hidden['x'] ?? 'hid', "\n";
+        var_dump(isset($c::$u['k']['n']), isset($c::$hidden['x']), empty($c::$nope['a']));
+        C::$p = ['x' => 'set'];
+        echo $c::$p['x'] ?? 'default', "\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "defaultdeep\nbool(false)\nbool(true)\nbool(false)\n5nmhid\nbool(true)\nbool(false)\nbool(true)\nset\n"
+    );
+}

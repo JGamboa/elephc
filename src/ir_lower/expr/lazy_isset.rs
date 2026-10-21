@@ -90,6 +90,14 @@ pub(super) fn lower_lazy_isset_operand(
                 );
                 return Some(lower_expr(ctx, &synthetic));
             }
+            // `isset($c::$p['x'])`: the chain's root is a silent probe, so the offset is read
+            // silently over it and the answer is "not null".
+            if !array_access_expr_supports_native_isset_probe(ctx, array)
+                && subscript_root_needs_silent_probe(array)
+            {
+                let probed = lower_array_access_with_missing_warning(ctx, array, index, arg, false);
+                return Some(probe_value_is_set(ctx, probed, arg));
+            }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
                 return None;
             }
