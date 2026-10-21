@@ -157,16 +157,37 @@ fn test_expression_callables_parse() {
 
 /// Verifies `$obj->{$m}(...$a, name: v)` binds names at run time through
 /// `call_user_func_array` (an assignment whose prelude evaluates receiver, name and arguments).
+/// A variable passed by name adds its write-back after the call: `[call, write-back][0]`.
 #[test]
 fn test_dynamic_method_call_with_named_arguments_parses() {
+    let is_call = |expr: &Expr| {
+        matches!(
+            &expr.kind,
+            ExprKind::FunctionCall { name, .. } if name.as_str() == "call_user_func_array"
+        )
+    };
+    let stmts = parse_source("<?php $q->{$m}(...$v, boolean: true);");
+    match &first_stmt_expr(&stmts).kind {
+        ExprKind::Assignment { value, prelude, .. } => {
+            assert!(is_call(value), "{:?}", value);
+            assert!(prelude.len() >= 4, "{:?}", prelude);
+        }
+        other => panic!("Expected named-argument dynamic call, got {:?}", other),
+    }
     let stmts = parse_source("<?php $q->{$m}(...$v, boolean: $b);");
     match &first_stmt_expr(&stmts).kind {
         ExprKind::Assignment { value, prelude, .. } => {
-            assert!(matches!(
-                &value.kind,
-                ExprKind::FunctionCall { name, .. } if name.as_str() == "call_user_func_array"
-            ));
-            assert!(prelude.len() >= 4, "{:?}", prelude);
+            match &value.kind {
+                ExprKind::ArrayAccess { array, .. } => match &array.kind {
+                    ExprKind::ArrayLiteral(items) => {
+                        assert_eq!(items.len(), 2, "{:?}", items);
+                        assert!(is_call(&items[0]), "{:?}", items[0]);
+                    }
+                    other => panic!("Expected the call and its write-back, got {:?}", other),
+                },
+                other => panic!("Expected the call and its write-back, got {:?}", other),
+            }
+            assert!(prelude.len() >= 6, "{:?}", prelude);
         }
         other => panic!("Expected named-argument dynamic call, got {:?}", other),
     }

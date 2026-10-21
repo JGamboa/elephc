@@ -566,7 +566,8 @@ fn test_error_dynamic_static_method_call_rejects_named_arguments() {
 }
 
 /// Verifies PHP's compile-time argument-list rules on a dynamic method call with named
-/// arguments, and the explicit refusal of two unpacked lists next to a named argument.
+/// arguments, and the explicit refusals of two unpacked lists next to a named argument and of
+/// one variable passed to two named arguments.
 #[test]
 fn test_error_dynamic_method_call_named_argument_order() {
     expect_error("<?php $o->$m(a: 1, a: 2);", "Duplicate named parameter $a");
@@ -575,6 +576,12 @@ fn test_error_dynamic_method_call_named_argument_order() {
     expect_error(
         "<?php $o->$m(...$x, ...$y, a: 1);",
         "Named arguments together with more than one unpacked argument",
+    );
+    // Two by-reference parameters given one variable must alias each other, which separate
+    // argument-array cells cannot do, so the shape is refused instead of compiled wrong.
+    expect_error(
+        "<?php $n = 1; $o->$m(a: $n, b: $n);",
+        "Passing $n to more than one named argument of a call whose method name is only known at run time is not supported",
     );
 }
 

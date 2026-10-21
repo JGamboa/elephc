@@ -16,6 +16,9 @@
 //!   temporary and every explicit name is checked against it before it is added. The checks are
 //!   `exists ? throw ... : null` assignments because an assignment prelude only holds
 //!   assignment-like statements.
+//! - A plain variable passed by name is carried back after the call when a by-reference
+//!   parameter changed it, through its own storage, so references the caller holds stay intact
+//!   (see `with_write_backs`). One variable passed to two names is refused.
 //! - The receiver and the method name are evaluated first, then the arguments in source order,
 //!   as PHP orders them.
 
@@ -69,11 +72,34 @@ pub(super) fn dynamic_method_call_with_named_args(
     }
 
     // A plain variable passed by name may bind a by-reference parameter of the method that is
-    // only resolved at run time. An array element cannot alias a variable, so the variable is
-    // made to alias the element instead (`$args['x'] = $n; $n =& $args['x'];`), which carries a
-    // write through the callable invoker back to `$n` and is invisible for a by-value parameter.
+    // only resolved at run time. An array element cannot alias a variable, and rebinding the
+    // variable to the element would detach it from references the caller already holds
+    // (`$alias =& $n`). So a hidden local aliases the element instead
+    // (`$args['x'] = $n; $ref =& $args['x']; $snap = $ref;`), the callable invoker writes a
+    // by-reference parameter through it, and after the call a changed value is assigned back
+    // to `$n` (`$ref !== $snap && ($n = $ref)`), through `$n`'s own storage. A by-value
+    // parameter leaves `$ref` unchanged, so `$n` is not written at all.
     let binds_place = |value: &Expr| matches!(&value.kind, ExprKind::Variable(name) if name != "this");
     let has_place_named = named.iter().any(|(_, value, _)| binds_place(value));
+    // Two names given the same variable would bind two separate cells, so a method taking both
+    // by reference would not see them alias each other, as PHP's do.
+    let mut seen_places: Vec<&str> = Vec::new();
+    for (_, value, arg_span) in &named {
+        if let ExprKind::Variable(variable) = &value.kind {
+            if binds_place(value) {
+                if seen_places.contains(&variable.as_str()) {
+                    return Err(CompileError::new(
+                        *arg_span,
+                        &format!(
+                            "Passing ${variable} to more than one named argument of a call whose method name is only known at run time is not supported; copy it into a separate variable first"
+                        ),
+                    ));
+                }
+                seen_places.push(variable);
+            }
+        }
+    }
+    let mut write_backs: Vec<WriteBack> = Vec::new();
     let args_value = if spreads == 0 && !has_place_named {
         // Every name is distinct (validated) and no positional key is a string, so the literal
         // is exactly the argument list.
@@ -108,7 +134,9 @@ pub(super) fn dynamic_method_call_with_named_args(
             };
             if spreads == 0 {
                 // No unpacked list can have supplied this name already (names are validated).
-                push_named_entry(&mut prelude, &args_local, key, stored, place, arg_span);
+                let place = place.map(|variable| write_back_for(&local, index, variable));
+                push_named_entry(&mut prelude, &args_local, key, stored, place.as_ref(), arg_span);
+                write_backs.extend(place);
                 continue;
             }
             let already_passed = Expr::new(
@@ -149,7 +177,9 @@ pub(super) fn dynamic_method_call_with_named_args(
                 },
                 arg_span,
             ));
-            push_named_entry(&mut prelude, &args_local, key, stored, place, arg_span);
+            let place = place.map(|variable| write_back_for(&local, index, variable));
+            push_named_entry(&mut prelude, &args_local, key, stored, place.as_ref(), arg_span);
+            write_backs.extend(place);
         }
         var(&args_local)
     };
@@ -167,6 +197,7 @@ pub(super) fn dynamic_method_call_with_named_args(
         },
         span,
     );
+    let call = with_write_backs(call, write_backs, span);
     Ok(Expr::new(
         ExprKind::Assignment {
             target: Box::new(var(&result_local)),
@@ -179,22 +210,40 @@ pub(super) fn dynamic_method_call_with_named_args(
     ))
 }
 
-/// Appends `$args[key] = value;` to the prelude and, for a plain variable passed by name, makes
-/// that variable alias the new element (`$var =& $args[key];`) so a by-reference parameter's
-/// write reaches it.
+/// The hidden locals that carry a by-reference write of one named argument back to the
+/// caller's variable: `reference` aliases the argument-array element, `snapshot` holds the
+/// value it was passed with.
+struct WriteBack {
+    variable: String,
+    reference: String,
+    snapshot: String,
+}
+
+/// Names the [`WriteBack`] locals of the `index`-th named argument, passed as `variable`.
+fn write_back_for(local: &dyn Fn(&str) -> String, index: usize, variable: String) -> WriteBack {
+    WriteBack {
+        variable,
+        reference: local(&format!("ref{index}")),
+        snapshot: local(&format!("snap{index}")),
+    }
+}
+
+/// Appends `$args[key] = value;` to the prelude and, for a plain variable passed by name, binds
+/// its [`WriteBack`] locals to the new element (`$ref =& $args[key]; $snap = $ref;`) so a
+/// by-reference parameter's write can be carried back after the call.
 fn push_named_entry(
     prelude: &mut Vec<Stmt>,
     args_local: &str,
     key: Expr,
     value: Expr,
-    place: Option<String>,
+    write_back: Option<&WriteBack>,
     span: Span,
 ) {
     prelude.push(Stmt::new(
         StmtKind::ArrayAssign { array: args_local.to_string(), index: key.clone(), value },
         span,
     ));
-    if let Some(variable) = place {
+    if let Some(write_back) = write_back {
         let element = Expr::new(
             ExprKind::ArrayAccess {
                 array: Box::new(Expr::new(ExprKind::Variable(args_local.to_string()), span)),
@@ -202,8 +251,64 @@ fn push_named_entry(
             },
             span,
         );
-        prelude.push(Stmt::new(StmtKind::RefAssign { target: variable, source: element }, span));
+        prelude.push(Stmt::new(
+            StmtKind::RefAssign { target: write_back.reference.clone(), source: element },
+            span,
+        ));
+        prelude.push(Stmt::new(
+            StmtKind::Assign {
+                name: write_back.snapshot.clone(),
+                value: Expr::new(ExprKind::Variable(write_back.reference.clone()), span),
+            },
+            span,
+        ));
     }
+}
+
+/// Returns `call` followed by the write-backs, as `[call, $ref !== $snap && ($n = $ref),
+/// ...][0]`: the call runs first, then each variable whose element a by-reference parameter
+/// changed is assigned the new value, and the expression still yields the call's result.
+fn with_write_backs(call: Expr, write_backs: Vec<WriteBack>, span: Span) -> Expr {
+    if write_backs.is_empty() {
+        return call;
+    }
+    let var = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), span);
+    let mut items = vec![call];
+    for write_back in write_backs {
+        let changed = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(var(&write_back.reference)),
+                op: crate::parser::ast::BinOp::StrictNotEq,
+                right: Box::new(var(&write_back.snapshot)),
+            },
+            span,
+        );
+        let assign_back = Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(var(&write_back.variable)),
+                value: Box::new(var(&write_back.reference)),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        );
+        items.push(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(changed),
+                op: crate::parser::ast::BinOp::And,
+                right: Box::new(assign_back),
+            },
+            span,
+        ));
+    }
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::ArrayLiteral(items), span)),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(0), span)),
+        },
+        span,
+    )
 }
 
 /// Enforces PHP's compile-time argument-list rules that the desugaring would otherwise blur,

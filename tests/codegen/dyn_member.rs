@@ -318,6 +318,32 @@ fn test_dynamic_method_named_argument_binds_by_reference() {
     assert_eq!(out, "6 6 5\nza a\n11 11\n6 7\n");
 }
 
+/// Regression: a variable passed by name to a runtime method name keeps the references the
+/// caller already holds: a by-reference write reaches `$alias =& $n` too, a by-value call
+/// leaves the binding alone (a later `$n = ...` is still seen through `$alias`), and the same
+/// holds inside a function and for a string or object value.
+#[test]
+fn test_dynamic_method_named_argument_keeps_existing_references() {
+    let out = compile_and_run(
+        r#"<?php
+        class O {
+            public function bump(&$x, $by = 1) { $x += $by; return $x; }
+            public function val($a, $b = 'B') { return $a . $b; }
+            public function suffix(&$s) { $s .= '!'; }
+        }
+        $o = new O; $m = 'bump'; $v = 'val'; $sfx = 'suffix';
+        $n = 1; $alias =& $n;
+        echo $o->$m(x: $n), " ", $n, " ", $alias, "\n";
+        $w = $o->$v(a: $n); $n = 7; echo $w, " ", $alias, "\n";
+        $k = 3; echo $o->$m(by: $k, x: $n), " ", $n, " ", $alias, " ", $k, "\n";
+        $s = 'hi'; $t =& $s; $o->$sfx(s: $s); echo $s, $t, "\n";
+        function f(O $o, string $m) { $q = 1; $r =& $q; $o->$m(x: $q, by: 4); return "$q $r"; }
+        echo f($o, 'bump'), "\n";
+        "#,
+    );
+    assert_eq!(out, "2 2 2\n2B 7\n10 10 10 3\nhi!hi!\n5 5\n");
+}
+
 /// Regression: a runtime name that is itself `__callStatic` / `__call` calls that method
 /// directly with the supplied arguments; only an unmatched name takes the magic fallback.
 #[test]
