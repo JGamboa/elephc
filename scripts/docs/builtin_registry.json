@@ -52932,8 +52932,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "get_debug_type"
       },
       "effects": {
         "kind": "static",
