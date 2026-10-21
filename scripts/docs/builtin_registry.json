@@ -52906,7 +52906,7 @@
     },
     "eval_only": false,
     "examples": [
-      "// Full example: examples/type-ops/main.php\necho get_debug_type(42);           // int\necho get_debug_type(new Square());   // Square\necho get_debug_type(new class {});   // class@anonymous"
+      "```php\n// Full example: examples/type-ops/main.php\necho get_debug_type(42);           // int\necho get_debug_type(new Square());   // Square\necho get_debug_type(new class {});   // class@anonymous\n```"
     ],
     "in_catalog": true,
     "is_extension": false,

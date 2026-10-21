@@ -25,10 +25,12 @@ Gets the type name of a variable in a way that is suitable for debugging.
 
 **Examples**:
 
+```php
 // Full example: examples/type-ops/main.php
 echo get_debug_type(42);           // int
 echo get_debug_type(new Square());   // Square
 echo get_debug_type(new class {});   // class@anonymous
+```
 
 ## Internals
 
