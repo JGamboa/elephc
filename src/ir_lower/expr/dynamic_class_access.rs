@@ -21,7 +21,7 @@
 //!   member the scope cannot see throws PHP's visibility `Error` instead of reading it.
 
 use super::*;
-use crate::parser::ast::Visibility;
+use crate::parser::ast::{ArrayEntry, Visibility};
 
 /// Which member family a dynamic-receiver read targets.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -326,7 +326,9 @@ fn dynamic_member_candidates(
 ///   one that is an instance of `C` (exact for a `$this` receiver; for another receiver only when
 ///   no subclass of `C` overrides `m`, otherwise a catchable "not supported" `Error`), and
 ///   throws PHP's `Non-static method C::m() cannot be called statically` `Error` otherwise.
-/// An unmatched name throws `Call to undefined method X::m()`.
+/// A class with `__callStatic` answers a name it lacks, or one this scope cannot reach, through
+/// `C::__callStatic('m', [args])`; any other unmatched name throws `Call to undefined method
+/// X::m()`.
 fn lower_dynamic_static_call(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -375,7 +377,23 @@ fn lower_dynamic_static_call(
                 ),
                 // A private method of an ancestor is not in the child's tables, yet PHP finds it
                 // (and allows it from the declaring scope): `A::callSec(new B)` → `$o::sec()`.
-                (None, None) => inherited_private_static_method(ctx, info, &method_key)?,
+                (None, None) => match inherited_private_static_method(ctx, info, &method_key) {
+                    Some(found) => found,
+                    // No such method: a class with `__callStatic` still answers the call.
+                    None if class_has_call_static(info) => {
+                        return Some(MethodCandidate {
+                            class_name: class_name.clone(),
+                            is_static: true,
+                            visibility: None,
+                            declaring: class_name.clone(),
+                            required: 0,
+                            max_args: None,
+                            unsupported: None,
+                            magic: true,
+                        });
+                    }
+                    None => return None,
+                },
             };
             let late_static_unsupported = (declaring.as_deref() != Some(class_name.as_str())
                 && matches!(visibility, Some(Visibility::Private))
@@ -415,6 +433,7 @@ fn lower_dynamic_static_call(
                     .count(),
                 max_args: sig.variadic.is_none().then_some(sig.params.len()),
                 unsupported: late_static_unsupported.or(by_ref_unsupported),
+                magic: false,
             })
         })
         .collect();
@@ -460,7 +479,16 @@ fn lower_dynamic_static_call(
             required,
             max_args,
             unsupported,
+            magic,
         } = candidate;
+        // PHP hands an unknown method, and one this scope cannot reach, to `__callStatic`.
+        let has_magic = ctx.classes.get(class_name.as_str()).is_some_and(class_has_call_static);
+        if magic || (has_magic && !scope_can_access(ctx, visibility.as_ref(), &declaring)) {
+            let call = call_static_magic_expr(&class_name, method, call_args, span);
+            store_expr_into_temp(ctx, &result_temp, PhpType::Mixed, &call, span);
+            branch_to(ctx, merge);
+            continue;
+        }
         if !scope_can_access(ctx, visibility.as_ref(), &declaring) {
             let message = format!(
                 "Call to {} method {declaring}::{method}() from {scope_label}",
@@ -745,6 +773,41 @@ struct MethodCandidate {
     max_args: Option<usize>,
     /// Why this arm cannot be lowered faithfully; the arm then throws instead.
     unsupported: Option<String>,
+    /// The class has no such method and answers through its `__callStatic`.
+    magic: bool,
+}
+
+/// Whether the class declares or inherits a `__callStatic` handler.
+fn class_has_call_static(info: &crate::types::ClassInfo) -> bool {
+    info.static_methods.contains_key(&php_symbol_key("__callStatic"))
+}
+
+/// Builds `C::__callStatic('m', [args])`: PHP's fallback for `$class::m(...)` when `C` has no
+/// accessible `m`. Named arguments keep their names as string keys and a spread is unpacked
+/// into the list, as PHP collects them for the handler.
+fn call_static_magic_expr(class_name: &str, method: &str, call_args: &[Expr], span: Span) -> Expr {
+    let entries = call_args
+        .iter()
+        .map(|arg| match &arg.kind {
+            ExprKind::Spread(inner) => ArrayEntry::Spread((**inner).clone()),
+            ExprKind::NamedArg { name, value } => ArrayEntry::Keyed(
+                Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                (**value).clone(),
+            ),
+            _ => ArrayEntry::Value(arg.clone()),
+        })
+        .collect();
+    Expr::new(
+        ExprKind::StaticMethodCall {
+            receiver: StaticReceiver::Named(Name::from(class_name.to_string())),
+            method: "__callStatic".to_string(),
+            args: vec![
+                literal(method, span),
+                Expr::new(ExprKind::ArrayLiteralMixed(entries), span),
+            ],
+        },
+        span,
+    )
 }
 
 /// Evaluates every supplied argument, in order, only for its side effects, keeping each value

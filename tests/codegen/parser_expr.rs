@@ -85,6 +85,56 @@ fn test_mixed_receiver_subscript_string_miss_warns() {
     assert!(output.stderr.contains("Uninitialized string offset 7"), "{}", output.stderr);
 }
 
+/// Regression: the string arm of a `mixed` receiver reads a boxed variable offset again after
+/// its cast warning, like the typed string read: a handler that moves `$o` from `1.9` to `2.9`
+/// selects `'c'`, as in PHP.
+#[test]
+fn test_mixed_receiver_subscript_string_offset_reloaded_after_cast_warning() {
+    let out = compile_and_run(
+        r#"<?php
+        function v(): mixed { return 'abc'; }
+        $s = v(); $t = 'abc';
+        $o = 1.9;
+        set_error_handler(function ($no, $msg) use (&$o) { echo "[$msg]"; $o = 2.9; return true; });
+        echo $s[$o], "|";
+        $o = 1.9;
+        echo $t[$o], "|";
+        $o = 0;
+        echo $s[$o], $s[1], $s[-1], "\n";
+        "#,
+    );
+    assert_eq!(out, "[String offset cast occurred]c|[String offset cast occurred]c|abc\n");
+}
+
+/// Regression: `$class::m()` falls back to the runtime class's `__callStatic` when it has no
+/// `m` (inherited handlers keep late static binding, spreads are unpacked) or when `m` is not
+/// accessible from the calling scope, while a class without the handler still throws.
+#[test]
+fn test_dynamic_receiver_static_call_falls_back_to_call_static() {
+    let out = compile_and_run(
+        r#"<?php
+        class Base {
+            public static function __callStatic($n, $a) { return static::class . ":$n:" . implode(',', $a); }
+            private static function sec() { return 'sec'; }
+            public static function inside(string $c) { return $c::sec(); }
+        }
+        class Kid extends Base {}
+        class Plain { public static function f() { return 'f'; } }
+        $k = 'Kid'; $b = 'Base'; $p = 'Plain';
+        echo $k::anything(1, 2), "\n";
+        $xs = [3, 4]; echo $b::spread(...$xs), "\n";
+        echo $b::sec(), "|", Base::inside('Base'), "\n";
+        $o = new Kid; echo $o::viaObject('z'), "\n";
+        echo $p::f(), "\n";
+        try { echo $p::nope(); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "Kid:anything:1,2\nBase:spread:3,4\nBase:sec:|sec\nKid:viaObject:z\nf\nError: Call to undefined method Plain::nope()\n"
+    );
+}
+
 /// Verifies `$receiver::method()` dispatches on the receiver's runtime class: statics resolve
 /// with late static binding, `$this::inst()` runs on `$this`, an instance method from outside
 /// throws PHP's "cannot be called statically" Error, and an unknown method is a catchable Error.
