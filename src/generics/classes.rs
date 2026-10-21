@@ -1064,14 +1064,16 @@ fn splice(
     (program, added)
 }
 
-/// Collects every class, interface and trait name the program declares, namespace blocks
-/// included: the three share one namespace, so an instantiation must not reuse any of them.
+/// Collects every class, interface, trait and enum name the program declares, namespace blocks
+/// included: the four share one namespace, so an instantiation must not reuse any of them, and
+/// a type argument on any of them is a mistake to report rather than a name to erase.
 fn collect_declared_names(stmts: &[Stmt], names: &mut Vec<String>) {
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::ClassDecl { name, .. }
             | StmtKind::InterfaceDecl { name, .. }
-            | StmtKind::TraitDecl { name, .. } => names.push(name.clone()),
+            | StmtKind::TraitDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. } => names.push(name.clone()),
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
                 collect_declared_names(body, names)
             }
