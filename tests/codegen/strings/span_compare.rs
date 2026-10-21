@@ -173,3 +173,17 @@ preg_quote(): Argument #2 ($delimiter) must be of type ?string, array given\n\
 a\\/b 3 2\n"
     );
 }
+
+/// A second string argument that is not already a string (int, float, null, bool) is converted
+/// before the helper call; on x86_64 it is staged into `rdx`/`rcx`, where the converted pointer
+/// must not overwrite the converted length.
+#[test]
+fn test_span_compare_converted_second_strings() {
+    let out = compile_and_run(
+        r#"<?php
+echo strcspn("abc1", 1), strspn("1123x", 12), strcspn("ab", null), strspn("11.5", 1.5), "\n";
+var_dump(strrchr("a1b1c", 1), strrchr("xtrue", true), substr_compare("abc12", 12, 3), substr_compare("abc", null, 3), substr_compare("x1.5", 1.5, 1));
+"#,
+    );
+    assert_eq!(out, "3324\nstring(2) \"1c\"\nbool(false)\nint(0)\nint(0)\nint(0)\n");
+}
