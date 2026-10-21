@@ -131,8 +131,8 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 /// `owner_kind` is used only for error messages (e.g., "class", "trait").
 /// `enclosing_is_abstract` controls whether abstract property declarations are permitted.
 ///
-/// A method whose body fails to parse after its closing `}` was consumed (the body's own
-/// statement recovery already reported those errors) does not stop the member list: its
+/// A method that fails to parse does not stop the member list when its end can be found (see
+/// [`failed_member_end`]; usually the body's own statement recovery already consumed its `}`): its
 /// errors are kept and parsing continues with the next member, so every malformed method of a
 /// class is reported in one compile. The kept errors are returned, ahead of any later fatal
 /// member error, once the body ends.
@@ -169,22 +169,51 @@ type ClassLikeBody = (
     Vec<EnumCaseDecl>,
 );
 
-/// Returns true when `tokens[start..end]` ends with a `}` that closes every `{` opened since
-/// `start`: the member that began at `start` was consumed completely, body included.
-fn member_fully_consumed(tokens: &[SpannedToken], start: usize, end: usize) -> bool {
-    if end <= start || !matches!(tokens.get(end - 1).map(|(token, _)| token), Some(Token::RBrace))
-    {
-        return false;
+/// Returns the end (one past the closing `}`) of the method that began at `start` and failed
+/// with the parser stopped at `stopped`, or `None` when that end cannot be found safely.
+///
+/// The end is the first `}` at or after `stopped - 1` that closes every `{` and every `(`
+/// opened since `start`. When the method's own body recovery already consumed its `}`, that is
+/// `stopped` itself. Counting parentheses too keeps a closure in a parameter default
+/// (`function a($x = function() { echo 1 +; }) {}`) from passing for the method: its `}`
+/// balances the braces while the parameter list is still open, so the walk goes on to the
+/// method's real body. The walk gives up at a `}` that would close the enclosing class and at
+/// a `;` or `function` outside every brace and parenthesis.
+fn failed_member_end(tokens: &[SpannedToken], start: usize, stopped: usize) -> Option<usize> {
+    if stopped <= start {
+        return None;
     }
-    let mut depth = 0isize;
-    for (token, _) in tokens.iter().take(end).skip(start) {
+    let mut braces = 0isize;
+    let mut parens = 0isize;
+    for (index, (token, _)) in tokens.iter().enumerate().skip(start) {
         match token {
-            Token::LBrace => depth += 1,
-            Token::RBrace => depth -= 1,
+            Token::LBrace => braces += 1,
+            Token::RBrace => braces -= 1,
+            Token::LParen => parens += 1,
+            Token::RParen => parens -= 1,
+            Token::Eof => return None,
             _ => {}
         }
+        // A `}` closing the class, or a `;` / `function` outside every brace and parenthesis
+        // (the end of a bodiless method, the start of the next member), means this method has
+        // no body left to find.
+        if braces < 0
+            || (braces == 0
+                && parens == 0
+                && matches!(token, Token::Semicolon | Token::Function)
+                && index > start)
+        {
+            return None;
+        }
+        if index + 1 >= stopped
+            && matches!(token, Token::RBrace)
+            && braces == 0
+            && parens == 0
+        {
+            return Some(index + 1);
+        }
     }
-    depth == 0
+    None
 }
 
 /// Parses the members of a class-like body up to (not including) its closing `}`; see
@@ -332,11 +361,14 @@ fn parse_class_like_members(
                 Ok(parsed) => parsed,
                 // The body's own recovery already reported its errors and consumed its `}`:
                 // keep them and go on with the next member.
-                Err(error) if member_fully_consumed(tokens, method_start, *pos) => {
-                    member_errors.extend(error.flatten());
-                    continue;
-                }
-                Err(error) => return Err(error),
+                Err(error) => match failed_member_end(tokens, method_start, *pos) {
+                    Some(end) => {
+                        member_errors.extend(error.flatten());
+                        *pos = end;
+                        continue;
+                    }
+                    None => return Err(error),
+                },
             };
             method.attributes = member_attributes;
             append_promoted_properties(&mut properties, promoted_properties)?;

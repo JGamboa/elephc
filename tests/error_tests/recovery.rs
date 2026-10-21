@@ -426,3 +426,20 @@ fn test_parser_recovery_reports_every_malformed_method_of_a_class() {
     assert_eq!(messages.len(), 3, "expected one error per broken method plus the echo, got {:?}", messages);
     assert!(messages[2].contains("Expected ';'"), "{:?}", messages);
 }
+
+/// Verifies that a closure in a parameter default does not pass for the end of its method when
+/// the closure's body fails: the parameter list is still open, so the member walk must not
+/// resume at the method's `)` with a spurious member-declaration error; it skips to the
+/// method's own body and the next method's error is still reported.
+#[test]
+fn test_parser_recovery_closure_in_parameter_default_is_not_the_method_end() {
+    let messages = parse_error_messages(
+        "<?php class K { function a($x = function() { echo 1 +; }) {} function b() { echo 2 +; } }",
+    );
+    assert!(
+        messages.iter().all(|message| !message.contains("Expected trait use, property, or method")),
+        "{:?}",
+        messages
+    );
+    assert_eq!(messages.len(), 2, "expected the closure's and b()'s errors, got {:?}", messages);
+}
