@@ -127,6 +127,18 @@ var_dump(version_compare($v, "0"), version_compare($v, "", "=="));
     assert_eq!(out, "int(-1)\nint(1)\nbool(true)\nint(-1)\nbool(true)\n");
 }
 
+/// Scalar versions that are not strings are converted like PHP's coercive `string` parameter,
+/// in either position; the second version is the one staged through the SysV `rdx`/`rcx` pair.
+#[test]
+fn test_version_compare_scalar_versions_are_coerced() {
+    let out = compile_and_run(
+        r##"<?php
+var_dump(version_compare("1", 2), version_compare("1.5", 1.5, "eq"), version_compare(2, true), version_compare("1", false, ">"));
+"##,
+    );
+    assert_eq!(out, "int(-1)\nbool(true)\nint(1)\nbool(true)\n");
+}
+
 /// `version_compare()` is an internal function: eval, string callables, first-class callables
 /// and namespaced calls reach it, and Reflection reports it as internal.
 #[test]

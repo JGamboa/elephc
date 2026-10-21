@@ -58,10 +58,14 @@ pub(crate) fn lower_version_compare(ctx: &mut FunctionContext<'_>, inst: &Instru
     } else {
         ("rdi", "rsi", "rdx", "rcx", "r8", "r9", "r10")
     };
-    load_string_arg_to_regs(ctx, inst, 0, "version_compare", v1_ptr, v1_len)?;
-    abi::emit_push_reg_pair(ctx.emitter, v1_ptr, v1_len);
-    load_string_arg_to_regs(ctx, inst, 1, "version_compare", v2_ptr, v2_len)?;
-    abi::emit_push_reg_pair(ctx.emitter, v2_ptr, v2_len);
+    // Both versions are staged through the string result pair and parked on the stack: moving
+    // a coerced (non-`Str`) second version straight into `rdx`/`rcx` would overwrite the result
+    // length in `rdx` with the pointer before copying it.
+    let (str_ptr, str_len) = abi::string_result_regs(ctx.emitter);
+    load_string_arg_to_regs(ctx, inst, 0, "version_compare", str_ptr, str_len)?;
+    abi::emit_push_reg_pair(ctx.emitter, str_ptr, str_len);
+    load_string_arg_to_regs(ctx, inst, 1, "version_compare", str_ptr, str_len)?;
+    abi::emit_push_reg_pair(ctx.emitter, str_ptr, str_len);
     match shape {
         OperatorShape::Absent => {
             abi::emit_load_int_immediate(ctx.emitter, op_ptr, 0);
