@@ -89,6 +89,18 @@ eval('echo strlen(random_bytes(" 1e1 ")), "\n"; try { random_bytes("3abc"); } ca
     );
 }
 
+/// `random_bytes()` resolves case-insensitively and from inside a namespace (global fallback).
+#[test]
+fn test_random_bytes_case_insensitive_and_namespaced_calls() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Tokens;
+echo strlen(RANDOM_BYTES(3)), strlen(Random_Bytes(2)), strlen(\random_bytes(4)), strlen(random_bytes(5)), "\n";
+"#,
+    );
+    assert_eq!(out, "3245\n");
+}
+
 /// The fresh result strings are released like any other owned string.
 #[test]
 fn test_random_bytes_results_do_not_leak() {
