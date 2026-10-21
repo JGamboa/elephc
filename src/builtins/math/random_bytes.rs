@@ -24,6 +24,9 @@ builtin! {
 
 /// Rejects a `$length` PHP's coercive `int` parameter refuses (an array, an object, or another
 /// container shape) and types the call as the `string` it returns.
+///
+/// `null` is accepted: PHP's coercive mode converts it to `0` (only deprecated since PHP 8.1),
+/// which then raises the catchable `ValueError` for a length below 1.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some(length) = cx.args.first() {
         let span = length.span;
@@ -39,6 +42,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 | PhpType::Mixed
                 | PhpType::TaggedScalar
                 | PhpType::Union(_)
+                | PhpType::Void
+                | PhpType::Never
         );
         if !accepted {
             return Err(CompileError::new(

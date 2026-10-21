@@ -113,6 +113,20 @@ foreach (["lt", null, "bogus"] as $op) {
     );
 }
 
+/// A `null` version still compiles in PHP's coercive mode and compares as the empty string,
+/// directly and through a nullable variable.
+#[test]
+fn test_version_compare_null_versions_compare_as_empty_string() {
+    let out = compile_and_run(
+        r##"<?php
+var_dump(version_compare(null, "1"), version_compare("1", null), version_compare(null, null, "eq"));
+$v = $argc > 5 ? "2.0" : null;
+var_dump(version_compare($v, "0"), version_compare($v, "", "=="));
+"##,
+    );
+    assert_eq!(out, "int(-1)\nint(1)\nbool(true)\nint(-1)\nbool(true)\n");
+}
+
 /// `version_compare()` is an internal function: eval, string callables, first-class callables
 /// and namespaced calls reach it, and Reflection reports it as internal.
 #[test]

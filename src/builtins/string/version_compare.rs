@@ -48,6 +48,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Rejects an argument PHP's coercive `string` (or, with `nullable`, `?string`) parameter
 /// refuses: an array, an object, or another container shape, with PHP's `TypeError` wording.
+///
+/// `null` is accepted for every parameter: PHP's coercive mode still converts it to `""` for a
+/// non-nullable scalar parameter (only deprecated since PHP 8.1), so `nullable` only picks the
+/// declared type named in the message.
 fn check_string_parameter(
     cx: &mut BuiltinCheckCtx,
     index: usize,
@@ -68,8 +72,9 @@ fn check_string_parameter(
         | PhpType::False
         | PhpType::Mixed
         | PhpType::TaggedScalar
-        | PhpType::Union(_) => true,
-        PhpType::Void | PhpType::Never => nullable,
+        | PhpType::Union(_)
+        | PhpType::Void
+        | PhpType::Never => true,
         _ => false,
     };
     if accepted {

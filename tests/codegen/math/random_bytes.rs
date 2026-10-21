@@ -46,6 +46,24 @@ eval('try { random_bytes(0); } catch (\ValueError $e) { echo $e->getMessage(), "
     );
 }
 
+/// A `null` `$length` still compiles in PHP's coercive mode: it converts to `0` and raises
+/// the catchable `ValueError`, directly and through a nullable variable.
+#[test]
+fn test_random_bytes_null_length_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try { random_bytes(null); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$n = $argc > 5 ? 4 : null;
+try { echo strlen(random_bytes($n)), "\n"; } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError: random_bytes(): Argument #1 ($length) must be greater than 0\n\
+         random_bytes(): Argument #1 ($length) must be greater than 0\n"
+    );
+}
+
 /// The fresh result strings are released like any other owned string.
 #[test]
 fn test_random_bytes_results_do_not_leak() {
