@@ -142,3 +142,17 @@ eval('echo get_debug_type($o), "|", get_class($o), "\n";');
     );
     assert_eq!(out, "__PHP_Incomplete_Class|__PHP_Incomplete_Class\n");
 }
+
+/// A callback name known only at run time reaches `get_debug_type()` through its runtime
+/// wrapper: `array_map()`, a variable call and `call_user_func()`.
+#[test]
+fn test_get_debug_type_runtime_callback_name() {
+    let out = compile_and_run(
+        r#"<?php
+$f = $argc > 5 ? "gettype" : "get_debug_type";
+echo implode(",", array_map($f, [1, "x", 1.5, null, [], new stdClass()])), "\n";
+echo $f(true), ",", call_user_func($f, 2.0), "\n";
+"#,
+    );
+    assert_eq!(out, "int,string,float,null,array,stdClass\nbool,float\n");
+}

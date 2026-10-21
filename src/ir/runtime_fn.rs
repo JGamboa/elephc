@@ -2094,6 +2094,7 @@ impl RuntimeFnId {
     ///
     /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
     /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
+    /// `GetDebugType` takes one `mixed` value and answers a static type name, like `Gettype`.
     pub const fn runtime_callable_supported(self) -> bool {
         if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
@@ -2104,6 +2105,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::GetDebugType
                 | RuntimeFnId::Getmypid
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
@@ -2133,8 +2135,8 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
-            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::GetDebugType
+            | RuntimeFnId::Getmypid | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
