@@ -149,8 +149,9 @@ fn test_static_and_instance_calls_unaffected() {
 /// Compiles and runs the checked-in `examples/dynamic-dispatch/main.php` fixture, covering
 /// dynamic instance method dispatch by name, a dynamic static call, and a string-keyed spread
 /// bound by name through each of the three dynamic targets (issue #685), plus runtime-named
-/// class members (`$class::$prop`, `$class::CONST`, a `??` probe), `new $obj->prop()` and the
-/// `__callStatic` fallback of `$class::m()`.
+/// class members (`$class::$prop`, `$class::CONST`, a `??` probe), `new $obj->prop()`, the
+/// `__callStatic` fallback of `$class::m()`, a runtime method name on `self::` and named
+/// arguments on a runtime method name with a by-reference parameter.
 ///
 /// The expectation is verbatim host PHP 8.5.10 output for the whole example.
 #[test]
@@ -171,6 +172,8 @@ fn test_example_dynamic_dispatch_compiles_and_runs() {
             "probe: no color\n",
             "new from property: square\n",
             "magic fallback: Square has no area(), got 2 arguments\n",
+            "runtime self method: 3\n",
+            "named by reference: 5\n",
         )
     );
 }

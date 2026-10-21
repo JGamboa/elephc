@@ -112,3 +112,32 @@ echo "probe: " . ($shape_class::$color ?? "no color") . "\n";
 $twin = new $shape->twin();
 echo "new from property: " . $twin::$kind . "\n";
 echo "magic fallback: " . $shape_class::area(2, 3) . "\n";
+
+// Method names chosen at runtime: one picked on `self::` inside the class, and named arguments
+// on a runtime method name (a by-reference parameter still writes back to the caller).
+class Counter
+{
+    public static int $total = 0;
+
+    public static function add(int $by): int
+    {
+        return self::$total += $by;
+    }
+
+    public static function run(string $op, int $by): int
+    {
+        return self::$op($by);
+    }
+
+    public function bump(&$value, int $step = 1): void
+    {
+        $value += $step;
+    }
+}
+
+echo "runtime self method: " . Counter::run("add", 3) . "\n";
+
+$count = 1;
+$bump = "bump";
+(new Counter())->$bump(step: 4, value: $count);
+echo "named by reference: " . $count . "\n";
