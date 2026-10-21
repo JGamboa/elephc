@@ -675,3 +675,32 @@ fn test_one_line_block_reads_its_opening_tag() {
               function id($v) { return $v; }\necho id(7);\n";
     assert_eq!(compile_cli_file_and_run_with_flags(ok, &[]), "7");
 }
+
+/// A method template whose only `@param` loses to a native `mixed` binds nothing at a call, so
+/// it is dropped together with the `@return T` it was adopted into: ordinary calls keep
+/// compiling with the native signature, as php-src runs them. A sibling whose `@param` is adopted
+/// still specializes.
+#[test]
+fn test_docblock_method_template_lost_to_native_mixed_still_compiles() {
+    let source = r#"<?php
+class Repo {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function id(mixed $v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+}
+$repo = new Repo();
+echo $repo->id(7), "|", $repo->id("x"), "|", $repo->same(8) + 1, "|", $repo->same("y");
+"#;
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "7|x|9|y");
+    }
+}

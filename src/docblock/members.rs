@@ -79,8 +79,45 @@ pub(super) fn apply(
         {
             apply_type(&mut method.variadic_type, annotated, in_scope, own);
         }
+        let native_return = method.return_type.clone();
         if let Some(annotated) = &block.return_type {
             apply_type(&mut method.return_type, annotated, in_scope, own);
+        }
+        // A template the PHPDoc binds through a parameter, whose annotation then lost to a native
+        // hint (`@param T $v` on `mixed $v`), is no longer bound by anything at a call: calls
+        // infer method templates from their arguments only. Keeping it, and the return type it
+        // was adopted into, would make every ordinary call unresolvable, so both go and the
+        // method keeps its native signature there, which is all php-src ever saw. A template no
+        // `@param` mentions at all is left alone: that is the author's own unbindable template,
+        // and the call reports it.
+        let lost: Vec<String> = own
+            .iter()
+            .filter(|param| param.default.is_none())
+            .map(|param| param.name.clone())
+            .filter(|name| {
+                let name = std::slice::from_ref(name);
+                block
+                    .params
+                    .values()
+                    .any(|annotated| annotated.mentions_type_param(name))
+                    && !method
+                        .params
+                        .iter()
+                        .map(|(_, declared, _, _)| declared)
+                        .chain([&method.variadic_type])
+                        .flatten()
+                        .any(|declared| declared.mentions_type_param(name))
+            })
+            .collect();
+        if !lost.is_empty() {
+            if method
+                .return_type
+                .as_ref()
+                .is_some_and(|declared| declared.mentions_type_param(&lost))
+            {
+                method.return_type = native_return;
+            }
+            method.type_params.retain(|param| !lost.contains(&param.name));
         }
         // A template no position adopted (every annotation lost to a native hint) binds nothing
         // at a call and would only make the call unresolvable; php-src never saw it either.
