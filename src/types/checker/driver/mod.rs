@@ -255,7 +255,12 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     if let Err(error) =
-        inject_builtin_session_interfaces(program, &mut interface_map, &mut class_map)
+        inject_builtin_session_interfaces(
+            program,
+            &mut interface_map,
+            &mut class_map,
+            &declared_traits,
+        )
     {
         errors.extend(error.flatten());
     }

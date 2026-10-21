@@ -8,9 +8,10 @@
 //! Key details:
 //! - The `--web` prelude (`web_prelude::build`) also declares `SessionHandlerInterface`. That
 //!   internal declaration wins and this injection skips the name; a declaration in the user's
-//!   own source is a redeclaration error, as PHP reports it.
+//!   own source is a redeclaration error, as PHP reports it. A user class, interface or trait
+//!   of that name all collide, matching `inject_builtin_reflection()`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -24,12 +25,13 @@ const SESSION_HANDLER_INTERFACE: &str = "SessionHandlerInterface";
 
 /// Registers `SessionHandlerInterface` unless an internal prelude already declared it.
 ///
-/// Rejects user redeclarations (PHP case-insensitive) with the same message as the other
-/// builtin interfaces.
+/// Rejects user class, interface and trait redeclarations (PHP case-insensitive) with the same
+/// message as the other builtin interfaces.
 pub(crate) fn inject_builtin_session_interfaces(
     program: &Program,
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
+    trait_names: &HashSet<String>,
 ) -> Result<(), CompileError> {
     let key = php_symbol_key(SESSION_HANDLER_INTERFACE);
     let collision = interface_map
@@ -41,6 +43,12 @@ pub(crate) fn inject_builtin_session_interfaces(
                 .iter()
                 .filter(|(name, _)| php_symbol_key(name) == key)
                 .map(|(_, class)| class.span),
+        )
+        .chain(
+            trait_names
+                .iter()
+                .any(|name| php_symbol_key(name) == key)
+                .then(|| trait_span(program, &key).unwrap_or_else(crate::span::Span::dummy)),
         )
         .next();
     if let Some(span) = collision {
@@ -94,6 +102,15 @@ fn declared_internally(program: &Program, key: &str) -> bool {
                 }
                 _ => false,
             }
+    })
+}
+
+/// Returns the span of the source trait declaration named `key`, including namespace blocks.
+fn trait_span(program: &Program, key: &str) -> Option<crate::span::Span> {
+    program.iter().find_map(|stmt| match &stmt.kind {
+        StmtKind::TraitDecl { name, .. } if php_symbol_key(name) == key => Some(stmt.span),
+        StmtKind::NamespaceBlock { body, .. } => trait_span(body, key),
+        _ => None,
     })
 }
 
