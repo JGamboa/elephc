@@ -374,6 +374,9 @@ fn parse_foreach_target(
     if !writable {
         return Err(CompileError::new(span, expected));
     }
+    // A `$class::$p` read is a temporary: storing the loop value into it (or an element or
+    // property under it) would leave the static property unchanged.
+    crate::parser::expr::reject_dynamic_member_write(&place, span)?;
     *pos = end;
     Ok(if append { ForeachTarget::Append(place) } else { ForeachTarget::Place(place) })
 }

@@ -69,3 +69,17 @@ fn test_error_dynamic_member_to_builtin_by_ref_parameter_is_rejected() {
         expect_error(&format!("{head} {body}"), "Writing a static property through a dynamic class");
     }
 }
+
+/// Verifies a `foreach` value or key target rooted in `$class::$prop` is rejected: the loop
+/// would store into the temporary the read returns and leave the static property unchanged.
+#[test]
+fn test_error_dynamic_static_property_foreach_targets_are_rejected() {
+    let head = "<?php class C { public static $p = [0, 'k' => 1]; public static $o; } $c = 'C';";
+    for body in [
+        "foreach ([7] as $c::$p[0]) {}",
+        "foreach (['a' => 7] as $c::$p['k'] => $v) {}",
+        "foreach ([7] as $c::$o->x) {}",
+    ] {
+        expect_error(&format!("{head} {body}"), "Writing a static property through a dynamic class");
+    }
+}
