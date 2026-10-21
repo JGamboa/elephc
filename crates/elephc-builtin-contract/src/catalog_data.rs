@@ -28365,7 +28365,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Generates cryptographically secure pseudo-random bytes.",
         examples: &[
-            "// Full example: examples/versions-and-tokens/main.php\n$token = bin2hex(random_bytes(16));  // 32 hex characters",
+            "```php\n// Full example: examples/versions-and-tokens/main.php\n$token = bin2hex(random_bytes(16));  // 32 hex characters\n```",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.random-bytes.php"),
         deprecation: None,
@@ -34754,7 +34754,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Compares two \"PHP-standardized\" version number strings.",
         examples: &[
-            "// Full example: examples/versions-and-tokens/main.php\necho version_compare(\"1.10.0\", \"1.9.9\");         // 1\nvar_dump(version_compare(\"8.1.4\", \"8.2.0\", \">=\"));  // bool(false)",
+            "```php\n// Full example: examples/versions-and-tokens/main.php\necho version_compare(\"1.10.0\", \"1.9.9\");         // 1\nvar_dump(version_compare(\"8.1.4\", \"8.2.0\", \">=\"));  // bool(false)\n```",
         ],
         php_manual: Some("https://www.php.net/manual/en/function.version-compare.php"),
         deprecation: None,

@@ -25,8 +25,10 @@ Generates cryptographically secure pseudo-random bytes.
 
 **Examples**:
 
+```php
 // Full example: examples/versions-and-tokens/main.php
 $token = bin2hex(random_bytes(16));  // 32 hex characters
+```
 
 ## Internals
 

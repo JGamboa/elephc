@@ -115355,7 +115355,7 @@
     },
     "eval_only": false,
     "examples": [
-      "// Full example: examples/versions-and-tokens/main.php\n$token = bin2hex(random_bytes(16));  // 32 hex characters"
+      "```php\n// Full example: examples/versions-and-tokens/main.php\n$token = bin2hex(random_bytes(16));  // 32 hex characters\n```"
     ],
     "in_catalog": true,
     "is_extension": false,
@@ -140206,7 +140206,7 @@
     },
     "eval_only": false,
     "examples": [
-      "// Full example: examples/versions-and-tokens/main.php\necho version_compare(\"1.10.0\", \"1.9.9\");         // 1\nvar_dump(version_compare(\"8.1.4\", \"8.2.0\", \">=\"));  // bool(false)"
+      "```php\n// Full example: examples/versions-and-tokens/main.php\necho version_compare(\"1.10.0\", \"1.9.9\");         // 1\nvar_dump(version_compare(\"8.1.4\", \"8.2.0\", \">=\"));  // bool(false)\n```"
     ],
     "in_catalog": true,
     "is_extension": false,

@@ -27,9 +27,11 @@ Compares two "PHP-standardized" version number strings.
 
 **Examples**:
 
+```php
 // Full example: examples/versions-and-tokens/main.php
 echo version_compare("1.10.0", "1.9.9");         // 1
 var_dump(version_compare("8.1.4", "8.2.0", ">="));  // bool(false)
+```
 
 ## Internals
 
