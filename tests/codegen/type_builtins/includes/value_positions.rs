@@ -311,6 +311,26 @@ echo $x;",
     assert_eq!(out, "1 inc|1 inc|2");
 }
 
+/// Regression: a callback without by-value captures stays a literal argument of its call when
+/// a later argument is an include, so the call still supplies its parameter types:
+/// `array_map(fn($n) => strlen($n), require F)` types `$n` from the included strings instead of
+/// failing with `strlen() argument must be string`.
+#[test]
+fn test_callback_before_include_keeps_call_supplied_parameter_types() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php echo implode(',', array_map(fn($n) => strlen($n), require 'names.php')), '|';
+echo implode(',', array_map(function ($n) { return strtoupper($n); }, require 'names.php'));",
+            ),
+            ("names.php", "<?php return ['ab', 'c'];"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "2,1|AB,C");
+}
+
 /// Regression: an earlier `$cfg['k'] ?? require F` element keeps `??`'s silent read when a
 /// later include of the same statement forces the earlier operands to be materialized first:
 /// the missing key must not raise `Undefined array key` (observed through an error handler).

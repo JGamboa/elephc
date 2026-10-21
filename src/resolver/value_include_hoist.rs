@@ -291,8 +291,9 @@ impl Hoister {
         if let ExprKind::NamedArg { value, .. } = &mut expr.kind {
             return self.visit_in(value, ctx);
         }
-        // A closure is one completed operand: its creation captures values, but its body (and
-        // any include in it) runs only when it is called and is resolved on its own.
+        // A capturing closure is one completed operand: its creation captures values, but its
+        // body (and any include in it) runs only when it is called and is resolved on its own.
+        // A closure without by-value captures is inert (see `is_inert_leaf`).
         if matches!(expr.kind, ExprKind::Closure { .. }) {
             return self.completed(expr, ctx);
         }
@@ -689,26 +690,34 @@ fn is_writable_place(expr: &Expr) -> bool {
     }
 }
 
-/// Whether `expr` is a value no include can change: a literal, a constant or `$this`.
+/// Whether `expr` is a value no include can change: a literal, a constant, `$this`, or a
+/// closure without by-value captures.
 ///
-/// A closure is NOT inert: creating it captures its `use` variables (and an arrow function's
-/// free variables) by value, so `f(fn() => $x, require F)` must create it before the file runs
-/// and can change `$x`. It is snapshotted like any other completed operand; its body is never
-/// entered.
+/// A closure that captures by value (a `use ($x)` list, or an arrow function's free variables)
+/// is NOT inert: creating it copies `$x`, so `f(fn() => $x, require F)` must create it before
+/// the file runs and can change `$x`. It is snapshotted like any other completed operand; its
+/// body is never entered. A closure with no by-value capture observes nothing when it is
+/// created (a `use (&$x)` capture aliases the variable itself, wherever it is created), so it
+/// stays in place. That keeps it a literal callback of its call, whose parameter types the call
+/// supplies: `array_map(fn($row) => $row[0], require F)` types `$row` from the included array,
+/// which a callback moved into a temporary would lose.
 fn is_inert_leaf(expr: &Expr) -> bool {
-    matches!(
-        expr.kind,
-        ExprKind::StringLiteral(_)
-            | ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::Null
-            | ExprKind::ConstRef(_)
-            | ExprKind::MagicConstant(_)
-            | ExprKind::This
-            | ExprKind::ClassConstant { .. }
-            | ExprKind::ScopedConstantAccess { .. }
-    )
+    match &expr.kind {
+        ExprKind::Closure { captures, .. } => captures.is_empty(),
+        kind => matches!(
+            kind,
+            ExprKind::StringLiteral(_)
+                | ExprKind::IntLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::BoolLiteral(_)
+                | ExprKind::Null
+                | ExprKind::ConstRef(_)
+                | ExprKind::MagicConstant(_)
+                | ExprKind::This
+                | ExprKind::ClassConstant { .. }
+                | ExprKind::ScopedConstantAccess { .. }
+        ),
+    }
 }
 
 /// `$name`
