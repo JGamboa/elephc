@@ -380,25 +380,36 @@ fn store_persisted_char(
 }
 
 /// Converts an evaluated string-offset key to the integer `StrCharAt` expects, exactly like the
-/// statically typed string read: float truncation warns, a boxed key is cast and released.
+/// statically typed string read: float truncation warns, a boxed key is cast and released, and
+/// a boxed variable key is read again after the cast's warning handler may have changed it.
+/// Shared by the typed string read and the string arm of a boxed receiver.
 fn string_offset_index(
     ctx: &mut LoweringContext<'_, '_>,
     index_value: LoweredValue,
     index: &Expr,
 ) -> LoweredValue {
-    if index_value.ir_type == IrType::F64 {
-        return ctx.emit_value(
+    // PHP fetches a boxed variable again after its cast warning handler returns, so a handler
+    // that changes the offset variable decides which character is read.
+    let reload_boxed_variable = matches!(index.kind, ExprKind::Variable(_))
+        && matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union));
+    let offset = if index_value.ir_type == IrType::F64 {
+        ctx.emit_value(
             Op::FToI,
             vec![index_value.value],
             Some(Immediate::Bool(true)),
             PhpType::Int,
             Op::FToI.default_effects() | Effects::MAY_WARN,
             Some(index.span),
-        );
+        )
+    } else {
+        coerce_string_offset_to_int(ctx, index_value, index.span)
+    };
+    if reload_boxed_variable {
+        let current_index = lower_expr(ctx, index);
+        return coerce_to_int_at_span(ctx, current_index, Some(index.span));
     }
-    coerce_string_offset_to_int(ctx, index_value, index.span)
+    offset
 }
-
 
 /// Reads an already evaluated receiver and key, preserving their normal read cleanup.
 pub(crate) fn lower_array_access_from_values(
@@ -460,25 +471,7 @@ pub(crate) fn lower_array_access_from_values(
             Op::BufferGet
         }
         IrType::Str => {
-            // PHP fetches a boxed variable again after its cast warning handler returns.
-            let reload_boxed_variable = matches!(index.kind, ExprKind::Variable(_))
-                && matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union));
-            index_value = if index_value.ir_type == IrType::F64 {
-                ctx.emit_value(
-                    Op::FToI,
-                    vec![index_value.value],
-                    Some(Immediate::Bool(true)),
-                    PhpType::Int,
-                    Op::FToI.default_effects() | Effects::MAY_WARN,
-                    Some(index.span),
-                )
-            } else {
-                coerce_string_offset_to_int(ctx, index_value, index.span)
-            };
-            if reload_boxed_variable {
-                let current_index = lower_expr(ctx, index);
-                index_value = coerce_to_int_at_span(ctx, current_index, Some(index.span));
-            }
+            index_value = string_offset_index(ctx, index_value, index);
             Op::StrCharAt
         }
         _ => Op::RuntimeCall,
