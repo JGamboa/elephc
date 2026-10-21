@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - Without an operator (or with a null one) the result is the `int` -1/0/1; with one it is
-//!   the `bool` predicate. A boxed operator is inspected at run time, and when the call's
-//!   result is boxed (`int|bool`, callable wrappers) the matching shape is boxed.
+//!   the `bool` predicate. A boxed or tagged-scalar (`?int`) operator is inspected at run
+//!   time, and when the call's result is boxed (`int|bool`, callable wrappers) the matching
+//!   shape is boxed.
 //! - An unknown operator raises php-src's catchable `ValueError` from the helper's error flag.
 
 use super::*;
@@ -29,6 +30,9 @@ enum OperatorShape {
     Concrete,
     /// A boxed value: null selects the int form, a string is the operator.
     Boxed,
+    /// A tagged scalar (`?int`, `?bool`): null selects the int form, anything else is converted
+    /// to a string and used as the operator.
+    Tagged,
 }
 
 /// Classifies the third operand.
@@ -39,6 +43,7 @@ fn operator_shape(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<Opera
     Ok(match ctx.value_php_type(operator)?.codegen_repr() {
         PhpType::Void | PhpType::Never => OperatorShape::Absent,
         PhpType::Mixed | PhpType::Union(_) => OperatorShape::Boxed,
+        PhpType::TaggedScalar => OperatorShape::Tagged,
         _ => OperatorShape::Concrete,
     })
 }
@@ -75,6 +80,28 @@ pub(crate) fn lower_version_compare(ctx: &mut FunctionContext<'_>, inst: &Instru
         OperatorShape::Concrete => {
             load_string_arg_to_regs(ctx, inst, 2, "version_compare", op_ptr, op_len)?;
             abi::emit_load_int_immediate(ctx.emitter, has_reg, 1);
+        }
+        OperatorShape::Tagged => {
+            let operator = expect_operand(inst, 2)?;
+            // -- stage a tagged-scalar operator: null selects the int form --
+            ctx.load_value_to_result(operator)?;
+            let is_null = ctx.next_label("version_compare_operator_null");
+            let ready = ctx.next_label("version_compare_operator_ready");
+            if arm {
+                ctx.emitter.instruction(&format!("cmp x1, #{TAGGED_SCALAR_TAG_NULL}")); // does the tagged operator carry the null tag?
+                ctx.emitter.instruction(&format!("b.eq {is_null}"));            // null keeps the int comparison form
+            } else {
+                ctx.emitter.instruction(&format!("cmp rdx, {TAGGED_SCALAR_TAG_NULL}")); // does the tagged operator carry the null tag?
+                ctx.emitter.instruction(&format!("je {is_null}"));              // null keeps the int comparison form
+            }
+            load_string_arg_to_regs(ctx, inst, 2, "version_compare", op_ptr, op_len)?;
+            abi::emit_load_int_immediate(ctx.emitter, has_reg, 1);
+            abi::emit_jump(ctx.emitter, &ready);
+            ctx.emitter.label(&is_null);
+            abi::emit_load_int_immediate(ctx.emitter, op_ptr, 0);
+            abi::emit_load_int_immediate(ctx.emitter, op_len, 0);
+            abi::emit_load_int_immediate(ctx.emitter, has_reg, 0);
+            ctx.emitter.label(&ready);
         }
         OperatorShape::Boxed => {
             let operator = expect_operand(inst, 2)?;

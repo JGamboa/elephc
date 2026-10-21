@@ -139,6 +139,25 @@ var_dump(version_compare("1", 2), version_compare("1.5", 1.5, "eq"), version_com
     assert_eq!(out, "int(-1)\nbool(true)\nint(1)\nbool(true)\n");
 }
 
+/// A nullable scalar operator (`?int`, `?bool`) that holds null keeps the int form; a non-null
+/// one is converted to a string operator, which is not a valid comparison operator here.
+#[test]
+fn test_version_compare_nullable_scalar_operator() {
+    let out = compile_and_run(
+        r##"<?php
+function f(?int $op) { var_dump(version_compare("1", "2", $op)); }
+f(null);
+try { f(5); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$o = $argc > 5 ? true : null;
+var_dump(version_compare("1", "2", $o));
+"##,
+    );
+    assert_eq!(
+        out,
+        "int(-1)\nversion_compare(): Argument #3 ($operator) must be a valid comparison operator\nint(-1)\n"
+    );
+}
+
 /// `version_compare()` is an internal function: eval, string callables, first-class callables
 /// and namespaced calls reach it, and Reflection reports it as internal.
 #[test]

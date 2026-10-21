@@ -8,7 +8,7 @@
 //! Key details:
 //! - The result type depends on the call shape, as in PHP: `int` (-1/0/1) without an operator
 //!   or with a `null` one, `bool` with a string operator, and the boxed `int|bool` when the
-//!   operator is only known at run time.
+//!   operator may be null at run time (a boxed or nullable scalar operator).
 //! - An unknown operator raises php-src's catchable `ValueError`, so the runtime function is
 //!   `MAY_THROW`.
 
@@ -39,7 +39,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     };
     match cx.checker.infer_type(operator, cx.env)?.codegen_repr() {
         PhpType::Void | PhpType::Never => Ok(PhpType::Int),
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => {
             Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
         }
         _ => Ok(PhpType::Bool),
